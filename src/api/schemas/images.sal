@@ -1,0 +1,30 @@
+// Images to draw with ImGui. Gone with the plugin.
+
+error ImageError {
+    // Not an image file it can read, or pixels that don't match the size
+    InvalidImage = 1,
+    // Wider or taller than 16384
+    TooBig,
+    Failed,
+}
+
+struct ImageSize { u32 width; u32 height; }
+
+// ImGui's `ImTextureRef`, for `ImGui_Image` and co. A 0 `data` can't be drawn.
+struct TextureRef { usize data; u64 id; }
+
+trait Image {
+    // Zero once it's destroyed. Any thread.
+    ImageSize size();
+    // For the current ImGui frame only. Render thread.
+    TextureRef texture();
+    // Its GPU copies go over the next frames. Fine to call twice.
+    void destroy();
+}
+
+trait Images {
+    // RGBA pixels, 4 bytes each with rows packed, copied. Any thread.
+    Image!ImageError create(u32 width, u32 height, []u8 rgba);
+    // A PNG, JPEG, BMP, TGA or GIF's first frame. Slow, so not on the render thread.
+    Image!ImageError decode([]u8 bytes);
+}

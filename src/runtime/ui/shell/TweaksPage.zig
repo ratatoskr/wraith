@@ -1,0 +1,299 @@
+//! The overlay's Tweaks page, from the hub, the Tweaks menu in its top bar and the small list on
+//! screen while you play. Every tweak this game has: your project's, installed projects' and
+//! plugins', with what's on, their values and their keys. Render thread.
+
+const TweaksPage = @This();
+
+const std = @import("std");
+
+const ui = @import("wraith_ui");
+
+const icons = @import("../fonts.zig").icons;
+const Tweaks = @import("../../Tweaks.zig");
+const TweakFields = @import("../TweakFields.zig");
+const Shell = @import("Shell.zig");
+
+const Info = Tweaks.Info;
+
+search: [128]u8 = @splat(0),
+only_on: bool = false,
+/// Folded groups, by their names' hashes.
+folded: std.ArrayList(u64) = .empty,
+
+const red: ui.Color = .{ 1, 0.5, 0.5, 1 };
+const green: ui.Color = .{ 0.45, 0.85, 0.45, 1 };
+const amber: ui.Color = .{ 1, 0.75, 0.3, 1 };
+const dim: ui.Color = .{ 0.6, 0.6, 0.6, 1 };
+
+/// Unscaled.
+const key_width = 130;
+const field_width = 220;
+/// On the on-screen list, at most.
+const max_on_screen = 32;
+
+pub fn open(self: *TweaksPage) void {
+    self.search = @splat(0);
+}
+
+pub fn deinit(self: *TweaksPage, gpa: std.mem.Allocator) void {
+    self.folded.deinit(gpa);
+}
+
+/// Where it's from, for its heading. Empty for your project.
+fn sourceId(t: *const Info) []const u8 {
+    return t.mod orelse t.plugin orelse "";
+}
+
+fn sourceLabel(t: *const Info) []const u8 {
+    if (t.mod_title) |title| return title;
+    if (t.mod orelse t.plugin) |id| return id;
+    return "Your project";
+}
+
+fn isAction(t: *const Info) bool {
+    return !t.is_group and t.mode == .action;
+}
+
+fn isFolded(self: *const TweaksPage, name: []const u8) bool {
+    return std.mem.indexOfScalar(u64, self.folded.items, std.hash.Wyhash.hash(0, name)) != null;
+}
+
+pub fn fold(self: *TweaksPage, gpa: std.mem.Allocator, name: []const u8) void {
+    const id = std.hash.Wyhash.hash(0, name);
+    if (std.mem.indexOfScalar(u64, self.folded.items, id)) |i| {
+        _ = self.folded.swapRemove(i);
+    } else self.folded.append(gpa, id) catch {};
+}
+
+/// In a folded group, at any depth.
+fn hidden(self: *const TweaksPage, list: []const Info, t: *const Info) bool {
+    var at = t.group;
+    while (at) |name| {
+        if (self.isFolded(name)) return true;
+        at = for (list) |*g| {
+            if (std.mem.eql(u8, g.name, name)) break g.group;
+        } else null;
+    }
+    return false;
+}
+
+fn matches(t: *const Info, query: []const u8) bool {
+    if (query.len == 0) return true;
+    return std.ascii.findIgnoreCase(t.title, query) != null or std.ascii.findIgnoreCase(sourceLabel(t), query) != null;
+}
+
+fn isActive(t: *const Info) bool {
+    return t.on or t.partial or t.running;
+}
+
+/// True to go back.
+pub fn draw(self: *TweaksPage, shell: *Shell) bool {
+    if (ui.iconButton(icons.arrow_left ++ "##back", "Back")) return true;
+    ui.sameLine();
+    ui.setNextItemWidthPixels(-ui.scaled(300));
+    _ = ui.inputTextHint("##search", icons.search ++ "  Search tweaks", &self.search);
+    ui.sameLine();
+    _ = ui.checkbox("Only what's on", &self.only_on);
+    const tweaks = shell.tweaks orelse {
+        ui.textDisabled("Tweaks need the game's folder, which Wraith doesn't have here.", .{});
+        return false;
+    };
+    var arena: std.heap.ArenaAllocator = .init(shell.allocator);
+    defer arena.deinit();
+    const list = tweaks.snapshot(arena.allocator()) catch return false;
+    ui.sameLine();
+    const any_on = for (list) |*t| {
+        if (t.on or t.partial) break true;
+    } else false;
+    {
+        const off = ui.disabled(!any_on);
+        defer off.end();
+        if (ui.button(icons.power ++ "  All off")) turnAllOff(tweaks, list);
+    }
+    ui.tooltip("Turns every tweak off", .{});
+    ui.sameLine();
+    var on_screen = shell.registry.get(shell.own.tweaks_on_screen).toggle;
+    if (ui.checkbox("On screen", &on_screen)) shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = on_screen }) catch {};
+    ui.tooltip("A small list in a corner of the game, of the tweaks with keys and which are on. Move it while the overlay's open", .{});
+
+    const query = std.mem.trim(u8, std.mem.sliceTo(&self.search, 0), " ");
+    if (ui.child("##tweaks", .{ 0, 0 }, .{})) |body| {
+        defer body.end();
+        self.drawList(shell, tweaks, list, query);
+    }
+    return false;
+}
+
+pub fn turnAllOff(tweaks: *Tweaks, list: []const Info) void {
+    // A whole file goes at once, whatever its groups' @children say
+    for (list) |*t| if (t.group == null and (t.on or t.partial)) tweaks.turnOff(t.name);
+}
+
+fn drawList(self: *TweaksPage, shell: *Shell, tweaks: *Tweaks, list: []const Info, query: []const u8) void {
+    if (list.len == 0) {
+        ui.textWrapped("No tweaks for this game yet. Install a project from Mods, or write your own in the Workbench.", .{});
+        return;
+    }
+    const table = ui.table("##rows", 3, .{}) orelse return;
+    defer table.end();
+    ui.tableColumnWith("On", .{ .fixed = true, .width = 28 });
+    ui.tableColumnWith("Tweak", .{ .stretch = true, .width = 1 });
+    ui.tableColumnWith("Key", .{ .fixed = true, .width = key_width });
+    var source: ?[]const u8 = null;
+    var any = false;
+    for (list, 0..) |*t, i| {
+        // Searching shows tweaks alone, wherever they are
+        if (query.len > 0 and (t.is_group or !matches(t, query))) continue;
+        if (query.len == 0 and self.hidden(list, t)) continue;
+        if (self.only_on and !isActive(t)) continue;
+        any = true;
+        if (source == null or !std.mem.eql(u8, source.?, sourceId(t))) {
+            source = sourceId(t);
+            ui.tableNextRow();
+            _ = ui.tableNextColumn();
+            _ = ui.tableNextColumn();
+            var buf: [96]u8 = undefined;
+            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{sourceLabel(t)}, 0) catch "?");
+        }
+        const scope = ui.id(@as(i32, @intCast(i)));
+        defer scope.end();
+        self.drawRow(shell.allocator, tweaks, t, query.len == 0);
+    }
+    if (!any) {
+        ui.tableNextRow();
+        _ = ui.tableNextColumn();
+        _ = ui.tableNextColumn();
+        ui.textDisabled("{s}", .{if (query.len > 0) "Nothing matches" else "Nothing's on"});
+    }
+}
+
+fn drawRow(self: *TweaksPage, gpa: std.mem.Allocator, tweaks: *Tweaks, t: *const Info, nested: bool) void {
+    ui.tableNextRow();
+    _ = ui.tableNextColumn();
+    if (isAction(t)) {
+        if (ui.smallButton(icons.play ++ "##run")) tweaks.setOn(t.name, true);
+        ui.tooltip("Runs it once", .{});
+    } else {
+        var on = t.on;
+        // Off, with something in it on
+        if (t.partial) ui.raw("ImGui_PushItemFlag")(ui.c.ImGuiItemFlags_MixedValue, true);
+        const clicked = ui.checkbox("##on", &on);
+        if (t.partial) ui.raw("ImGui_PopItemFlag")();
+        if (clicked) tweaks.setOn(t.name, on);
+        if (t.partial) ui.tooltip("Off, but something in it is on", .{});
+    }
+
+    _ = ui.tableNextColumn();
+    const indent: f32 = if (nested) ui.scaled(@floatFromInt(t.depth * 16)) else 0;
+    if (indent > 0) ui.indent(indent);
+    defer if (indent > 0) ui.unindent(indent);
+    ui.alignTextToFramePadding();
+    if (t.is_group and nested) {
+        const folded = self.isFolded(t.name);
+        if (ui.smallButton(if (folded) icons.chevron_right ++ "##fold" else icons.chevron_down ++ "##fold")) self.fold(gpa, t.name);
+        ui.sameLine();
+        const bold = ui.bold();
+        defer bold.end();
+        ui.text("{s}", .{t.title});
+    } else {
+        ui.text("{s}", .{t.title});
+    }
+    if (t.problem) |p| {
+        const first = p[0 .. std.mem.indexOfScalar(u8, p, '\n') orelse p.len];
+        ui.textColored(red, "{s}", .{first});
+        ui.tooltip("{s}", .{p});
+    } else if (t.on and !t.running and !t.is_group) {
+        ui.sameLine();
+        ui.textDisabled("starting...", .{});
+    }
+    if (t.fields.len > 0) TweakFields.draw(tweaks, t, field_width);
+
+    _ = ui.tableNextColumn();
+    var key = t.key;
+    ui.setNextItemWidth(ui.fill);
+    if (ui.chordInput("##key", &key, .{ .none = "no key" })) tweaks.setKey(t.name, key);
+    if (!ui.listeningForKeys()) ui.tooltip("{s}. Click to change it", .{if (t.key == null) "No key" else if (t.own_key) "Yours" else "The tweak's own"});
+}
+
+/// The top bar's Tweaks menu. True when Manage was picked.
+pub fn drawMenu(self: *TweaksPage, shell: *Shell) bool {
+    _ = self;
+    const manage = ui.menuItem(icons.sliders_horizontal ++ "  Manage", .{});
+    var on_screen = shell.registry.get(shell.own.tweaks_on_screen).toggle;
+    if (ui.menuItem("Show on screen", .{ .checked = &on_screen })) shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = on_screen }) catch {};
+    const tweaks = shell.tweaks orelse return manage;
+    var arena: std.heap.ArenaAllocator = .init(shell.allocator);
+    defer arena.deinit();
+    const list = tweaks.snapshot(arena.allocator()) catch return manage;
+    var source: ?[]const u8 = null;
+    for (list, 0..) |*t, i| {
+        if (t.is_group) continue;
+        if (source == null or !std.mem.eql(u8, source.?, sourceId(t))) {
+            source = sourceId(t);
+            var buf: [96]u8 = undefined;
+            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{sourceLabel(t)}, 0) catch "?");
+        }
+        const scope = ui.id(@as(i32, @intCast(i)));
+        defer scope.end();
+        var label_buf: [128]u8 = undefined;
+        const label = std.fmt.bufPrintSentinel(&label_buf, "{s}", .{t.title}, 0) catch continue;
+        var name_buf: [48]u8 = undefined;
+        var key_buf: [64]u8 = undefined;
+        const shortcut: ?[:0]const u8 = if (t.key) |k| std.fmt.bufPrintSentinel(&key_buf, "{s}", .{ui.chordName(&name_buf, k)}, 0) catch null else null;
+        if (isAction(t)) {
+            if (ui.menuItem(label, .{ .shortcut = shortcut })) tweaks.setOn(t.name, true);
+        } else {
+            var on = t.on;
+            if (ui.menuItem(label, .{ .shortcut = shortcut, .checked = &on })) tweaks.setOn(t.name, on);
+        }
+        if (t.problem) |p| ui.tooltip("{s}", .{p});
+    }
+    if (list.len == 0) ui.textDisabled("No tweaks yet", .{});
+    return manage;
+}
+
+/// The small list on screen, of tweaks with keys and ones that are on. It only takes the mouse,
+/// to be moved, while the overlay's open.
+pub fn drawOnScreen(self: *TweaksPage, shell: *Shell, interactive: bool) void {
+    _ = self;
+    if (!shell.registry.get(shell.own.tweaks_on_screen).toggle) return;
+    const tweaks = shell.tweaks orelse return;
+    var arena: std.heap.ArenaAllocator = .init(shell.allocator);
+    defer arena.deinit();
+    const list = tweaks.snapshot(arena.allocator()) catch return;
+    var shown: [max_on_screen]*const Info = undefined;
+    var n: usize = 0;
+    for (list) |*t| {
+        if (t.is_group or (t.key == null and !t.on) or n == shown.len) continue;
+        shown[n] = t;
+        n += 1;
+    }
+    if (n == 0) return;
+
+    const viewport = ui.raw("ImGui_GetMainViewport")();
+    ui.raw("ImGui_SetNextWindowViewport")(viewport.*.ID);
+    ui.raw("ImGui_SetNextWindowPosEx")(.{ .x = viewport.*.WorkPos.x + ui.scaled(12), .y = viewport.*.WorkPos.y + ui.scaled(40) }, ui.c.ImGuiCond_FirstUseEver, .{ .x = 0, .y = 0 });
+    ui.raw("ImGui_SetNextWindowBgAlpha")(0.6);
+    const win = ui.window("Tweaks##wraith.tweaks_on_screen", .{ .flags = .{
+        .no_title_bar = true,
+        .always_auto_resize = true,
+        .no_focus_on_appearing = true,
+        .no_nav = true,
+        .no_docking = true,
+        .no_collapse = true,
+        .no_inputs = !interactive,
+        .no_move = !interactive,
+    } }) orelse return;
+    defer win.end();
+    for (shown[0..n]) |t| {
+        const colour = if (t.problem != null) red else if (t.on and t.running) green else if (t.on) amber else dim;
+        ui.textColored(colour, "{s}", .{if (isAction(t)) icons.play else if (t.on) icons.circle_check else icons.circle});
+        ui.sameLine();
+        ui.textColored(if (t.on) colour else dim, "{s}", .{t.title});
+        if (t.key) |k| {
+            ui.sameLine();
+            var buf: [64]u8 = undefined;
+            ui.textDisabled("{s}", .{ui.chordName(&buf, k)});
+        }
+    }
+}

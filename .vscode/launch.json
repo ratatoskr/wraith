@@ -1,0 +1,56 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "attach to process",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    },
+    {
+      "name": "wraith cli",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/zig-out/bin/wraith.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "preLaunchTask": "build"
+    },
+    {
+      "name": "wraith tests",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\zig-out\\bin\\${input:testSuite}.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "preLaunchTask": "build tests"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "testSuite",
+      "type": "pickString",
+      "description": "Test suite to debug",
+      "default": "wraith_runtime_tests",
+      "options": [
+        "wraith_core_tests",
+        "wraith_platform_tests",
+        "wraith_ui_tests",
+        "wraith_api_tests",
+        "wraith_sdk_tests",
+        "wraith_runtime_tests",
+        "wraith_bootstrap_tests",
+        "wraith_game_tests",
+        "wraith_registry_tests",
+        "wraith_cli_tests",
+        "wraith_js_types_tests",
+        "provider_js_tests",
+        "provider_zig_tests"
+      ]
+    }
+  ]
+}

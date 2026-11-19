@@ -1,0 +1,169 @@
+name: release
+
+# Run it by hand from the Actions tab with the version to release, like 0.0.2 with no "v". It sets
+# build.zig.zon's version, builds, commits, tags `v<version>` and publishes Wraith to
+# dist.wraith.io on Cloudflare R2. Only the tag is pushed, so main stays at 0.0.0. The launcher
+# installs the latest from there.
+#
+#   wraith/<version>/wraith-<version>-windows-x64.zip   bin/ from `zig build` with debug symbols.
+#                                                       wraith.exe plus x64 and x86 DLLs side by side
+#   wraith/latest.json                                  {version, url, sha256} of the newest zip.
+#   sdk/wraith-<version>.tar.gz                         the source as a Zig package.
+#   sdk/latest.json                                     {version, url, hash} of the newest one.
+#
+# Uploading needs the R2_ACCOUNT_ID, R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY secrets, from an R2
+# token that can write to the bucket.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, like 0.0.2 or 0.1.0-alpha.1 (no "v")
+        required: true
+        type: string
+
+# Pushes the release tag
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  DIST_URL: https://dist.wraith.io
+  BUCKET: wraith-dist
+
+jobs:
+  release:
+    name: release | x86_64-windows-msvc-ReleaseFast
+    runs-on: windows-latest
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+
+      - name: check the version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$VERSION isn't a version like 1.2.3 or 1.2.3-alpha.1"
+            exit 1
+          fi
+          if [ "$VERSION" = 0.0.0 ]; then
+            echo "::error::0.0.0 is main's version, not a release"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null; then
+            echo "::error::v$VERSION is already tagged"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: set the version
+        shell: bash
+        run: |
+          sed -i -E "s/^(    \.version = )\"[^\"]*\"/\1\"$VERSION\"/" build.zig.zon
+          grep -q "^    \.version = \"$VERSION\"," build.zig.zon || { echo "::error::Couldn't set build.zig.zon's version"; exit 1; }
+
+      - name: install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          # Releases build from scratch, so nothing stale from a cache gets in
+          use-cache: false
+
+      - name: build
+        run: zig build -Doptimize=ReleaseFast -Dtarget=x86_64-windows-msvc --summary all
+
+      # Launcher plus bootstrap and runtime for both arches must all be there
+      - name: check both arches were built
+        shell: pwsh
+        run: |
+          $missing = @(
+            "wraith.exe"
+            foreach ($arch in "x64", "x86") {
+              "wraith_bootstrap_$arch.dll"
+              "wraith_runtime_$arch.dll"
+              "proxies\wraith_version_$arch.dll"
+              "crash\wraith_crashhandler_$arch.exe"
+            }
+          ) | Where-Object { -not (Test-Path "zig-out\bin\$_") }
+          if ($missing) {
+            $missing | ForEach-Object { echo "::error::zig-out\bin\$_ wasn't built" }
+            exit 1
+          }
+
+      - name: package
+        shell: pwsh
+        run: |
+          $zip = "wraith-$env:VERSION-windows-x64.zip"
+          7z a -tzip $zip .\zig-out\bin\*
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          @{
+            version = $env:VERSION
+            url = "$env:DIST_URL/wraith/$env:VERSION/$zip"
+            sha256 = (Get-FileHash $zip -Algorithm SHA256).Hash
+          } | ConvertTo-Json | Set-Content latest.json -Encoding utf8NoBOM
+          Get-Content latest.json
+
+      - name: install node
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      # Zig plugins build against this, so it has to be the same commit
+      - name: package the sdk
+        run: node scripts/sdk.mjs $env:VERSION --out sdk-out
+
+      # The zip goes up before the tag, so a failed upload leaves nothing tagged and the run can be
+      # retried. latest.json goes last so it never points at a missing zip.
+      - name: upload
+        shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # R2 doesn't take the checksums newer AWS CLIs send by default
+          AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+          AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          $zip = "wraith-$env:VERSION-windows-x64.zip"
+          aws s3 cp $zip "s3://$env:BUCKET/wraith/$env:VERSION/$zip" --endpoint-url $env:R2_ENDPOINT
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # zig fetch goes by Content-Type first, and the aws guess for .tar.gz is x-tar
+          foreach ($file in Get-ChildItem sdk-out\*.tar.gz) {
+            aws s3 cp $file.FullName "s3://$env:BUCKET/sdk/$($file.Name)" --endpoint-url $env:R2_ENDPOINT `
+              --content-type application/gzip
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: commit and tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "release v$VERSION"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: publish
+        shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+          AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3 cp latest.json "s3://$env:BUCKET/wraith/latest.json" --endpoint-url $env:R2_ENDPOINT `
+            --content-type application/json --cache-control no-cache
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          aws s3 cp sdk-out\latest.json "s3://$env:BUCKET/sdk/latest.json" --endpoint-url $env:R2_ENDPOINT `
+            --content-type application/json --cache-control no-cache
+          if ($LASTEXITCODE -ne 0) { exit 1 }

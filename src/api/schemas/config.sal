@@ -1,0 +1,8 @@
+// Where a plugin keeps its own files.
+
+trait Config {
+    // For every game. Made when the plugin loads.
+    string directory();
+    // Just for this game.
+    string gameDirectory();
+}

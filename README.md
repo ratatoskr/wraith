@@ -1,0 +1,48 @@
+# Wraith
+
+A mod loader for Windows games. It runs inside the game, draws an overlay and loads plugins.
+
+Pre-release. Expect breaking changes.
+
+Using it in online games can get you banned. Use it offline or in single-player.
+
+## Features
+
+- Injects into a game, or loads as a proxy DLL.
+- Finds games on Steam, GOG, Epic, Xbox and itch.io, and spots anti-cheat.
+- An in-game overlay with settings and keybinds for every game or just one.
+- A workbench for digging into games: memory viewer, disassembly, address list, scans, struct layouts, hooks, breakpoints, registers, file I/O and timings.
+- Tweaks: small `.rwt` files with assembly, JS or Lua, turned on and off with keys.
+- Projects: a game's tweaks, scripts, schemas and addresses in one `.rwp` file.
+- Imports Cheat Engine tables.
+- Plugins in Zig, JavaScript or Lua, all with the same API.
+- Installs plugins from the Wraith Hub, signed and checked.
+- Keybind clashes between plugins get flagged.
+- A command line for games, plugins and dev plugins.
+
+## Building
+
+You need the Zig version in `build.zig.zon` under `minimum_zig_version`. Then:
+
+```
+git clone https://github.com/ratatoskr/wraith
+cd wraith
+zig build
+zig build test
+```
+
+[Tuft](https://github.com/ratatoskr/tuft) and [Salamander](https://github.com/ratatoskr/salamander) come from GitHub, pinned in `build.zig.zon`. To work on one alongside Wraith, clone it anywhere and build with `--fork`, like `zig build --fork=../tuft`.
+
+`zig build build-test` builds the test programs into `zig-out/bin` without running them. Run those from this folder, not from `zig-out/bin`, since some read fixtures by path.
+
+The Zig API in `src/api/wraith` is generated from the schemas in `src/api/schemas`. After changing a schema, run `zig build api-zig`.
+
+Want to help? See [CONTRIBUTING.md](https://github.com/ratatoskr/.github/blob/main/CONTRIBUTING.md). Found a security problem? See [SECURITY.md](https://github.com/ratatoskr/.github/blob/main/SECURITY.md).
+
+## License
+
+Copyright (c) 2026 Asgard. Wraith is under the GNU Affero General Public License v3.0, see [LICENSE](LICENSE). Plugins and scripts built on Wraith are works based on it, so if you share one, it's under the AGPL too.
+
+Want to build something closed-source or commercial on Wraith? Ask about a commercial license at https://docs.wraith.io/commercial.
+
+Third-party notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

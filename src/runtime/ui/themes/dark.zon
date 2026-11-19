@@ -1,0 +1,105 @@
+// Catppuccin Mocha (catppuccin.com, MIT), with mauve only where the eye should go
+.{
+    .name = "Dark",
+    .base = .dark,
+    .style = .{
+        .window_padding = .{ 10.0, 10.0 },
+        .frame_padding = .{ 8.0, 4.0 },
+        .cell_padding = .{ 6.0, 3.0 },
+        .item_spacing = .{ 8.0, 6.0 },
+        .item_inner_spacing = .{ 6.0, 4.0 },
+        .indent_spacing = 16.0,
+        .scrollbar_size = 12.0,
+        .grab_min_size = 10.0,
+
+        .window_rounding = 6.0,
+        .child_rounding = 4.0,
+        .frame_rounding = 4.0,
+        .popup_rounding = 6.0,
+        .scrollbar_rounding = 6.0,
+        .grab_rounding = 4.0,
+        .tab_rounding = 4.0,
+
+        .window_border_size = 1.0,
+        .child_border_size = 1.0,
+        .popup_border_size = 1.0,
+        .frame_border_size = 0.0,
+        .tab_border_size = 0.0,
+        .tab_bar_border_size = 1.0,
+        .tab_bar_overline_size = 2.0,
+        .docking_separator_size = 2.0,
+        .separator_text_border_size = 1.0,
+    },
+    .colors = .{
+        .text = .{ 0.804, 0.839, 0.957, 1.00 }, // Text
+        .text_disabled = .{ 0.424, 0.439, 0.525, 1.00 }, // Overlay0
+        .text_selected_bg = .{ 0.796, 0.651, 0.969, 0.25 }, // Mauve
+        .text_link = .{ 0.537, 0.706, 0.980, 1.00 }, // Blue
+
+        .window_bg = .{ 0.118, 0.118, 0.180, 1.00 }, // Base
+        .child_bg = .{ 0.000, 0.000, 0.000, 0.00 },
+        .popup_bg = .{ 0.094, 0.094, 0.145, 0.98 }, // Mantle
+        .menu_bar_bg = .{ 0.094, 0.094, 0.145, 1.00 },
+        .modal_window_dim_bg = .{ 0.067, 0.067, 0.106, 0.60 }, // Crust
+        .docking_empty_bg = .{ 0.067, 0.067, 0.106, 1.00 },
+
+        .border = .{ 0.192, 0.196, 0.267, 1.00 }, // Surface0
+        .border_shadow = .{ 0.000, 0.000, 0.000, 0.00 },
+        .separator = .{ 0.192, 0.196, 0.267, 1.00 },
+        .separator_hovered = .{ 0.706, 0.745, 0.996, 0.60 }, // Lavender
+        .separator_active = .{ 0.796, 0.651, 0.969, 1.00 },
+
+        .frame_bg = .{ 0.192, 0.196, 0.267, 0.70 }, // Surface0
+        .frame_bg_hovered = .{ 0.271, 0.278, 0.353, 0.80 }, // Surface1
+        .frame_bg_active = .{ 0.345, 0.357, 0.439, 0.90 }, // Surface2
+
+        .title_bg = .{ 0.094, 0.094, 0.145, 1.00 }, // Mantle
+        .title_bg_active = .{ 0.094, 0.094, 0.145, 1.00 },
+        .title_bg_collapsed = .{ 0.067, 0.067, 0.106, 1.00 },
+
+        .scrollbar_bg = .{ 0.000, 0.000, 0.000, 0.00 },
+        .scrollbar_grab = .{ 0.271, 0.278, 0.353, 1.00 },
+        .scrollbar_grab_hovered = .{ 0.345, 0.357, 0.439, 1.00 },
+        .scrollbar_grab_active = .{ 0.424, 0.439, 0.525, 1.00 },
+
+        .check_mark = .{ 0.796, 0.651, 0.969, 1.00 },
+        .slider_grab = .{ 0.796, 0.651, 0.969, 0.80 },
+        .slider_grab_active = .{ 0.796, 0.651, 0.969, 1.00 },
+        .button = .{ 0.192, 0.196, 0.267, 1.00 },
+        .button_hovered = .{ 0.271, 0.278, 0.353, 1.00 },
+        .button_active = .{ 0.345, 0.357, 0.439, 1.00 },
+        // Picked rows and headers get a tint, not a block
+        .header = .{ 0.796, 0.651, 0.969, 0.18 },
+        .header_hovered = .{ 0.271, 0.278, 0.353, 0.70 },
+        .header_active = .{ 0.796, 0.651, 0.969, 0.28 },
+
+        .resize_grip = .{ 0.000, 0.000, 0.000, 0.00 },
+        .resize_grip_hovered = .{ 0.706, 0.745, 0.996, 0.50 },
+        .resize_grip_active = .{ 0.796, 0.651, 0.969, 0.80 },
+
+        .tab = .{ 0.094, 0.094, 0.145, 1.00 }, // Mantle
+        .tab_hovered = .{ 0.192, 0.196, 0.267, 1.00 },
+        .tab_selected = .{ 0.118, 0.118, 0.180, 1.00 }, // Base
+        .tab_selected_overline = .{ 0.796, 0.651, 0.969, 1.00 }, // Mauve
+        .tab_dimmed = .{ 0.094, 0.094, 0.145, 1.00 },
+        .tab_dimmed_selected = .{ 0.118, 0.118, 0.180, 1.00 },
+        .tab_dimmed_selected_overline = .{ 0.345, 0.357, 0.439, 1.00 },
+
+        .docking_preview = .{ 0.796, 0.651, 0.969, 0.35 },
+
+        .table_header_bg = .{ 0.094, 0.094, 0.145, 1.00 },
+        .table_border_strong = .{ 0.192, 0.196, 0.267, 1.00 },
+        .table_border_light = .{ 0.192, 0.196, 0.267, 0.50 },
+        .table_row_bg = .{ 0.000, 0.000, 0.000, 0.00 },
+        .table_row_bg_alt = .{ 1.000, 1.000, 1.000, 0.025 },
+
+        .plot_lines = .{ 0.537, 0.706, 0.980, 1.00 }, // Blue
+        .plot_lines_hovered = .{ 0.980, 0.702, 0.529, 1.00 }, // Peach
+        .plot_histogram = .{ 0.796, 0.651, 0.969, 1.00 },
+        .plot_histogram_hovered = .{ 0.980, 0.702, 0.529, 1.00 },
+
+        .drag_drop_target = .{ 0.706, 0.745, 0.996, 0.90 },
+        .nav_cursor = .{ 0.706, 0.745, 0.996, 1.00 },
+        .input_text_cursor = .{ 0.961, 0.878, 0.863, 1.00 }, // Rosewater
+    },
+}

@@ -1,0 +1,39 @@
+// VERSIONINFO for every wraith binary. build.zig's `addResources` defines:
+//   WRAITH_VER_NUM      e.g. 0,0,1,0
+//   WRAITH_VER_STR      e.g. "0.0.1.0"
+//   WRAITH_FILE_TYPE    VFT_APP or VFT_DLL
+//   WRAITH_DESCRIPTION  e.g. "Wraith launcher"
+//   WRAITH_FILE_NAME    e.g. "wraith.exe"
+#include <windows.h>
+
+// Named, not numbered, so it can't clash with anything else's. Our own windows load it by name
+WRAITH_ICON ICON "logo.ico"
+
+1 VERSIONINFO
+FILEVERSION     WRAITH_VER_NUM
+PRODUCTVERSION  WRAITH_VER_NUM
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        WRAITH_FILE_TYPE
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Asgard"
+            VALUE "FileDescription",  WRAITH_DESCRIPTION
+            VALUE "FileVersion",      WRAITH_VER_STR
+            VALUE "InternalName",     WRAITH_FILE_NAME
+            VALUE "LegalCopyright",   "Copyright Asgard"
+            VALUE "OriginalFilename", WRAITH_FILE_NAME
+            VALUE "ProductName",      "Wraith"
+            VALUE "ProductVersion",   WRAITH_VER_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

@@ -1,0 +1,1049 @@
+//! Every named address in the game: the user's address list, what plugins add, tweaks' own names,
+//! schema statics and signature scans. Any thread. As `symbols`, address fields take these names
+//! and listings show them.
+
+const Names = @This();
+
+const std = @import("std");
+const Atomic = @import("tuft_arch").atomic.Value;
+
+const core = @import("wraith_core");
+const tuft_sys = @import("tuft_sys");
+const memory = @import("tuft_mem");
+const devtools = @import("tuft_devtools");
+const Schema = @import("salamander_schema").Schema;
+const Owner = @import("tuft_event").Owner;
+
+const Text = @import("tuft_text").Text;
+const Outcome = memory.scans.Outcome;
+const Location = memory.Location;
+const Symbols = memory.Symbols;
+
+/// Owner of the user's scans. Never closed.
+pub var manual: Owner = .init("manual");
+
+pub var global: Names = .{};
+
+/// `global.symbols()`, for field defaults.
+pub const global_symbols: Symbols = .{ .context = &global, .vtable = &full_vtable };
+
+/// Earlier ones win when names clash.
+pub const Source = enum {
+    /// The Addresses panel's.
+    user,
+    /// A tweak's `@data` and `@sym`, while it's on.
+    tweak,
+    /// What plugins and scripts add.
+    plugin,
+    /// Statics in the project's schemas. Scripts' and plugins' are `plugin`.
+    schema,
+    /// Signature scans, named after their owner and what they're called.
+    scan,
+};
+
+pub const Where = union(enum) {
+    /// Stays put, like a tweak's data.
+    at: usize,
+    /// Location text then pointer offsets, looked up each time it's asked for.
+    text: struct {
+        text: []const u8,
+        offsets: []const isize = &.{},
+    },
+    /// What a signature scan found.
+    scan: Scan,
+};
+
+pub const Scan = struct {
+    pattern: []const u8,
+    start: usize,
+    len: usize,
+    scanned: Result,
+    rescanned: ?Result = null,
+};
+
+pub const Result = struct {
+    outcome: Outcome = .not_found,
+    address: usize = 0,
+    /// Capped at `max_matches`. Only counted on rescans.
+    matches: ?usize = null,
+    ns: u64 = 0,
+    /// Scanned the original code, not live memory.
+    original: bool = false,
+    err: ?anyerror = null,
+};
+
+pub const max_matches = 64;
+
+pub const Entry = struct {
+    source: Source,
+    /// Gone with it. Null for the user's, the runtime's and tweaks'.
+    owner: ?*const Owner = null,
+    /// What it's shown under, like its plugin or tweak.
+    group: []const u8 = "",
+    /// What it's looked up by, like `kai.health`.
+    name: []const u8,
+    /// What people see, if not its name.
+    label: []const u8 = "",
+    where: Where,
+    /// Like `u32` or a schema type's name.
+    type: []const u8 = "",
+    /// Bytes, so addresses inside it are named after it.
+    size: usize = 0,
+};
+
+/// A scan, copied for views.
+pub const ScanInfo = struct {
+    id: u64 = 0,
+    /// Null for the runtime. Compare it, don't follow it.
+    owner: ?*const Owner = null,
+    owner_name: Text(64) = .{},
+    name: Text(64) = .{},
+    pattern: Text(256) = .{},
+    module: Text(64) = .{},
+    section: Text(16) = .{},
+    start: usize = 0,
+    len: usize = 0,
+    scanned: Result = .{},
+    rescanned: ?Result = null,
+};
+
+/// Why a name wasn't found.
+pub const Failure = struct {
+    err: GetError,
+    message: Location.Problem = .{},
+};
+
+/// A record, copied for views.
+pub const Info = struct {
+    id: u64 = 0,
+    source: Source = .user,
+    /// Compare it, don't follow it.
+    owner: ?*const Owner = null,
+    group: Text(64) = .{},
+    name: Text(128) = .{},
+    label: Text(64) = .{},
+    /// Location text. Empty for scans and ones that stay put.
+    text: Text(512) = .{},
+    offsets: [devtools.AddressList.max_offsets]isize = undefined,
+    offsets_len: u8 = 0,
+    type: Text(96) = .{},
+    size: usize = 0,
+    /// Where it was last worked out to be.
+    address: ?usize = null,
+    /// Why it wasn't found, if it wasn't.
+    failed: ?Failure = null,
+    /// Just for scans.
+    scan: ?ScanInfo = null,
+};
+
+const Record = struct {
+    id: u64,
+    entry: Entry,
+    /// Where it last was, for naming addresses. Never found by scanning just for that.
+    cached: ?usize = null,
+    /// Why it wasn't found the last time it was looked for. Text ones only, scans keep their own.
+    failed: ?Failure = null,
+    /// When it was scanned, so one that failed isn't retried every time.
+    when_ns: u64 = 0,
+};
+
+allocator: std.mem.Allocator = std.heap.page_allocator,
+lock: tuft_sys.sync.RwLock = .{},
+records: std.ArrayList(*Record) = .empty,
+next_id: u64 = 1,
+/// Bumped when anything but the user's changes, so views can catch up.
+changes: Atomic(u32) = .init(1),
+
+/// How long a failed scan isn't tried again for.
+const retry_ns = 5 * std.time.ns_per_s;
+/// Names in names in names, before giving up on a loop.
+const max_depth = 8;
+threadlocal var depth: u8 = 0;
+
+pub fn init(allocator: std.mem.Allocator) Names {
+    return .{ .allocator = allocator };
+}
+
+pub fn deinit(self: *Names) void {
+    for (self.records.items) |r| self.destroy(r);
+    self.records.deinit(self.allocator);
+    self.* = .{};
+}
+
+/// Instead of one from the same source and owner with the same name.
+pub fn put(self: *Names, entry: Entry) !void {
+    const record = try self.copy(entry);
+    errdefer self.destroy(record);
+    self.lock.lock();
+    defer self.lock.unlock();
+    record.id = self.next_id;
+    self.next_id += 1;
+    if (entry.where == .scan) record.when_ns = core.timing.now();
+    if (entry.source != .user) _ = self.changes.fetchAdd(1, .release);
+    for (self.records.items) |*slot| {
+        const r = slot.*;
+        if (r.entry.source == entry.source and r.entry.owner == entry.owner and std.mem.eql(u8, r.entry.name, entry.name)) {
+            self.destroy(r);
+            slot.* = record;
+            return;
+        }
+    }
+    try self.records.append(self.allocator, record);
+}
+
+pub fn has(self: *Names, source: Source, name: []const u8) bool {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    for (self.records.items) |r| {
+        if (r.entry.source == source and std.mem.eql(u8, r.entry.name, name)) return true;
+    }
+    return false;
+}
+
+pub fn remove(self: *Names, source: Source, owner: ?*const Owner, name: []const u8) void {
+    self.removeIf(struct {
+        source: Source,
+        owner: ?*const Owner,
+        name: []const u8,
+        fn match(m: @This(), e: *const Entry) bool {
+            return e.source == m.source and e.owner == m.owner and std.mem.eql(u8, e.name, m.name);
+        }
+    }{ .source = source, .owner = owner, .name = name });
+}
+
+/// Everything it owns.
+pub fn removeOwner(self: *Names, owner: *const Owner) void {
+    self.removeIf(struct {
+        owner: *const Owner,
+        fn match(m: @This(), e: *const Entry) bool {
+            return e.owner == m.owner;
+        }
+    }{ .owner = owner });
+}
+
+/// Like a tweak's, when it stops.
+pub fn removeGroup(self: *Names, source: Source, group: []const u8) void {
+    self.removeIf(struct {
+        source: Source,
+        group: []const u8,
+        fn match(m: @This(), e: *const Entry) bool {
+            return e.source == m.source and std.mem.eql(u8, e.group, m.group);
+        }
+    }{ .source = source, .group = group });
+}
+
+fn removeIf(self: *Names, matcher: anytype) void {
+    self.lock.lock();
+    defer self.lock.unlock();
+    var i: usize = 0;
+    while (i < self.records.items.len) {
+        const r = self.records.items[i];
+        if (matcher.match(&r.entry)) {
+            if (r.entry.source != .user) _ = self.changes.fetchAdd(1, .release);
+            self.destroy(r);
+            _ = self.records.orderedRemove(i);
+        } else i += 1;
+    }
+}
+
+/// The Addresses panel's list changed. Ones without an id aren't names, nor are groups without an
+/// address. Each is published as location text with its groups and pointers folded in, so it's
+/// found without the list. `schemas` give typed ones their size.
+pub fn setUser(self: *Names, items: []const devtools.AddressList.Item, schemas: []const *const Schema) void {
+    self.removeIf(struct {
+        fn match(_: @This(), e: *const Entry) bool {
+            return e.source == .user;
+        }
+    }{});
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    for (items, 0..) |item, i| {
+        if (item.id.len == 0) continue;
+        if (item.group and std.mem.trim(u8, item.address, " \t").len == 0) continue;
+        const text = devtools.AddressList.locationOf(items, i, arena.allocator()) catch continue;
+        // Plans copy it out, so longer ones can't be found
+        if (text.len > max_text) continue;
+        var type_buf: [160]u8 = undefined;
+        self.put(.{
+            .source = .user,
+            .name = item.id,
+            .label = item.name,
+            .where = .{ .text = .{ .text = text } },
+            .type = devtools.AddressList.typeOfItem(item, &type_buf),
+            .size = devtools.AddressList.sizeOfItem(item, schemas),
+        }) catch {};
+    }
+}
+
+/// Changes whenever anything but the user's entries do.
+pub fn generation(self: *Names) u32 {
+    return self.changes.load(.acquire);
+}
+
+pub const GetError = error{ NotFound, Unreadable, InvalidAddress };
+
+/// Where the name is now.
+pub fn get(self: *Names, name: []const u8) GetError!usize {
+    return (try self.find(name, .full)) orelse error.NotFound;
+}
+
+/// Where location text is now, with `scope`'s names before ours.
+pub fn eval(self: *Names, text: []const u8, scope: Symbols, problem: ?*Location.Problem) Location.Error!usize {
+    return Location.eval(text, .{ .symbols = self.symbols(), .memory = .local, .scope = scope }, problem);
+}
+
+/// Names, then modules and their exports, for address fields and asm.
+pub fn symbols(self: *Names) Symbols {
+    return .{ .context = self, .vtable = &full_vtable };
+}
+
+const full_vtable: Symbols.VTable = .{ .resolve = resolveFull, .describe = describeThunk, .extent = extentThunk, .scan = scanFull, .why = whyThunk };
+/// Doesn't scan, for keeping `cached` up to date.
+const cheap_vtable: Symbols.VTable = .{ .resolve = resolveCheap, .describe = describeThunk, .extent = extentThunk, .scan = scanCheap, .why = whyThunk };
+
+fn of(context: ?*anyopaque) *Names {
+    return @ptrCast(@alignCast(context.?));
+}
+
+fn resolveFull(context: ?*anyopaque, name: []const u8) ?usize {
+    return (of(context).find(name, .full) catch null) orelse Symbols.local.resolve(name);
+}
+
+fn resolveCheap(context: ?*anyopaque, name: []const u8) ?usize {
+    return (of(context).find(name, .cheap) catch null) orelse Symbols.local.resolve(name);
+}
+
+fn describeThunk(context: ?*anyopaque, address: usize, buf: []u8) ?[]const u8 {
+    return of(context).describe(address, buf);
+}
+
+fn whyThunk(context: ?*anyopaque, name: []const u8, buf: []u8) ?Symbols.Miss {
+    return of(context).why(name, buf);
+}
+
+fn extentThunk(_: ?*anyopaque, name: []const u8) ?Symbols.Extent {
+    return Symbols.local.extent(name);
+}
+
+fn scanFull(context: ?*anyopaque, sig: memory.Sig, name: []const u8) memory.Address {
+    return of(context).scanSig(sig, name, .full);
+}
+
+fn scanCheap(context: ?*anyopaque, sig: memory.Sig, name: []const u8) memory.Address {
+    return of(context).scanSig(sig, name, .cheap);
+}
+
+const Cost = enum { full, cheap };
+
+/// Longest location text a name can have.
+pub const max_text = 2048;
+
+/// What it takes to work out where a record is, copied out from under the lock.
+const Plan = struct {
+    at: union(enum) { at: usize, text: void, none: void } = .none,
+    text: [max_text]u8 = undefined,
+    text_len: usize = 0,
+    offsets: [devtools.AddressList.max_offsets]isize = undefined,
+    offsets_len: usize = 0,
+    id: u64 = 0,
+};
+
+/// Null if there's no such name. Remembers why it failed for `why`.
+fn find(self: *Names, name: []const u8, cost: Cost) GetError!?usize {
+    if (depth == 0) too_deep = false;
+    if (depth >= max_depth) {
+        too_deep = true;
+        self.failName(name, error.InvalidAddress, too_deep_message);
+        return error.InvalidAddress;
+    }
+    var plan: Plan = .{};
+    {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        const r = self.lookup(name) orelse return null;
+        plan.id = r.id;
+        switch (r.entry.where) {
+            .at => |a| plan.at = .{ .at = a },
+            .scan => |s| {
+                const result = s.rescanned orelse s.scanned;
+                if (result.err != null or result.outcome != .found) return error.NotFound;
+                plan.at = .{ .at = result.address };
+            },
+            .text => |t| {
+                if (t.text.len > plan.text.len or t.offsets.len > plan.offsets.len) return error.InvalidAddress;
+                @memcpy(plan.text[0..t.text.len], t.text);
+                plan.text_len = t.text.len;
+                @memcpy(plan.offsets[0..t.offsets.len], t.offsets);
+                plan.offsets_len = t.offsets.len;
+                plan.at = .text;
+            },
+        }
+    }
+    const at = switch (plan.at) {
+        .at => |a| return a,
+        .none => unreachable,
+        .text => blk: {
+            depth += 1;
+            defer depth -= 1;
+            const vtable = if (cost == .full) &full_vtable else &cheap_vtable;
+            var problem: Location.Problem = .{};
+            const base = Location.eval(plan.text[0..plan.text_len], .{ .symbols = .{ .context = self, .vtable = vtable }, .memory = .local }, &problem) catch |err| {
+                const e: GetError = switch (err) {
+                    error.Unreadable => error.Unreadable,
+                    error.NotFound => error.NotFound,
+                    else => error.InvalidAddress,
+                };
+                // Names in names all the way down would only say so over and over
+                if (too_deep) problem.set(too_deep_message);
+                self.setFailed(plan.id, e, problem.message());
+                return e;
+            };
+            var here = base;
+            for (plan.offsets[0..plan.offsets_len]) |offset| {
+                const pointer = memory.Memory.local.load(usize, here) catch {
+                    problem.print("can't read [0x{x}]", .{here});
+                    self.setFailed(plan.id, error.Unreadable, problem.message());
+                    return error.Unreadable;
+                };
+                here = pointer +% @as(usize, @bitCast(offset));
+            }
+            break :blk here;
+        },
+    };
+    self.setCached(plan.id, at);
+    return at;
+}
+
+const too_deep_message = "it's names in names too deep, maybe a loop";
+/// Hit `max_depth` somewhere under the name being found.
+threadlocal var too_deep: bool = false;
+
+/// Needs `lock`.
+fn lookup(self: *Names, name: []const u8) ?*Record {
+    var best: ?*Record = null;
+    for (self.records.items) |r| {
+        if (!std.mem.eql(u8, r.entry.name, name)) continue;
+        if (r.entry.where == .scan and !isId(name)) continue;
+        if (best == null or @backingInt(r.entry.source) < @backingInt(best.?.entry.source)) best = r;
+    }
+    return best;
+}
+
+fn setCached(self: *Names, id: u64, at: usize) void {
+    self.lock.lock();
+    defer self.lock.unlock();
+    for (self.records.items) |r| if (r.id == id) {
+        r.cached = at;
+        r.failed = null;
+        return;
+    };
+}
+
+fn setFailed(self: *Names, id: u64, err: GetError, message: []const u8) void {
+    self.lock.lock();
+    defer self.lock.unlock();
+    for (self.records.items) |r| if (r.id == id) {
+        r.cached = null;
+        r.failed = .{ .err = err };
+        r.failed.?.message.set(message);
+        return;
+    };
+}
+
+fn failName(self: *Names, name: []const u8, err: GetError, message: []const u8) void {
+    const id = blk: {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        break :blk (self.lookup(name) orelse return).id;
+    };
+    self.setFailed(id, err, message);
+}
+
+/// Why a name that's here wasn't found the last time it was looked for. Null if there's no such
+/// name. `buf` holds the message.
+pub fn why(self: *Names, name: []const u8, buf: []u8) ?Symbols.Miss {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    const r = self.lookup(name) orelse return null;
+    const f = failureOf(r) orelse return .{ .err = error.NotFound, .message = "it isn't anywhere right now" };
+    const message = f.message.message();
+    const n = @min(message.len, buf.len);
+    @memcpy(buf[0..n], message[0..n]);
+    return .{ .err = f.err, .message = buf[0..n] };
+}
+
+/// Needs `lock`.
+fn failureOf(r: *const Record) ?Failure {
+    const s = switch (r.entry.where) {
+        .at => return null,
+        .text => return r.failed,
+        .scan => |s| s,
+    };
+    const result = s.rescanned orelse s.scanned;
+    var f: Failure = .{ .err = error.NotFound };
+    if (result.err) |err| {
+        f.message.print("sig(\"{s}\"): {t}", .{ s.pattern, err });
+        return f;
+    }
+    switch (result.outcome) {
+        .found => return null,
+        .not_found => f.message.print("sig(\"{s}\") wasn't found", .{s.pattern}),
+        .not_unique => f.message.print("sig(\"{s}\") matches more than once", .{s.pattern}),
+    }
+    return f;
+}
+
+/// Like `kai.health` or `kai.health+0x4`, else its module and offset.
+pub fn describe(self: *Names, address: usize, buf: []u8) ?[]const u8 {
+    {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        var best: ?*Record = null;
+        var best_off: usize = 0;
+        for (self.records.items) |r| {
+            const start = placeOf(r) orelse continue;
+            if (address < start) continue;
+            const off = address - start;
+            if (off >= @max(r.entry.size, 1)) continue;
+            if (best == null or off < best_off or (off == best_off and @backingInt(r.entry.source) < @backingInt(best.?.entry.source))) {
+                best = r;
+                best_off = off;
+            }
+        }
+        if (best) |r| {
+            return if (best_off == 0)
+                std.fmt.bufPrint(buf, "{s}", .{r.entry.name}) catch null
+            else
+                std.fmt.bufPrint(buf, "{s}+0x{x}", .{ r.entry.name, best_off }) catch null;
+        }
+    }
+    return Symbols.local.describe(address, buf);
+}
+
+/// Where it is for naming addresses, if it's known without looking.
+fn placeOf(r: *const Record) ?usize {
+    return switch (r.entry.where) {
+        .at => |a| a,
+        .text => r.cached,
+        .scan => |s| blk: {
+            if (!isId(r.entry.name)) break :blk null;
+            const result = s.rescanned orelse s.scanned;
+            break :blk if (result.err == null and result.outcome == .found) result.address else null;
+        },
+    };
+}
+
+/// Works out where text entries are now without scanning, so `describe` keeps up. Every so often,
+/// from the workbench.
+pub fn refresh(self: *Names) void {
+    var ids: [256]u64 = undefined;
+    var names_buf: [256][96]u8 = undefined;
+    var lens: [256]usize = undefined;
+    var n: usize = 0;
+    {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        for (self.records.items) |r| {
+            if (r.entry.where != .text or n == ids.len or r.entry.name.len > names_buf[0].len) continue;
+            ids[n] = r.id;
+            @memcpy(names_buf[n][0..r.entry.name.len], r.entry.name);
+            lens[n] = r.entry.name.len;
+            n += 1;
+        }
+    }
+    for (0..n) |i| _ = self.find(names_buf[i][0..lens[i]], .cheap) catch {};
+}
+
+/// Every name, copied into `out` for views. Returns how many fit.
+pub fn list(self: *Names, out: []Info) usize {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    const n = @min(self.records.items.len, out.len);
+    for (self.records.items[0..n], out[0..n]) |r, *info| {
+        const e = &r.entry;
+        info.* = .{ .id = r.id, .source = e.source, .owner = e.owner, .size = e.size, .failed = failureOf(r) };
+        info.group.set(e.group);
+        info.name.set(e.name);
+        info.label.set(e.label);
+        info.type.set(e.type);
+        switch (e.where) {
+            .at => |a| info.address = a,
+            .text => |t| {
+                info.text.set(t.text);
+                const k = @min(t.offsets.len, info.offsets.len);
+                @memcpy(info.offsets[0..k], t.offsets[0..k]);
+                info.offsets_len = @intCast(k);
+                info.address = r.cached;
+            },
+            .scan => |s| {
+                info.scan = scanInfoOf(r, s);
+                const result = s.rescanned orelse s.scanned;
+                if (result.err == null and result.outcome != .not_found) info.address = result.address;
+            },
+        }
+    }
+    return n;
+}
+
+pub fn count(self: *Names) usize {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    return self.records.items.len;
+}
+
+/// Ids are names without spaces or brackets. Scans called other things, like their own text, are
+/// only listed.
+fn isId(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '.' and ch != '-') return false;
+    return true;
+}
+
+// Scans
+
+/// The runtime's own scans.
+pub fn recordOwn(record_: *const memory.scans.Record) void {
+    global.recordScan(null, record_) catch {};
+}
+
+/// Null owner means the runtime. Call `removeOwner` before the owner is gone.
+pub fn recordScan(self: *Names, owner: ?*const Owner, r: *const memory.scans.Record) !void {
+    const group = if (owner) |o| o.name else "wraith";
+    var buf: [192]u8 = undefined;
+    // Named after their owner, like plugins' addresses, except the runtime's and the user's
+    const name = if (owner == null or owner == &manual) r.name else std.fmt.bufPrint(&buf, "{s}.{s}", .{ group, r.name }) catch r.name;
+    try self.put(.{
+        .source = .scan,
+        .owner = owner,
+        .group = group,
+        .name = name,
+        .label = r.name,
+        .where = .{ .scan = .{
+            .pattern = r.pattern,
+            .start = r.start,
+            .len = r.len,
+            .scanned = .{ .outcome = r.outcome, .address = r.address, .ns = r.ns, .original = r.original },
+        } },
+        .size = (r.pattern.len + 1) / 3,
+    });
+}
+
+/// From an earlier scan of the same pattern in the same place if there was one, else scanned now.
+fn scanSig(self: *Names, sig: memory.Sig, name: []const u8, cost: Cost) memory.Address {
+    const range = sig.range() catch |err| return .fail(err);
+    var buf: [memory.Sig.max_len]?u8 = undefined;
+    const p = memory.pattern.parseInto(sig.pattern, &buf) catch |err| return .fail(err);
+    var text: [memory.Sig.max_len * 3]u8 = undefined;
+    const pattern = memory.scans.format(p, &text);
+    const now = core.timing.now();
+    const match: ?usize = blk: {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        for (self.records.items) |r| {
+            const s = switch (r.entry.where) {
+                .scan => |s| s,
+                else => continue,
+            };
+            if (s.start != range.start or s.len != range.len or !std.mem.eql(u8, s.pattern, pattern)) continue;
+            const result = s.rescanned orelse s.scanned;
+            if (result.err == null and result.outcome == .found) break :blk result.address;
+            // Without scanning, one that failed stays failed
+            if (cost == .cheap or now -| r.when_ns < retry_ns) return .fail(if (result.err == null and result.outcome == .not_unique) error.PatternNotUnique else error.SignatureNotFound);
+        }
+        break :blk null;
+    };
+    if (match) |m| return sig.from(name, m);
+    if (cost == .cheap) return .fail(error.NotScanned);
+    return sig.locate(name);
+}
+
+pub fn scanList(self: *Names, out: []ScanInfo) usize {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    var n: usize = 0;
+    for (self.records.items) |r| {
+        const s = switch (r.entry.where) {
+            .scan => |s| s,
+            else => continue,
+        };
+        if (n == out.len) break;
+        out[n] = scanInfoOf(r, s);
+        n += 1;
+    }
+    return n;
+}
+
+/// Needs `lock`.
+fn scanInfoOf(r: *const Record, s: Scan) ScanInfo {
+    var info: ScanInfo = .{ .id = r.id, .owner = r.entry.owner, .start = s.start, .len = s.len, .scanned = s.scanned, .rescanned = s.rescanned };
+    if (r.entry.owner) |o| info.owner_name.set(o.name);
+    info.name.set(r.entry.label);
+    info.pattern.set(s.pattern);
+    describeRange(s.start, s.len, &info);
+    return info;
+}
+
+pub fn scanCount(self: *Names) usize {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    var n: usize = 0;
+    for (self.records.items) |r| n += @intFromBool(r.entry.where == .scan);
+    return n;
+}
+
+pub fn rescan(self: *Names, id: u64, original: bool) bool {
+    var pattern_buf: [256 * 3]u8 = undefined;
+    var start: usize = 0;
+    var len: usize = 0;
+    var pattern_len: usize = 0;
+    {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        const s = self.scanOf(id) orelse return false;
+        pattern_len = @min(s.pattern.len, pattern_buf.len);
+        @memcpy(pattern_buf[0..pattern_len], s.pattern[0..pattern_len]);
+        start = s.start;
+        len = s.len;
+    }
+    // Scan outside the lock since a big range takes a while
+    const result = scanRange(pattern_buf[0..pattern_len], start, len, original) catch |err| Result{ .err = err, .original = original };
+
+    self.lock.lock();
+    defer self.lock.unlock();
+    const s = self.scanOf(id) orelse return false;
+    s.rescanned = result;
+    _ = self.changes.fetchAdd(1, .release);
+    return true;
+}
+
+pub fn rescanAll(self: *Names, original: bool) void {
+    var ids: [256]u64 = undefined;
+    const n = blk: {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        var n: usize = 0;
+        for (self.records.items) |r| {
+            if (r.entry.where != .scan or n == ids.len) continue;
+            ids[n] = r.id;
+            n += 1;
+        }
+        break :blk n;
+    };
+    for (ids[0..n]) |id| _ = self.rescan(id, original);
+}
+
+pub fn scanRange(pattern: []const u8, start: usize, len: usize, original: bool) !Result {
+    var buf: [256]?u8 = undefined;
+    const p = try memory.pattern.parseInto(pattern, &buf);
+    var range: memory.Range = .{ .start = start, .len = len };
+    if (original) {
+        range = range.original();
+    } else if (!memory.isReadable(start, len)) {
+        return error.RangeUnreadable;
+    }
+    const started = core.timing.now();
+    var matches: [max_matches]usize = undefined;
+    const n = try range.findAll(p, &matches);
+    return .{
+        .outcome = switch (n) {
+            0 => .not_found,
+            1 => .found,
+            else => .not_unique,
+        },
+        .address = if (n == 0) 0 else matches[0],
+        .matches = n,
+        .ns = core.timing.now() -| started,
+        .original = original,
+    };
+}
+
+/// Empty `module` means the game's exe, empty `section` the whole image.
+pub fn scanManual(self: *Names, name: []const u8, module: []const u8, section: []const u8, pattern: []const u8, original: bool) !Result {
+    const m = if (module.len == 0) memory.Module.main() else try memory.Module.find(module);
+    const range = if (section.len == 0) try m.range() else try m.section(section);
+    const result = try scanRange(pattern, range.start, range.len, original);
+    // Store the pattern the way scans format it
+    var buf: [256]?u8 = undefined;
+    var text: [768]u8 = undefined;
+    const p = try memory.pattern.parseInto(pattern, &buf);
+    try self.recordScan(&manual, &.{
+        .name = name,
+        .pattern = memory.scans.format(p, &text),
+        .start = range.start,
+        .len = range.len,
+        .original = original,
+        .outcome = result.outcome,
+        .address = result.address,
+        .ns = result.ns,
+    });
+    return result;
+}
+
+/// Needs `lock`.
+fn scanOf(self: *Names, id: u64) ?*Scan {
+    for (self.records.items) |r| {
+        if (r.id != id) continue;
+        return switch (r.entry.where) {
+            .scan => |*s| s,
+            else => null,
+        };
+    }
+    return null;
+}
+
+fn describeRange(start: usize, len: usize, info: *ScanInfo) void {
+    const module = memory.Module.containing(start) catch return;
+    var name_buf: [260]u8 = undefined;
+    if (module.name(&name_buf)) |name| info.module.set(name);
+    var sections = module.sections() catch return;
+    while (sections.next()) |s| {
+        if (s.start == start and s.len == len) {
+            info.section.set(s.name());
+            return;
+        }
+    }
+}
+
+// Memory
+
+fn copy(self: *Names, entry: Entry) !*Record {
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    var e = entry;
+    e.group = try a.dupe(u8, entry.group);
+    e.name = try a.dupe(u8, entry.name);
+    e.label = try a.dupe(u8, entry.label);
+    e.type = try a.dupe(u8, entry.type);
+    e.where = switch (entry.where) {
+        .at => entry.where,
+        .text => |t| .{ .text = .{ .text = try a.dupe(u8, t.text), .offsets = try a.dupe(isize, t.offsets) } },
+        .scan => |s| blk: {
+            var c = s;
+            c.pattern = try a.dupe(u8, s.pattern);
+            break :blk .{ .scan = c };
+        },
+    };
+    const holder = try a.create(Held);
+    holder.* = .{ .arena = arena, .record = .{ .id = 0, .entry = e } };
+    return &holder.record;
+}
+
+/// A record and the arena its copies are in.
+const Held = struct {
+    arena: std.heap.ArenaAllocator,
+    record: Record,
+};
+
+fn destroy(_: *Names, r: *Record) void {
+    const held: *Held = @fieldParentPtr("record", r);
+    var arena = held.arena;
+    arena.deinit();
+}
+
+const tests = struct {
+    const testing = std.testing;
+
+    fn code() callconv(.naked) void {
+        asm volatile (
+            \\.intel_syntax noprefix
+            \\mov eax, 0x5EEDF00D
+            \\mov ecx, 0x5EEDF00D
+            \\ret
+            \\.att_syntax prefix
+        );
+    }
+
+    test "names, priority and descriptions" {
+        var names: Names = .init(testing.allocator);
+        defer names.deinit();
+        var value: [4]u32 = .{ 1, 2, 3, 4 };
+        var pointer: *[4]u32 = &value;
+        var kai: Owner = .init("kai");
+        try names.put(.{ .source = .plugin, .owner = &kai, .group = "kai", .name = "kai.hp", .where = .{ .at = @intFromPtr(&value) }, .size = 16 });
+        var buf: [64]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buf, "0x{x}", .{@intFromPtr(&pointer)});
+        try names.put(.{ .source = .tweak, .group = "xp", .name = "xp.ptr", .where = .{ .text = .{ .text = text, .offsets = &.{4} } } });
+
+        try testing.expectEqual(@intFromPtr(&value), try names.get("kai.hp"));
+        try testing.expectEqual(@intFromPtr(&value) + 4, try names.get("xp.ptr"));
+        try testing.expectError(error.NotFound, names.get("nobody"));
+        // A tweak's comes before a plugin's of the same name
+        try names.put(.{ .source = .tweak, .group = "kai", .name = "kai.hp", .where = .{ .at = 0x10 } });
+        try testing.expectEqual(0x10, try names.get("kai.hp"));
+        names.removeGroup(.tweak, "kai");
+        try testing.expectEqual(@intFromPtr(&value), try names.get("kai.hp"));
+
+        var out: [64]u8 = undefined;
+        try testing.expectEqualStrings("kai.hp+0x8", names.describe(@intFromPtr(&value) + 8, &out).?);
+        try testing.expectEqualStrings("kai.hp", names.describe(@intFromPtr(&value), &out).?);
+
+        var problem: Location.Problem = .{};
+        try testing.expectEqual(@intFromPtr(&value) + 12, try names.eval("(kai.hp) + 0xC", .none, &problem));
+        try testing.expectEqual(@intFromPtr(&value) + 12, try names.eval("xp.ptr + 8", .none, &problem));
+
+        names.removeOwner(&kai);
+        try testing.expectError(error.NotFound, names.get("kai.hp"));
+    }
+
+    test "loops give up" {
+        var names: Names = .init(testing.allocator);
+        defer names.deinit();
+        try names.put(.{ .source = .plugin, .name = "a", .where = .{ .text = .{ .text = "b" } } });
+        try names.put(.{ .source = .plugin, .name = "b", .where = .{ .text = .{ .text = "a+1" } } });
+        try testing.expectError(error.InvalidAddress, names.get("a"));
+        var buf: [256]u8 = undefined;
+        try testing.expectEqualStrings(too_deep_message, names.why("a", &buf).?.message);
+    }
+
+    test "known names say why they weren't found" {
+        var names: Names = .init(testing.allocator);
+        defer names.deinit();
+        var kai: Owner = .init("kai");
+        try names.recordScan(&kai, &.{ .name = "seed", .pattern = "48 8B 0D", .start = 0, .len = 0, .outcome = .not_found, .ns = 0 });
+        try names.put(.{ .source = .schema, .name = "Game.instance", .where = .{ .text = .{ .text = "[kai.seed]" } } });
+        try names.put(.{ .source = .plugin, .name = "kai.hp", .where = .{ .text = .{ .text = "[0x10]" } } });
+        try names.put(.{ .source = .plugin, .name = "kai.mp", .where = .{ .text = .{ .text = "kai.hp + 4" } } });
+
+        var problem: Location.Problem = .{};
+        try testing.expectError(error.NotFound, names.eval("[Game.instance]", .none, &problem));
+        try testing.expectEqualStrings("Game.instance: kai.seed: sig(\"48 8B 0D\") wasn't found", problem.message());
+        try testing.expectError(error.Unreadable, names.eval("kai.mp", .none, &problem));
+        try testing.expectEqualStrings("kai.mp: kai.hp: can't read [0x10]", problem.message());
+        try testing.expectError(error.UnknownName, names.eval("nobody", .none, &problem));
+        try testing.expectEqualStrings("there's no nobody", problem.message());
+
+        // Remembered without looking again, and listed
+        var buf: [256]u8 = undefined;
+        const miss = names.why("kai.hp", &buf).?;
+        try testing.expectEqual(error.Unreadable, miss.err);
+        try testing.expectEqualStrings("can't read [0x10]", miss.message);
+        try testing.expectEqual(null, names.why("nobody", &buf));
+        var out: [4]Info = undefined;
+        try testing.expectEqual(4, names.list(&out));
+        try testing.expectEqualStrings("kai.hp", out[2].name.get());
+        try testing.expectEqualStrings("can't read [0x10]", out[2].failed.?.message.message());
+
+        // Gone once it's found
+        var value: usize = 0;
+        var text: [32]u8 = undefined;
+        try names.put(.{ .source = .plugin, .name = "kai.hp", .where = .{ .text = .{ .text = try std.fmt.bufPrint(&text, "0x{x}", .{@intFromPtr(&value)}) } } });
+        try testing.expectEqual(@intFromPtr(&value) + 4, try names.get("kai.mp"));
+        _ = names.list(&out);
+        try testing.expectEqual(null, out[3].failed);
+        try testing.expectEqual(@intFromPtr(&value) + 4, out[3].address.?);
+    }
+
+    test "user entries" {
+        var names: Names = .init(testing.allocator);
+        defer names.deinit();
+        var value: u32 = 5;
+        var buf: [32]u8 = undefined;
+        names.setUser(&.{
+            .{ .id = "player.health", .address = try std.fmt.bufPrint(&buf, "0x{x}", .{@intFromPtr(&value)}) },
+            .{ .name = "no id", .address = "0x1" },
+        }, &.{});
+        try testing.expectEqual(@intFromPtr(&value), try names.get("player.health"));
+        const before = names.generation();
+        names.setUser(&.{}, &.{});
+        try testing.expectError(error.NotFound, names.get("player.health"));
+        try testing.expectEqual(before, names.generation());
+    }
+
+    test "user entries in groups" {
+        var names: Names = .init(testing.allocator);
+        defer names.deinit();
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var data: [0x40]u8 align(8) = @splat(0);
+        var other: [0x10]u8 align(8) = @splat(0);
+        var pointer: usize = @intFromPtr(&data) - 8;
+        std.mem.writeInt(usize, data[0x20..][0..@sizeOf(usize)], @intFromPtr(&other), .little);
+        const items: []const devtools.AddressList.Item = &.{
+            .{ .name = "Player", .id = "player", .group = true, .address = try std.fmt.allocPrint(a, "0x{x}", .{@intFromPtr(&pointer)}), .offsets = &.{"8"} },
+            .{ .name = "Health", .id = "player.hp", .depth = 1, .address = "+0x10", .kind = .float },
+            .{ .name = "Folder", .id = "folder", .depth = 1, .group = true },
+            .{ .name = "Bag", .id = "player.bag", .depth = 2, .group = true, .address = "+0x20", .offsets = &.{"0"} },
+            .{ .name = "Gold", .id = "player.gold", .depth = 3, .address = "+4" },
+            .{ .name = "Ids", .id = "player.ids", .depth = 1, .address = "+0x18", .kind = .two_bytes, .count = "4" },
+            .{ .name = "Lost", .id = "lost", .address = "+4" },
+        };
+        names.setUser(items, &.{});
+
+        var addresses: devtools.AddressList = .{ .allocator = testing.allocator, .memory = .local, .symbols = .local };
+        defer addresses.deinit();
+        try addresses.load(items);
+        for ([_][]const u8{ "player", "player.hp", "player.bag", "player.gold", "player.ids" }, [_]usize{ 0, 1, 3, 4, 5 }) |name, i| {
+            try testing.expectEqual(addresses.targetOf(i).?.address, try names.get(name));
+        }
+        try testing.expectEqual(@intFromPtr(&other) + 4, try names.get("player.gold"));
+        try testing.expectError(error.NotFound, names.get("folder"));
+        try testing.expectError(error.NotFound, names.get("lost"));
+
+        names.refresh();
+        var out: [64]u8 = undefined;
+        try testing.expectEqualStrings("player.ids+0x6", names.describe(@intFromPtr(&data) + 0x18 + 6, &out).?);
+    }
+
+    test "scans record, rescan and are reused" {
+        const saved = core.log.mute(&.{.memory});
+        defer core.log.setFilter(saved);
+        var names: Names = .init(testing.allocator);
+        defer names.deinit();
+
+        const text = try memory.Module.main().text();
+        const r: memory.scans.Record = .{ .name = "seed", .pattern = "B8 0D F0 ED 5E B9 0D F0 ED 5E", .start = text.start, .len = text.len, .outcome = .found, .address = @intFromPtr(&code), .ns = 1 };
+        var kai: Owner = .init("kai");
+        var other: Owner = .init("other");
+        try names.recordScan(&kai, &r);
+        try names.recordScan(&kai, &r); // same again, replaced not added
+        try names.recordScan(&other, &r);
+        try testing.expectEqual(2, names.scanCount());
+        try testing.expectEqual(@intFromPtr(&code), try names.get("kai.seed"));
+
+        var out: [4]ScanInfo = undefined;
+        try testing.expectEqual(2, names.scanList(&out));
+        const first = out[0];
+        try testing.expectEqual(&kai, first.owner.?);
+        try testing.expectEqualStrings("kai", first.owner_name.get());
+        try testing.expectEqualStrings("seed", first.name.get());
+        try testing.expectEqualStrings(".text", first.section.get());
+
+        try testing.expect(names.rescan(first.id, false));
+        _ = names.scanList(&out);
+        try testing.expectEqual(1, out[0].rescanned.?.matches.?);
+
+        // Location text finds it from the scan already made, then runs the steps
+        var problem: Location.Problem = .{};
+        try testing.expectEqual(@intFromPtr(&code) + 5, try names.eval("sig(\"B8 0D F0 ED 5E B9 0D F0 ED 5E\", Offset(5), Section(\".text\"))", .none, &problem));
+
+        names.removeOwner(&kai);
+        try testing.expectEqual(1, names.scanCount());
+        try testing.expect(!names.rescan(first.id, false));
+    }
+
+    test "manual scan" {
+        var names: Names = .init(testing.allocator);
+        defer names.deinit();
+        const result = try names.scanManual("seed", "", ".text", "B80DF0ED5EB90DF0ED5E", false);
+        try testing.expectEqual(.found, result.outcome);
+        try testing.expectEqual(@intFromPtr(&code), result.address);
+
+        var out: [1]ScanInfo = undefined;
+        _ = names.scanList(&out);
+        try testing.expectEqual(&manual, out[0].owner.?);
+        try testing.expectEqualStrings("manual", out[0].owner_name.get());
+        try testing.expectEqualStrings("B8 0D F0 ED 5E B9 0D F0 ED 5E", out[0].pattern.get());
+        try testing.expectEqual(@intFromPtr(&code), try names.get("seed"));
+        try testing.expectError(error.InvalidSignature, names.scanManual("bad", "", ".text", "4", false));
+
+        try testing.expect(names.rescan(out[0].id, true));
+        _ = names.scanList(&out);
+        try testing.expectEqual(error.NoOriginalCopy, out[0].rescanned.?.err.?);
+    }
+};
+
+test {
+    _ = tests;
+}

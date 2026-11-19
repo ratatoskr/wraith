@@ -1,0 +1,100 @@
+// Tweaks a plugin lists with the project's own, and turning any tweak on or off by name.
+
+error TweakError {
+    // Empty, too long, or not letters, digits, `_`, `-` and `.`
+    InvalidId = 1,
+    // A key that isn't one, or a field with no name
+    InvalidDefinition,
+    // No tweak or group's saved by that name
+    NotFound,
+    Failed,
+}
+
+enum TweakMode : u8 {
+    // On until it's turned off
+    toggle,
+    // Runs once, then everything it did goes back
+    action,
+}
+
+enum TweakFieldType : u8 { f64, f32, i64, i32, i16, i8, u64, u32, u16, u8, bool }
+
+struct TweakChoice {
+    f64 value;
+    string label;
+}
+
+// Like a tweak's `@data`. Its memory isn't touched, changes come to the handler.
+struct TweakField {
+    string name;
+    TweakFieldType type;
+    f64 value;
+    // Empty shows the name
+    string label;
+    // A checkbox for 0 and 1
+    bool toggle;
+    bool hex;
+    // Limits, each only with its `has_`
+    bool has_min;
+    f64 min;
+    bool has_max;
+    f64 max;
+    // Flips a `toggle`, like `F9`. Empty is none.
+    string key;
+    // A dropdown
+    []TweakChoice choices;
+}
+
+struct TweakDefinition {
+    // The plugin's own name for it, kept with the user's settings
+    string id;
+    // Shown in the list. Empty shows the id.
+    string title;
+    // Like `Ctrl+F8`. Empty is none.
+    string key;
+    TweakMode mode;
+    []TweakField fields;
+}
+
+enum TweakEventKind : u8 {
+    // Turned on, or an action run. Each field comes as a `changed` just before.
+    on,
+    off,
+    // A field's value, before `on` or when it changes while on
+    changed,
+}
+
+struct TweakEvent {
+    TweakEventKind kind;
+    // For `changed`
+    string field;
+    f64 value;
+}
+
+// On the render thread. Failing an `on` keeps it off, showing the error's explanation, which for a
+// script is what it threw.
+fn void!TweakError TweakHandler(TweakEvent event);
+
+// A tweak's box went on or off, by its saved name like `kai/Combat/Max bravery`. On the render
+// thread, after the frame it changed.
+fn void TweakSwitched(string name, bool on);
+
+trait TweakSwitchSubscription {
+    // No more. Fine to call twice, or from inside one.
+    void cancel();
+}
+
+trait Tweaks {
+    // Listed with the project's tweaks until it's removed or the plugin goes. The same id again
+    // replaces it and keeps it on.
+    void!TweakError add(TweakDefinition definition, keep TweakHandler handler);
+    // Waits for its handler if it's running, unless it's from inside it.
+    void remove(string id);
+    // Whether a tweak's box is on, by its saved name like `kai/Combat/Max bravery`. A group's own
+    // box, not what's in it. Any thread.
+    bool!TweakError isOn(string name);
+    // Turns it on or off next frame, the same as clicking its box. Fine from inside any handler.
+    void!TweakError setOn(string name, bool on);
+    // Hears every tweak's box go on or off. Gone with the plugin.
+    TweakSwitchSubscription!TweakError onSwitched(keep TweakSwitched handler);
+}

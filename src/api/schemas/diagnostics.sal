@@ -1,0 +1,28 @@
+// What Wraith's Timings and Signatures windows list from native code. Zones and heaps are wraith_core's
+// timing zones and heap usages in the plugin's memory, laid out like C, with the layout's version.
+// Ones of another version aren't listed. They're listed till they're removed or the plugin goes.
+
+enum ScanOutcome : u8 { found, not_found, not_unique }
+
+struct SignatureScan {
+    string name;
+    string pattern;
+    usize start;
+    usize length;
+    // Scanned the game's code as it was before anything patched it
+    bool original;
+    ScanOutcome outcome;
+    usize address;
+    u64 ns;
+}
+
+trait Diagnostics {
+    void addZone(usize zone, u32 version);
+    void removeZone(usize zone);
+    void addHeap(usize heap, u32 version);
+    void removeHeap(usize heap);
+    // For the Signatures window, and named in the address list as `plugin.name` when found
+    void recordScan(SignatureScan scan);
+    // Where the game's code from `start` is kept as it was before anything patched it, or 0
+    usize original(usize start, usize length);
+}

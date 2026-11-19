@@ -1,0 +1,20 @@
+{
+  "editor.formatOnSave": true,
+  "explorer.compactFolders": true,
+  "files.exclude": {
+    "**/.git": true,
+    "**/.zig-cache": true,
+    "**/zig-out": true,
+  },
+  "files.watcherExclude": {
+    "**/.git": true,
+    "**/.zig-cache": true,
+    "**/zig-out": true,
+    "**/zig-pkg": true,
+  },
+  "search.exclude": {
+    "**/.git": true,
+    "**/.zig-cache": true,
+    "**/zig-out": true,
+  }
+}

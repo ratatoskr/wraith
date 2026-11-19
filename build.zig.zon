@@ -1,0 +1,24 @@
+.{
+    .name = .wraith,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.18.0-dev.1005+75d48dfff",
+    .fingerprint = 0xe8511a24f73f9ab1,
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+        "THIRD_PARTY_NOTICES.md",
+    },
+    .dependencies = .{
+        .salamander = .{
+            .url = "git+https://github.com/ratatoskr/salamander#95a8169b210e9ced5760f197aaa7fa58307f2c90",
+            .hash = "salamander-0.0.1-6ZeDNo_5DADMfDi3L_QB2cutsWXbkWXbLL5NDgwPSDDi",
+        },
+        .tuft = .{
+            .url = "git+https://github.com/ratatoskr/tuft.git#939f99e69fc4bda850f21451e494825a5fa05b67",
+            .hash = "tuft-0.0.0-DNo4yoY2JADVlWdBrpH8vMGp6vwuvSfStkr3EGuw87rz",
+        },
+    },
+}

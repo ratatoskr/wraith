@@ -1,0 +1,14 @@
+// Wraith's log, under the plugin's name.
+
+enum LogLevel : u8 { err, warn, info, debug }
+
+trait Log {
+    void err(string message);
+    void warn(string message);
+    void info(string message);
+    void debug(string message);
+    // Under the plugin's name and `scope`, like `kai_bones.camera`
+    void write(LogLevel level, string scope, string message);
+    // Whether that level's being logged, to skip building messages nobody sees.
+    bool enabled(LogLevel level);
+}

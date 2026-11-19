@@ -1,0 +1,44 @@
+// The game's address list. Entries are found by id, like `player.health`. A plugin's own are listed
+// under its name, like `kai.health`. Errors say what's wrong. Any thread.
+
+error AddressError {
+    NotFound = 1,
+    Unreadable,
+    // Location text that doesn't parse
+    InvalidAddress,
+    // Empty, or has spaces
+    InvalidId,
+    AlreadyAdded,
+    Failed,
+}
+
+// A name for an address, like a tweak's `@data`, that location text and asm can use.
+struct Name {
+    string name;
+    usize address;
+}
+
+struct AddressEntry {
+    // Unique for the plugin
+    string id;
+    // Location text, like `0x7FF6A0001000`, `game.exe+0x1234` or `sig("48 8B ??", Rip)`
+    string address;
+    // Pointers to follow from there, each one's offset added after
+    []i64 offsets;
+    string name;
+    // What's there, like `u32` or a schema type's name
+    string type;
+    // Bytes, so addresses inside it are named after it. 0 is just the one.
+    u32 size;
+}
+
+trait Addresses {
+    // Where the entry with this id is now.
+    usize!AddressError get(string id);
+    // Where location text is now. `names` come before the list's.
+    usize!AddressError resolve(string text, []Name names);
+    // Until it's removed or the plugin goes. Not saved.
+    void!AddressError add(AddressEntry entry);
+    // Only the plugin's own, by the id it added.
+    void remove(string id);
+}

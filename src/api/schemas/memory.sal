@@ -1,0 +1,137 @@
+// The game's memory. Reads and writes check the pages first, so a bad address gives an error
+// instead of a crash. Text and slices it gives are good till the thread's next call into Wraith.
+// Any thread.
+
+error MemoryError {
+    // Not mapped, or not readable or writable
+    Unreadable = 1,
+    Unwritable,
+    // No module by that name, or the address isn't in one
+    NoModule,
+    // A byte pattern like `48 8B ?? C3` that didn't parse
+    InvalidPattern,
+    NotFound,
+    // A pattern that matched more than once
+    NotUnique,
+    TooBig,
+    // Windows wouldn't change it
+    ProtectFailed,
+    Failed,
+}
+
+enum Protection : u8 { no_access, read, read_write, read_execute, read_write_execute }
+
+// A loaded exe or DLL.
+struct Module {
+    // Its file name, like `game.exe`
+    string name;
+    usize base;
+    usize size;
+}
+
+// A stretch of memory with the same protection.
+struct Region {
+    usize start;
+    usize length;
+    bool readable;
+    bool writable;
+    bool executable;
+    // The module it's in, if any
+    string module;
+}
+
+// What a value scan looks for. `string` is UTF-8, `utf16` is UTF-16 and `bytes` is a pattern.
+enum ScanType : u8 { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64, string, utf16, bytes }
+
+// `exact`, `greater` and `less` take a value and `between` two, both included. The rest compare
+// with what each result was last time.
+enum ScanCompare : u8 { exact, changed, unchanged, increased, decreased, greater, less, between }
+
+struct ScanOptions {
+    ScanType type;
+    // As text, like `100`, `-1.5`, `hello` or `48 8B ?? C3`
+    string value;
+    // Just this module, like `game.exe`, instead of all readable memory
+    string module;
+    // Or just `length` bytes from here
+    usize start;
+    usize length;
+    // Every byte, not just multiples of the value's size. Far slower with far more junk.
+    bool unaligned;
+    // Read-only memory too, when it looks through all of it
+    bool read_only;
+    // Stops after this many. 0 is a million.
+    u32 limit;
+}
+
+error ScanError {
+    // A value that doesn't parse as its type, or a compare that doesn't suit it
+    InvalidValue = 1,
+    NoModule,
+    // Still running its last search
+    Busy,
+    Failed,
+}
+
+// Results to narrow down, like Cheat Engine's. Freed with the plugin, or `destroy`. A search that
+// gets stopped gives `Cancelled`.
+trait MemoryScan {
+    u64 count();
+    // Keeps the results where `compare` holds, on a worker. What they are now is the next baseline.
+    async void!ScanError next(ScanCompare compare, string value, string high);
+    // Addresses from `offset`, at most `limit`. 0 is a thousand.
+    []usize results(u64 offset, u32 limit);
+    // Frees its results now. A search that's running stops.
+    void destroy();
+}
+
+trait Memory {
+    u8!MemoryError readU8(usize address);
+    u16!MemoryError readU16(usize address);
+    u32!MemoryError readU32(usize address);
+    u64!MemoryError readU64(usize address);
+    i8!MemoryError readI8(usize address);
+    i16!MemoryError readI16(usize address);
+    i32!MemoryError readI32(usize address);
+    i64!MemoryError readI64(usize address);
+    f32!MemoryError readF32(usize address);
+    f64!MemoryError readF64(usize address);
+    usize!MemoryError readPointer(usize address);
+    void!MemoryError writeU8(usize address, u8 value);
+    void!MemoryError writeU16(usize address, u16 value);
+    void!MemoryError writeU32(usize address, u32 value);
+    void!MemoryError writeU64(usize address, u64 value);
+    void!MemoryError writeI8(usize address, i8 value);
+    void!MemoryError writeI16(usize address, i16 value);
+    void!MemoryError writeI32(usize address, i32 value);
+    void!MemoryError writeI64(usize address, i64 value);
+    void!MemoryError writeF32(usize address, f32 value);
+    void!MemoryError writeF64(usize address, f64 value);
+    void!MemoryError writePointer(usize address, usize value);
+    // Up to a 0 or `max` bytes. 0 is 4096.
+    string!MemoryError readString(usize address, u32 max);
+    // UTF-16 up to a 0 or `max` chars, as UTF-8. 0 is 4096.
+    string!MemoryError readUtf16(usize address, u32 max);
+    // With a 0 after.
+    void!MemoryError writeString(usize address, string value);
+    void!MemoryError writeUtf16(usize address, string value);
+    // A copy, which the caller owns.
+    blob!MemoryError readBytes(usize address, u32 length);
+    void!MemoryError writeBytes(usize address, []u8 bytes);
+    bool isReadable(usize address, usize length);
+
+    // The game's exe.
+    Module main();
+    Module!MemoryError module(string name);
+    Module!MemoryError containing(usize address);
+    // Where `pattern` is in `module`, matched once. `name` shows in the log with how long it took.
+    usize!MemoryError find(string module, string name, string pattern);
+    // Every match, at most `max`. 0 is a thousand.
+    []usize!MemoryError findAll(string module, string pattern, u32 max);
+    // Readable regions, or every committed one with `all`. Just in `module` unless it's empty.
+    []Region!MemoryError regions(string module, bool all);
+    // Changes the pages under it, giving the first one's old protection. Put back when the plugin goes.
+    Protection!MemoryError protect(usize address, usize length, Protection protection);
+    // Looks for a value on a worker.
+    async MemoryScan!ScanError scan(ScanOptions options);
+}

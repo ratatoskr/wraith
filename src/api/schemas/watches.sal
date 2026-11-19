@@ -1,0 +1,46 @@
+// Watching memory with the CPU's debug registers, like "find what writes to this". There are four
+// across every plugin. The game doesn't stop.
+
+error WatchError {
+    // They couldn't be set up in this game
+    Unavailable = 1,
+    // All four are in use
+    NoFreeSlot,
+    // The address isn't a multiple of the length
+    Misaligned,
+    // 1, 2, 4, or 8 on x64. `execute` takes 1.
+    InvalidLength,
+    Failed,
+}
+
+enum WatchKind : u8 {
+    write,
+    // Reads or writes, since the CPU can't watch reads alone
+    access,
+    // About to run
+    execute,
+}
+
+struct WatchHit {
+    // What's watched
+    usize address;
+    // Where the instruction that hit starts, if it could be told, else `ip`. For `execute`, the one
+    // about to run.
+    usize instruction;
+    // Just past the instruction for `write` and `access`
+    usize ip;
+    u32 thread;
+}
+
+// On the render thread at the start of the next frame, with the registers as they were.
+fn void WatchHandler(WatchHit hit, Cpu cpu);
+
+trait Watch {
+    // Fine to call twice.
+    void remove();
+}
+
+trait Watches {
+    // Until it's removed or the plugin goes.
+    Watch!WatchError add(usize address, u8 length, WatchKind kind, keep WatchHandler handler);
+}

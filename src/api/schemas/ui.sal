@@ -1,0 +1,90 @@
+// The overlay: drawing with Dear ImGui in a frame callback, toasts, the cursor and the game's input,
+// and the overlay's menu. ImGui itself is the `imgui` area, from imgui.sal.
+
+enum CursorHint : u8 { auto, visible, hidden }
+
+// What the overlay can take from the game.
+enum InputDevice : u8 { keyboard, mouse, gamepad }
+
+enum ToastKind : u8 { info, success, warning, failure }
+
+struct Toast {
+    ToastKind kind;
+    // Empty shows the plugin's name
+    string title;
+    string text;
+    // Not counting while it's hovered. 0 keeps it up till it's clicked or dismissed.
+    f32 seconds;
+}
+
+// How a table's sorted.
+struct SortSpec {
+    // In the order its columns were set up
+    i32 column;
+    bool descending;
+}
+
+// One row of a clipped list.
+fn void ClipRow(u32 index);
+
+// What the Mods page's Settings button calls, on the render thread inside a frame. Open your
+// settings window from it.
+fn void OpenSettings();
+
+// An entry in the overlay's top bar, under the plugin's own menu, which opens and closes something
+// of the plugin's.
+trait MenuItem {
+    bool isOpen();
+    void setOpen(bool open);
+    // Takes it out of the menu. Fine to call twice.
+    void remove();
+}
+
+trait Ui {
+    // Whether there's an overlay to draw in, which games whose graphics it can't hook don't have
+    bool available();
+    // The game window's size in pixels. Zero outside a frame callback.
+    ImVec2 displaySize();
+
+    // Where the current window draws, or everything in front of or behind the windows. Only in a frame
+    // callback, null outside one.
+    ?ImDrawList windowDrawList();
+    ?ImDrawList foregroundDrawList();
+    ?ImDrawList backgroundDrawList();
+
+    // A text box of any length, which gives what's in it now. While it's being typed in it keeps the
+    // edit, by `label`, so `text` only shows once it's left.
+    string inputText(cstring label, string text, ImGuiInputTextFlags flags);
+    string inputMultiline(cstring label, string text, ImVec2 size, ImGuiInputTextFlags flags);
+    // Text with a button to copy it
+    void copyableText(cstring id, string text);
+    // Calls `row` for each of `count` rows of the same height that's on screen, for long lists
+    void clip(u32 count, ClipRow row);
+    // How the current table's sorted, once the user's sorted it. Null otherwise.
+    ?SortSpec tableSortedBy();
+
+    // Gives its id, or 0 without an overlay
+    u32 toast(Toast toast);
+    // False once it's gone
+    bool updateToast(u32 id, Toast toast);
+    void dismissToast(u32 id);
+
+    // Shows the mouse cursor while any plugin asks
+    void showCursor(bool show);
+    void setCursorHint(CursorHint hint);
+    // Keeps the game from seeing it while any plugin asks
+    void takeInput(InputDevice device, bool take);
+    bool inputTaken(InputDevice device);
+
+    // Under the plugin's own menu in the overlay's top bar, named after it. Dev ones only show in
+    // developer mode
+    MenuItem addMenuItem(string label, bool dev);
+    // Gives the plugin a Settings button on the Mods page. A second call replaces the first, and
+    // it's gone with the plugin
+    void onOpenSettings(keep OpenSettings open);
+
+    // For native code that binds Dear ImGui itself: a dcimgui function's address by name, or 0.
+    usize imguiProc(string name);
+    // The Dear ImGui it hosts, like 19250
+    u32 imguiVersion();
+}

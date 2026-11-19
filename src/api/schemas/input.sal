@@ -1,0 +1,70 @@
+// Keys, buttons and the mouse, going by the game window's messages, and keybinds.
+
+// Physical keys, named for the US layout. Sided keys always report their side. `gamepad_a` is the
+// bottom face button on any controller.
+enum Key : u8 {
+    tab, left, right, up, down, page_up, page_down, home, end, insert, delete, backspace, space, enter, escape,
+    left_ctrl, left_shift, left_alt, left_super, right_ctrl, right_shift, right_alt, right_super, menu,
+    digit_0, digit_1, digit_2, digit_3, digit_4, digit_5, digit_6, digit_7, digit_8, digit_9,
+    a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z,
+    f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23, f24,
+    apostrophe, comma, minus, period, slash, semicolon, equal, left_bracket, backslash, right_bracket, grave,
+    caps_lock, scroll_lock, num_lock, print_screen, pause,
+    keypad_0, keypad_1, keypad_2, keypad_3, keypad_4, keypad_5, keypad_6, keypad_7, keypad_8, keypad_9,
+    keypad_decimal, keypad_divide, keypad_multiply, keypad_subtract, keypad_add, keypad_enter,
+    browser_back, browser_forward, oem_102,
+    gamepad_a, gamepad_b, gamepad_x, gamepad_y, gamepad_left_shoulder, gamepad_right_shoulder,
+    gamepad_left_trigger, gamepad_right_trigger, gamepad_dpad_up, gamepad_dpad_down, gamepad_dpad_left, gamepad_dpad_right,
+    gamepad_start, gamepad_back, gamepad_left_stick, gamepad_right_stick,
+}
+
+enum MouseButton : u8 { left, right, middle, x1, x2 }
+
+// Either side.
+bitfield Mods : u8 { bool ctrl; bool shift; bool alt; bool super; }
+
+// A key with exactly these modifiers held. The key can't be a modifier, and controller buttons take
+// no modifiers.
+struct Chord { Key key; Mods mods; }
+
+// In the game window's client coords.
+struct Point { i32 x; i32 y; }
+
+enum KeyPhase : u8 { pressed, released }
+
+struct Action {
+    // Unique for the plugin. Letters, digits, `_`, `-` and `.`.
+    string id;
+    // What Settings lists it as
+    string name;
+    // The default. Whoever plays can pick another in Settings, and theirs wins.
+    Chord chord;
+    // The game sees the key too
+    bool passthrough;
+    // Still fires while typing in a text box
+    bool while_typing;
+    // Where the key someone picks is kept
+    SettingScope scope;
+}
+
+error KeybindError { Unavailable = 1, AlreadyBound, InvalidChord, Failed }
+
+// On the render thread.
+fn void KeybindFired(KeyPhase phase);
+
+trait Keybind {
+    // Counts from the next press. Saved, like picking it in Settings.
+    void!KeybindError rebind(Chord chord);
+    // Its key stays saved for next time.
+    void unbind();
+}
+
+trait Input {
+    // Held now. Losing focus lets go of everything. Any thread.
+    bool keyDown(Key key);
+    bool buttonDown(MouseButton button);
+    // Null if it doesn't know yet. Any thread.
+    ?Point mousePos();
+    // A key setting listed under the plugin in Settings. Gone with the plugin.
+    Keybind!KeybindError bind(Action action, keep KeybindFired fired);
+}

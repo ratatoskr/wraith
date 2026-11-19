@@ -1,0 +1,48 @@
+//! What the runtime keeps about a game, in `games/<game id>/game.zon`: its project, tweaks and the
+//! like. Settings, Wraith's or plugins', are in the registry instead.
+
+const GameSettings = @This();
+
+const std = @import("std");
+
+/// Store name, else exe name, for people browsing these folders.
+name: []const u8 = "",
+
+/// Plugins not loaded in this game.
+disabled_plugins: []const []const u8 = &.{},
+
+/// The open project's `.rwp`. Empty for an unsaved one.
+project_file: []const u8 = "",
+/// Where the save and open dialogs start.
+project_folder: []const u8 = "",
+
+tweaks: Tweaks = .{},
+
+pub const Tweaks = struct {
+    /// Which are on, by name.
+    on: []const []const u8 = &.{},
+    /// Use the keys the project's tweaks suggest. Yours always count.
+    project_keys: bool = true,
+    /// Data values you set, over the tweak's own.
+    values: []const Value = &.{},
+
+    pub const Value = struct {
+        tweak: []const u8,
+        field: []const u8,
+        value: f64,
+    };
+};
+
+test "older files with settings in them still load" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const game = try std.zon.parse.fromSlice(GameSettings, .{
+        .gpa = std.testing.allocator,
+        .arena = arena.allocator(),
+        .source = ".{ .disabled_plugins = .{\"kai\"}, .wraith = .{ .ui = .{ .overlay_scale = 2.0 } } }",
+        .diagnostics = &diagnostics,
+        .ignore_unknown_fields = true,
+    });
+    try std.testing.expectEqualStrings("kai", game.disabled_plugins[0]);
+}

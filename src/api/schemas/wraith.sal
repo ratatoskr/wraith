@@ -1,0 +1,26 @@
+// Everything a plugin can use, an area each. Each plugin gets its own, which stops once it's unloaded.
+trait Wraith {
+    Addresses addresses();
+    Clipboard clipboard();
+    Code code();
+    Config config();
+    // What Wraith's Timings and Signatures windows list, for native code
+    Diagnostics diagnostics();
+    Frame frame();
+    Schema schema();
+    Hooks hooks();
+    // Dear ImGui, for drawing in a frame callback
+    ImGui imgui();
+    Images images();
+    Input input();
+    Libraries libraries();
+    Log log();
+    Memory memory();
+    Settings settings();
+    Sound sound();
+    Tweaks tweaks();
+    // The overlay: draw lists, toasts, the cursor and the game's input
+    Ui ui();
+    Vfs vfs();
+    Watches watches();
+}

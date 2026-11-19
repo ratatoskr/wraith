@@ -1,0 +1,21 @@
+// Named script source that scripts `require`, shared between plugins.
+
+// Names are letters, digits, `_`, `-` and `.`, up to 64.
+error LibraryError {
+    InvalidName = 1,
+    // There's no library by that name
+    NotFound,
+    // There is, but not for that language
+    NoSource,
+    // Someone else has one by that name and language, like the runtime's own
+    Taken,
+    TooBig,
+    Failed,
+}
+
+trait Libraries {
+    // For a language like "lua" or "js". Good till the thread's next call into Wraith.
+    string!LibraryError get(string name, string language);
+    // Until the plugin goes. The same name and language again replaces it.
+    void!LibraryError add(string name, string language, string source);
+}

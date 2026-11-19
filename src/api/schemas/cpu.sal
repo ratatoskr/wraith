@@ -1,0 +1,72 @@
+// A thread's registers, as hooks and watches see them, laid out like tuft's CpuContext. Each kind of
+// code has its own, so 64-bit plugins see rax and 32-bit ones see eax.
+
+// One SSE register. Changing one member writes just that one back.
+union Xmm {
+    f32[4] f32x4;
+    f64[2] f64x2;
+    u32[4] u32x4;
+    u64[2] u64x2;
+}
+
+[X64]
+struct Cpu {
+    Xmm xmm0;
+    Xmm xmm1;
+    Xmm xmm2;
+    Xmm xmm3;
+    Xmm xmm4;
+    Xmm xmm5;
+    Xmm xmm6;
+    Xmm xmm7;
+    Xmm xmm8;
+    Xmm xmm9;
+    Xmm xmm10;
+    Xmm xmm11;
+    Xmm xmm12;
+    Xmm xmm13;
+    Xmm xmm14;
+    Xmm xmm15;
+    u64 r15;
+    u64 r14;
+    u64 r13;
+    u64 r12;
+    u64 r11;
+    u64 r10;
+    u64 r9;
+    u64 r8;
+    u64 rdi;
+    u64 rsi;
+    u64 rbp;
+    u64 rsp;
+    u64 rbx;
+    u64 rdx;
+    u64 rcx;
+    u64 rax;
+    u64 rflags;
+    // Where it runs next. A mid hook can change it to carry on somewhere else.
+    u64 rip;
+}
+
+[X86]
+struct Cpu {
+    Xmm xmm0;
+    Xmm xmm1;
+    Xmm xmm2;
+    Xmm xmm3;
+    Xmm xmm4;
+    Xmm xmm5;
+    Xmm xmm6;
+    Xmm xmm7;
+    u32 edi;
+    u32 esi;
+    u32 ebp;
+    u32 esp;
+    u32 ebx;
+    u32 edx;
+    u32 ecx;
+    u32 eax;
+    u32 eflags;
+    // Where it runs next. A mid hook can change it to carry on somewhere else.
+    u32 eip;
+}

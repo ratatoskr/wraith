@@ -1,0 +1,14 @@
+// Sounds, through one player for everyone. Nothing plays while the user has sounds off.
+
+// Windows' own sounds, as the user set them up.
+enum SystemSound : u8 { default, info, warning, error, question, notification }
+
+error SoundError { InvalidSound = 1, Failed }
+
+trait Sound {
+    // A WAV's bytes, stopping the last sound. Copied first. Any thread.
+    void!SoundError play([]u8 wav);
+    void playSystem(SystemSound sound);
+    // Whatever's playing, whoever started it.
+    void stop();
+}

@@ -1,0 +1,9 @@
+// The system clipboard. It can stall, so it works off the caller's thread.
+
+error ClipboardError { Failed = 1 }
+
+trait Clipboard {
+    // UTF-8, empty if there's no text. Good till the taking thread takes another.
+    async string!ClipboardError text();
+    async void!ClipboardError setText(string text);
+}

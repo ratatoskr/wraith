@@ -1,0 +1,1694 @@
+// Generated from dear_bindings' dcimgui.json by `zig build imgui-sal`. Don't edit it.
+//
+// Dear ImGui, for drawing in a frame callback. Each function's dcimgui's without `ImGui_`, so
+// `ImGui::Button` is `Button`, and its version taking every argument is `ButtonEx`. Calls outside
+// a frame callback do nothing.
+
+struct ImVec2 { f32 x; f32 y; }
+struct ImVec4 { f32 x; f32 y; f32 z; f32 w; }
+
+enum ImGuiWindowFlags : i32 {
+    None = 0,
+    NoTitleBar = 1,
+    NoResize = 2,
+    NoMove = 4,
+    NoScrollbar = 8,
+    NoScrollWithMouse = 16,
+    NoCollapse = 32,
+    AlwaysAutoResize = 64,
+    NoBackground = 128,
+    NoSavedSettings = 256,
+    NoMouseInputs = 512,
+    MenuBar = 1024,
+    HorizontalScrollbar = 2048,
+    NoFocusOnAppearing = 4096,
+    NoBringToFrontOnFocus = 8192,
+    AlwaysVerticalScrollbar = 16384,
+    AlwaysHorizontalScrollbar = 32768,
+    NoNavInputs = 65536,
+    NoNavFocus = 131072,
+    UnsavedDocument = 262144,
+    NoDocking = 524288,
+    NoNav = 196608,
+    NoDecoration = 43,
+    NoInputs = 197120,
+}
+
+enum ImGuiChildFlags : i32 {
+    None = 0,
+    Borders = 1,
+    AlwaysUseWindowPadding = 2,
+    ResizeX = 4,
+    ResizeY = 8,
+    AutoResizeX = 16,
+    AutoResizeY = 32,
+    AlwaysAutoResize = 64,
+    FrameStyle = 128,
+    NavFlattened = 256,
+}
+
+enum ImGuiItemFlags : i32 {
+    None = 0,
+    NoTabStop = 1,
+    NoNav = 2,
+    NoNavDefaultFocus = 4,
+    ButtonRepeat = 8,
+    AutoClosePopups = 16,
+    AllowDuplicateId = 32,
+    Disabled = 64,
+    LiveEditOnInputText = 128,
+    LiveEditOnInputScalar = 256,
+    LiveEditOnInput = 384,
+    MixedValue = 512,
+}
+
+enum ImGuiInputTextFlags : i32 {
+    None = 0,
+    CharsDecimal = 1,
+    CharsHexadecimal = 2,
+    CharsScientific = 4,
+    CharsUppercase = 8,
+    CharsNoBlank = 16,
+    AllowTabInput = 32,
+    EnterReturnsTrue = 64,
+    EscapeClearsAll = 128,
+    CtrlEnterForNewLine = 256,
+    ReadOnly = 512,
+    Password = 1024,
+    AlwaysOverwrite = 2048,
+    AutoSelectAll = 4096,
+    ParseEmptyRefVal = 8192,
+    DisplayEmptyRefVal = 16384,
+    NoHorizontalScroll = 32768,
+    NoUndoRedo = 65536,
+    ElideLeft = 131072,
+    CallbackCompletion = 262144,
+    CallbackHistory = 524288,
+    CallbackAlways = 1048576,
+    CallbackCharFilter = 2097152,
+    CallbackResize = 4194304,
+    CallbackEdit = 8388608,
+    WordWrap = 16777216,
+}
+
+enum ImGuiTreeNodeFlags : i32 {
+    None = 0,
+    Selected = 1,
+    Framed = 2,
+    AllowOverlap = 4,
+    NoTreePushOnOpen = 8,
+    NoAutoOpenOnLog = 16,
+    DefaultOpen = 32,
+    OpenOnDoubleClick = 64,
+    OpenOnArrow = 128,
+    Leaf = 256,
+    Bullet = 512,
+    FramePadding = 1024,
+    SpanAvailWidth = 2048,
+    SpanFullWidth = 4096,
+    SpanLabelWidth = 8192,
+    SpanAllColumns = 16384,
+    LabelSpanAllColumns = 32768,
+    NavLeftJumpsToParent = 131072,
+    CollapsingHeader = 26,
+    DrawLinesNone = 262144,
+    DrawLinesFull = 524288,
+    DrawLinesToNodes = 1048576,
+}
+
+enum ImGuiPopupFlags : i32 {
+    None = 0,
+    MouseButtonLeft = 4,
+    MouseButtonRight = 8,
+    MouseButtonMiddle = 12,
+    NoReopen = 32,
+    NoOpenOverExistingPopup = 128,
+    NoOpenOverItems = 256,
+    AnyPopupId = 1024,
+    AnyPopupLevel = 2048,
+    AnyPopup = 3072,
+}
+
+enum ImGuiSelectableFlags : i32 {
+    None = 0,
+    NoAutoClosePopups = 1,
+    SpanAllColumns = 2,
+    AllowDoubleClick = 4,
+    Disabled = 8,
+    AllowOverlap = 16,
+    Highlight = 32,
+    SelectOnNav = 64,
+}
+
+enum ImGuiComboFlags : i32 {
+    None = 0,
+    PopupAlignLeft = 1,
+    HeightSmall = 2,
+    HeightRegular = 4,
+    HeightLarge = 8,
+    HeightLargest = 16,
+    NoArrowButton = 32,
+    NoPreview = 64,
+    WidthFitPreview = 128,
+}
+
+enum ImGuiTabBarFlags : i32 {
+    None = 0,
+    Reorderable = 1,
+    AutoSelectNewTabs = 2,
+    TabListPopupButton = 4,
+    NoCloseWithMiddleMouseButton = 8,
+    NoTabListScrollingButtons = 16,
+    NoTooltip = 32,
+    DrawSelectedOverline = 64,
+    FittingPolicyMixed = 128,
+    FittingPolicyShrink = 256,
+    FittingPolicyScroll = 512,
+}
+
+enum ImGuiTabItemFlags : i32 {
+    None = 0,
+    UnsavedDocument = 1,
+    SetSelected = 2,
+    NoCloseWithMiddleMouseButton = 4,
+    NoPushId = 8,
+    NoTooltip = 16,
+    NoReorder = 32,
+    Leading = 64,
+    Trailing = 128,
+    NoAssumedClosure = 256,
+}
+
+enum ImGuiFocusedFlags : i32 {
+    None = 0,
+    ChildWindows = 1,
+    RootWindow = 2,
+    AnyWindow = 4,
+    NoPopupHierarchy = 8,
+    DockHierarchy = 16,
+    RootAndChildWindows = 3,
+}
+
+enum ImGuiHoveredFlags : i32 {
+    None = 0,
+    ChildWindows = 1,
+    RootWindow = 2,
+    AnyWindow = 4,
+    NoPopupHierarchy = 8,
+    DockHierarchy = 16,
+    AllowWhenBlockedByPopup = 32,
+    AllowWhenBlockedByActiveItem = 128,
+    AllowWhenOverlappedByItem = 256,
+    AllowWhenOverlappedByWindow = 512,
+    AllowWhenDisabled = 1024,
+    NoNavOverride = 2048,
+    AllowWhenOverlapped = 768,
+    RectOnly = 928,
+    RootAndChildWindows = 3,
+    ForTooltip = 4096,
+    Stationary = 8192,
+    DelayNone = 16384,
+    DelayShort = 32768,
+    DelayNormal = 65536,
+    NoSharedDelay = 131072,
+}
+
+enum ImGuiDockNodeFlags : i32 {
+    None = 0,
+    KeepAliveOnly = 1,
+    NoDockingOverCentralNode = 4,
+    PassthruCentralNode = 8,
+    NoDockingSplit = 16,
+    NoResize = 32,
+    AutoHideTabBar = 64,
+    NoUndocking = 128,
+}
+
+enum ImGuiDragDropFlags : i32 {
+    None = 0,
+    SourceNoPreviewTooltip = 1,
+    SourceNoDisableHover = 2,
+    SourceNoHoldToOpenOthers = 4,
+    SourceAllowNullID = 8,
+    SourceExtern = 16,
+    PayloadAutoExpire = 32,
+    PayloadNoCrossContext = 64,
+    PayloadNoCrossProcess = 128,
+    AcceptBeforeDelivery = 1024,
+    AcceptNoDrawDefaultRect = 2048,
+    AcceptNoPreviewTooltip = 4096,
+    AcceptDrawAsHovered = 8192,
+    AcceptPeekOnly = 3072,
+}
+
+enum ImGuiDataType : i32 {
+    S8 = 0,
+    U8 = 1,
+    S16 = 2,
+    U16 = 3,
+    S32 = 4,
+    U32 = 5,
+    S64 = 6,
+    U64 = 7,
+    Float = 8,
+    Double = 9,
+    Bool = 10,
+    String = 11,
+}
+
+enum ImGuiDir : i32 {
+    None = -1,
+    Left = 0,
+    Right = 1,
+    Up = 2,
+    Down = 3,
+}
+
+enum ImGuiSortDirection : i32 {
+    None = 0,
+    Ascending = 1,
+    Descending = 2,
+}
+
+enum ImGuiKey : i32 {
+    None = 0,
+    NamedKey_BEGIN = 512,
+    LeftArrow = 513,
+    RightArrow = 514,
+    UpArrow = 515,
+    DownArrow = 516,
+    PageUp = 517,
+    PageDown = 518,
+    Home = 519,
+    End = 520,
+    Insert = 521,
+    Delete = 522,
+    Backspace = 523,
+    Space = 524,
+    Enter = 525,
+    Escape = 526,
+    LeftCtrl = 527,
+    LeftShift = 528,
+    LeftAlt = 529,
+    LeftSuper = 530,
+    RightCtrl = 531,
+    RightShift = 532,
+    RightAlt = 533,
+    RightSuper = 534,
+    Menu = 535,
+    _0 = 536,
+    _1 = 537,
+    _2 = 538,
+    _3 = 539,
+    _4 = 540,
+    _5 = 541,
+    _6 = 542,
+    _7 = 543,
+    _8 = 544,
+    _9 = 545,
+    A = 546,
+    B = 547,
+    C = 548,
+    D = 549,
+    E = 550,
+    F = 551,
+    G = 552,
+    H = 553,
+    I = 554,
+    J = 555,
+    K = 556,
+    L = 557,
+    M = 558,
+    N = 559,
+    O = 560,
+    P = 561,
+    Q = 562,
+    R = 563,
+    S = 564,
+    T = 565,
+    U = 566,
+    V = 567,
+    W = 568,
+    X = 569,
+    Y = 570,
+    Z = 571,
+    F1 = 572,
+    F2 = 573,
+    F3 = 574,
+    F4 = 575,
+    F5 = 576,
+    F6 = 577,
+    F7 = 578,
+    F8 = 579,
+    F9 = 580,
+    F10 = 581,
+    F11 = 582,
+    F12 = 583,
+    F13 = 584,
+    F14 = 585,
+    F15 = 586,
+    F16 = 587,
+    F17 = 588,
+    F18 = 589,
+    F19 = 590,
+    F20 = 591,
+    F21 = 592,
+    F22 = 593,
+    F23 = 594,
+    F24 = 595,
+    Apostrophe = 596,
+    Comma = 597,
+    Minus = 598,
+    Period = 599,
+    Slash = 600,
+    Semicolon = 601,
+    Equal = 602,
+    LeftBracket = 603,
+    Backslash = 604,
+    RightBracket = 605,
+    GraveAccent = 606,
+    CapsLock = 607,
+    ScrollLock = 608,
+    NumLock = 609,
+    PrintScreen = 610,
+    Pause = 611,
+    Keypad0 = 612,
+    Keypad1 = 613,
+    Keypad2 = 614,
+    Keypad3 = 615,
+    Keypad4 = 616,
+    Keypad5 = 617,
+    Keypad6 = 618,
+    Keypad7 = 619,
+    Keypad8 = 620,
+    Keypad9 = 621,
+    KeypadDecimal = 622,
+    KeypadDivide = 623,
+    KeypadMultiply = 624,
+    KeypadSubtract = 625,
+    KeypadAdd = 626,
+    KeypadEnter = 627,
+    KeypadEqual = 628,
+    AppBack = 629,
+    AppForward = 630,
+    Oem102 = 631,
+    GamepadStart = 632,
+    GamepadBack = 633,
+    GamepadFaceLeft = 634,
+    GamepadFaceRight = 635,
+    GamepadFaceUp = 636,
+    GamepadFaceDown = 637,
+    GamepadDpadLeft = 638,
+    GamepadDpadRight = 639,
+    GamepadDpadUp = 640,
+    GamepadDpadDown = 641,
+    GamepadL1 = 642,
+    GamepadR1 = 643,
+    GamepadL2 = 644,
+    GamepadR2 = 645,
+    GamepadL3 = 646,
+    GamepadR3 = 647,
+    GamepadLStickLeft = 648,
+    GamepadLStickRight = 649,
+    GamepadLStickUp = 650,
+    GamepadLStickDown = 651,
+    GamepadRStickLeft = 652,
+    GamepadRStickRight = 653,
+    GamepadRStickUp = 654,
+    GamepadRStickDown = 655,
+    MouseLeft = 656,
+    MouseRight = 657,
+    MouseMiddle = 658,
+    MouseX1 = 659,
+    MouseX2 = 660,
+    MouseWheelX = 661,
+    MouseWheelY = 662,
+    ImGuiMod_Ctrl = 4096,
+    ImGuiMod_Shift = 8192,
+    ImGuiMod_Alt = 16384,
+    ImGuiMod_Super = 32768,
+}
+
+enum ImGuiInputFlags : i32 {
+    None = 0,
+    Repeat = 1,
+    RouteActive = 1024,
+    RouteFocused = 2048,
+    RouteGlobal = 4096,
+    RouteAlways = 8192,
+    RouteOverFocused = 16384,
+    RouteOverActive = 32768,
+    RouteUnlessBgFocused = 65536,
+    RouteFromRootWindow = 131072,
+    Tooltip = 262144,
+}
+
+enum ImGuiConfigFlags : i32 {
+    None = 0,
+    NavEnableKeyboard = 1,
+    NavEnableGamepad = 2,
+    NoMouse = 16,
+    NoMouseCursorChange = 32,
+    NoKeyboard = 64,
+    DockingEnable = 128,
+    ViewportsEnable = 1024,
+    IsSRGB = 1048576,
+    IsTouchScreen = 2097152,
+    NavEnableSetMousePos = 4,
+    NavNoCaptureKeyboard = 8,
+    DpiEnableScaleFonts = 16384,
+    DpiEnableScaleViewports = 32768,
+}
+
+enum ImGuiBackendFlags : i32 {
+    None = 0,
+    HasGamepad = 1,
+    HasMouseCursors = 2,
+    HasSetMousePos = 4,
+    RendererHasVtxOffset = 8,
+    RendererHasTextures = 16,
+    RendererHasViewports = 1024,
+    PlatformHasViewports = 2048,
+    HasMouseHoveredViewport = 4096,
+    HasParentViewport = 8192,
+}
+
+enum ImGuiCol : i32 {
+    Text = 0,
+    TextDisabled = 1,
+    WindowBg = 2,
+    ChildBg = 3,
+    PopupBg = 4,
+    Border = 5,
+    BorderShadow = 6,
+    FrameBg = 7,
+    FrameBgHovered = 8,
+    FrameBgActive = 9,
+    TitleBg = 10,
+    TitleBgActive = 11,
+    TitleBgCollapsed = 12,
+    MenuBarBg = 13,
+    ScrollbarBg = 14,
+    ScrollbarGrab = 15,
+    ScrollbarGrabHovered = 16,
+    ScrollbarGrabActive = 17,
+    CheckMark = 18,
+    CheckboxSelectedBg = 19,
+    SliderGrab = 20,
+    SliderGrabActive = 21,
+    Button = 22,
+    ButtonHovered = 23,
+    ButtonActive = 24,
+    Header = 25,
+    HeaderHovered = 26,
+    HeaderActive = 27,
+    Separator = 28,
+    SeparatorHovered = 29,
+    SeparatorActive = 30,
+    ResizeGrip = 31,
+    ResizeGripHovered = 32,
+    ResizeGripActive = 33,
+    InputTextCursor = 34,
+    TabHovered = 35,
+    Tab = 36,
+    TabSelected = 37,
+    TabSelectedOverline = 38,
+    TabDimmed = 39,
+    TabDimmedSelected = 40,
+    TabDimmedSelectedOverline = 41,
+    DockingPreview = 42,
+    DockingEmptyBg = 43,
+    PlotLines = 44,
+    PlotLinesHovered = 45,
+    PlotHistogram = 46,
+    PlotHistogramHovered = 47,
+    TableHeaderBg = 48,
+    TableBorderStrong = 49,
+    TableBorderLight = 50,
+    TableRowBg = 51,
+    TableRowBgAlt = 52,
+    TextLink = 53,
+    TextSelectedBg = 54,
+    TreeLines = 55,
+    DragDropTarget = 56,
+    DragDropTargetBg = 57,
+    UnsavedMarker = 58,
+    NavCursor = 59,
+    NavWindowingHighlight = 60,
+    NavWindowingDimBg = 61,
+    ModalWindowDimBg = 62,
+}
+
+enum ImGuiStyleVar : i32 {
+    Alpha = 0,
+    DisabledAlpha = 1,
+    WindowPadding = 2,
+    WindowRounding = 3,
+    WindowBorderSize = 4,
+    WindowMinSize = 5,
+    WindowTitleAlign = 6,
+    ChildRounding = 7,
+    ChildBorderSize = 8,
+    PopupRounding = 9,
+    PopupBorderSize = 10,
+    FramePadding = 11,
+    FrameRounding = 12,
+    FrameBorderSize = 13,
+    ItemSpacing = 14,
+    ItemInnerSpacing = 15,
+    IndentSpacing = 16,
+    CellPadding = 17,
+    ScrollbarSize = 18,
+    ScrollbarRounding = 19,
+    ScrollbarPadding = 20,
+    GrabMinSize = 21,
+    GrabRounding = 22,
+    ImageRounding = 23,
+    ImageBorderSize = 24,
+    TabRounding = 25,
+    TabBorderSize = 26,
+    TabMinWidthBase = 27,
+    TabMinWidthShrink = 28,
+    TabBarBorderSize = 29,
+    TabBarOverlineSize = 30,
+    TableAngledHeadersAngle = 31,
+    TableAngledHeadersTextAlign = 32,
+    TreeLinesSize = 33,
+    TreeLinesRounding = 34,
+    MenuItemRounding = 35,
+    SelectableRounding = 36,
+    DragDropTargetRounding = 37,
+    ButtonTextAlign = 38,
+    SelectableTextAlign = 39,
+    SeparatorSize = 40,
+    SeparatorTextBorderSize = 41,
+    SeparatorTextAlign = 42,
+    SeparatorTextPadding = 43,
+    DockingSeparatorSize = 44,
+}
+
+enum ImGuiButtonFlags : i32 {
+    None = 0,
+    MouseButtonLeft = 1,
+    MouseButtonRight = 2,
+    MouseButtonMiddle = 4,
+    EnableNav = 8,
+    AllowOverlap = 4096,
+}
+
+enum ImGuiColorEditFlags : i32 {
+    None = 0,
+    NoAlpha = 2,
+    NoPicker = 4,
+    NoOptions = 8,
+    NoSmallPreview = 16,
+    NoInputs = 32,
+    NoTooltip = 64,
+    NoLabel = 128,
+    NoSidePreview = 256,
+    NoDragDrop = 512,
+    NoBorder = 1024,
+    NoColorMarkers = 2048,
+    AlphaOpaque = 4096,
+    AlphaNoBg = 8192,
+    AlphaPreviewHalf = 16384,
+    AlphaBar = 262144,
+    HDR = 524288,
+    DisplayRGB = 1048576,
+    DisplayHSV = 2097152,
+    DisplayHex = 4194304,
+    Uint8 = 8388608,
+    Float = 16777216,
+    PickerHueBar = 33554432,
+    PickerHueWheel = 67108864,
+    PickerNoRotate = 134217728,
+    InputRGB = 268435456,
+    InputHSV = 536870912,
+}
+
+enum ImGuiSliderFlags : i32 {
+    None = 0,
+    Logarithmic = 32,
+    NoRoundToFormat = 64,
+    NoInput = 128,
+    WrapAround = 256,
+    ClampOnInput = 512,
+    ClampZeroRange = 1024,
+    NoSpeedTweaks = 2048,
+    ColorMarkers = 4096,
+    AlwaysClamp = 1536,
+}
+
+enum ImGuiMouseButton : i32 {
+    Left = 0,
+    Right = 1,
+    Middle = 2,
+}
+
+enum ImGuiMouseCursor : i32 {
+    None = -1,
+    Arrow = 0,
+    TextInput = 1,
+    ResizeAll = 2,
+    ResizeNS = 3,
+    ResizeEW = 4,
+    ResizeNESW = 5,
+    ResizeNWSE = 6,
+    Hand = 7,
+    Wait = 8,
+    Progress = 9,
+    NotAllowed = 10,
+}
+
+enum ImGuiMouseSource : i32 {
+    Mouse = 0,
+    TouchScreen = 1,
+    Pen = 2,
+}
+
+enum ImGuiCond : i32 {
+    None = 0,
+    Always = 1,
+    Once = 2,
+    FirstUseEver = 4,
+    Appearing = 8,
+}
+
+enum ImGuiTableFlags : i32 {
+    None = 0,
+    Resizable = 1,
+    Reorderable = 2,
+    Hideable = 4,
+    Sortable = 8,
+    NoSavedSettings = 16,
+    ContextMenuInBody = 32,
+    RowBg = 64,
+    BordersInnerH = 128,
+    BordersOuterH = 256,
+    BordersInnerV = 512,
+    BordersOuterV = 1024,
+    BordersH = 384,
+    BordersV = 1536,
+    BordersInner = 640,
+    BordersOuter = 1280,
+    Borders = 1920,
+    NoBordersInBody = 2048,
+    NoBordersInBodyUntilResize = 4096,
+    SizingFixedFit = 8192,
+    SizingFixedSame = 16384,
+    SizingStretchProp = 24576,
+    SizingStretchSame = 32768,
+    NoHostExtendX = 65536,
+    NoHostExtendY = 131072,
+    NoKeepColumnsVisible = 262144,
+    PreciseWidths = 524288,
+    NoClip = 1048576,
+    PadOuterX = 2097152,
+    NoPadOuterX = 4194304,
+    NoPadInnerX = 8388608,
+    ScrollX = 16777216,
+    ScrollY = 33554432,
+    SortMulti = 67108864,
+    SortTristate = 134217728,
+    HighlightHoveredColumn = 268435456,
+}
+
+enum ImGuiTableColumnFlags : i32 {
+    None = 0,
+    Disabled = 1,
+    DefaultHide = 2,
+    DefaultSort = 4,
+    WidthStretch = 8,
+    WidthFixed = 16,
+    NoResize = 32,
+    NoReorder = 64,
+    NoHide = 128,
+    NoClip = 256,
+    NoSort = 512,
+    NoSortAscending = 1024,
+    NoSortDescending = 2048,
+    NoHeaderLabel = 4096,
+    NoHeaderWidth = 8192,
+    PreferSortAscending = 16384,
+    PreferSortDescending = 32768,
+    IndentEnable = 65536,
+    IndentDisable = 131072,
+    AngledHeader = 262144,
+    IsEnabled = 16777216,
+    IsVisible = 33554432,
+    IsSorted = 67108864,
+    IsHovered = 134217728,
+}
+
+enum ImGuiTableRowFlags : i32 {
+    None = 0,
+    Headers = 1,
+}
+
+enum ImGuiTableBgTarget : i32 {
+    None = 0,
+    RowBg0 = 1,
+    RowBg1 = 2,
+    CellBg = 3,
+}
+
+enum ImGuiListClipperFlags : i32 {
+    None = 0,
+    NoSetTableRowCounters = 1,
+}
+
+enum ImGuiMultiSelectFlags : i32 {
+    None = 0,
+    SingleSelect = 1,
+    NoSelectAll = 2,
+    NoRangeSelect = 4,
+    NoAutoSelect = 8,
+    NoAutoClear = 16,
+    NoAutoClearOnReselect = 32,
+    BoxSelect1d = 64,
+    BoxSelect2d = 128,
+    BoxSelectNoScroll = 256,
+    ClearOnEscape = 512,
+    ClearOnClickVoid = 1024,
+    ScopeWindow = 2048,
+    ScopeRect = 4096,
+    SelectOnAuto = 8192,
+    SelectOnClickAlways = 16384,
+    SelectOnClickRelease = 32768,
+    NavWrapX = 65536,
+    NoSelectOnRightClick = 131072,
+}
+
+enum ImGuiSelectionRequestType : i32 {
+    None = 0,
+    SetAll = 1,
+    SetRange = 2,
+}
+
+enum ImDrawFlags : i32 {
+    None = 0,
+    RoundTopLeft = 16,
+    RoundTopRight = 32,
+    RoundBottomLeft = 64,
+    RoundBottomRight = 128,
+    RoundNone = 256,
+    RoundAll = 240,
+    RoundTop = 48,
+    RoundBottom = 192,
+    RoundLeft = 80,
+    RoundRight = 160,
+    Closed = 512,
+    JoinMiter = 1024,
+    CapSquare = 2048,
+    AAFill = 4096,
+    AALines = 8192,
+    AALineEnds = 16384,
+    StrokeInside = 131072,
+    StrokeCenter = 262144,
+    StrokeCenterBiased = 393216,
+    StrokeOutside = 524288,
+    StrokeLegacy = 917504,
+    TextNoPixelSnap = 1048576,
+    UseTexForRoundCorners = 2097152,
+    UseVtxOffset = 4194304,
+}
+
+enum ImTextureFormat : i32 {
+    RGBA32 = 0,
+    Alpha8 = 1,
+}
+
+enum ImTextureStatus : i32 {
+    OK = 0,
+    Destroyed = 1,
+    WantCreate = 2,
+    WantUpdates = 3,
+    WantDestroy = 4,
+}
+
+enum ImFontAtlasFlags : i32 {
+    None = 0,
+    NoPowerOfTwoHeight = 1,
+    NoMouseCursors = 2,
+    NoBakedLines = 4,
+    NoBakedRoundCorners = 8,
+}
+
+enum ImFontFlags : i32 {
+    None = 0,
+    NoLoadError = 2,
+    NoLoadGlyphs = 4,
+    LockBakedSizes = 8,
+    ImplicitRefSize = 16,
+}
+
+enum ImGuiViewportFlags : i32 {
+    None = 0,
+    IsPlatformWindow = 1,
+    IsPlatformMonitor = 2,
+    OwnedByApp = 4,
+    NoDecoration = 8,
+    NoTaskBarIcon = 16,
+    NoFocusOnAppearing = 32,
+    NoFocusOnClick = 64,
+    NoInputs = 128,
+    NoRendererClear = 256,
+    NoAutoMerge = 512,
+    TopMost = 1024,
+    CanHostOtherWindows = 2048,
+    IsMinimized = 4096,
+    IsFocused = 8192,
+}
+
+enum ImDrawListFlags : i32 {
+    None = 0,
+    AntiAliasedFill = 4096,
+    AntiAliasedLines = 8192,
+    AllowVtxOffset = 4194304,
+    TextNoPixelSnap = 1048576,
+}
+
+trait ImGui {
+    // create Demo window. demonstrate most ImGui features. call this to learn about the library! try to make it always available in your application!
+    static void ShowDemoWindow(inout ?bool p_open);
+    // create Metrics/Debugger window. display Dear ImGui internals: windows, draw commands, various internal state, etc.
+    static void ShowMetricsWindow(inout ?bool p_open);
+    // create Debug Log window. display a simplified log of important dear imgui events.
+    static void ShowDebugLogWindow(inout ?bool p_open);
+    // Implied p_open = NULL
+    static void ShowIDStackToolWindow();
+    // create Stack Tool window. hover items with mouse to query information about the source of their unique ID.
+    static void ShowIDStackToolWindowEx(inout ?bool p_open);
+    // create About window. display Dear ImGui version, credits and build/system information.
+    static void ShowAboutWindow(inout ?bool p_open);
+    // add style selector block (not a window), essentially a combo listing the default styles.
+    static bool ShowStyleSelector(cstring label);
+    // add font selector block (not a window), essentially a combo listing the loaded fonts.
+    static void ShowFontSelector(cstring label);
+    // add basic help/info block (not a window): how to manipulate ImGui as an end-user (mouse/keyboard controls).
+    static void ShowUserGuide();
+    // get the compiled version string e.g. "1.80 WIP" (essentially the value for IMGUI_VERSION from the compiled version of imgui.cpp)
+    static cstring GetVersion();
+    static bool Begin(cstring name, inout ?bool p_open, ImGuiWindowFlags flags);
+    static void End();
+    static bool BeginChild(cstring str_id, ImVec2 size, ImGuiChildFlags child_flags, ImGuiWindowFlags window_flags);
+    static bool BeginChildID(u32 id, ImVec2 size, ImGuiChildFlags child_flags, ImGuiWindowFlags window_flags);
+    static void EndChild();
+    static bool IsWindowAppearing();
+    static bool IsWindowCollapsed();
+    // is current window focused? or its root/child, depending on flags. see flags for options.
+    static bool IsWindowFocused(ImGuiFocusedFlags flags);
+    // is current window hovered and hoverable (e.g. not blocked by a popup/modal)? See ImGuiHoveredFlags_ for options. IMPORTANT: If you are trying to check whether your mouse should be dispatched to Dear ImGui or to your underlying app, you should not use this function! Use the 'io.WantCaptureMouse' boolean for that! Refer to FAQ entry "How can I tell whether to dispatch mouse/keyboard to Dear ImGui or my application?" for details.
+    static bool IsWindowHovered(ImGuiHoveredFlags flags);
+    // get DPI scale currently associated to the current window's viewport.
+    static f32 GetWindowDpiScale();
+    // get current window position in screen space (IT IS UNLIKELY YOU EVER NEED TO USE THIS. Consider always using GetCursorScreenPos() and GetContentRegionAvail() instead)
+    static ImVec2 GetWindowPos();
+    // get current window size (IT IS UNLIKELY YOU EVER NEED TO USE THIS. Consider always using GetCursorScreenPos() and GetContentRegionAvail() instead)
+    static ImVec2 GetWindowSize();
+    // get current window width (IT IS UNLIKELY YOU EVER NEED TO USE THIS). Shortcut for GetWindowSize().x.
+    static f32 GetWindowWidth();
+    // get current window height (IT IS UNLIKELY YOU EVER NEED TO USE THIS). Shortcut for GetWindowSize().y.
+    static f32 GetWindowHeight();
+    // Implied pivot = ImVec2(0, 0)
+    static void SetNextWindowPos(ImVec2 pos, ImGuiCond cond);
+    // set next window position. call before Begin(). use pivot=(0.5f,0.5f) to center on given point, etc.
+    static void SetNextWindowPosEx(ImVec2 pos, ImGuiCond cond, ImVec2 pivot);
+    // set next window size. set axis to 0.0f to force an auto-fit on this axis. call before Begin()
+    static void SetNextWindowSize(ImVec2 size, ImGuiCond cond);
+    // set next window content size (~ scrollable client area, which enforce the range of scrollbars). Not including window decorations (title bar, menu bar, etc.) nor WindowPadding. set an axis to 0.0f to leave it automatic. call before Begin()
+    static void SetNextWindowContentSize(ImVec2 size);
+    // set next window collapsed state. call before Begin()
+    static void SetNextWindowCollapsed(bool collapsed, ImGuiCond cond);
+    // set next window to be focused / top-most. call before Begin()
+    static void SetNextWindowFocus();
+    // set next window scrolling value (use < 0.0f to not affect a given axis).
+    static void SetNextWindowScroll(ImVec2 scroll);
+    // set next window background color alpha. helper to easily override the Alpha component of ImGuiCol_WindowBg/ChildBg/PopupBg. you may also use ImGuiWindowFlags_NoBackground.
+    static void SetNextWindowBgAlpha(f32 alpha);
+    // set next window viewport
+    static void SetNextWindowViewport(u32 viewport_id);
+    // (not recommended) set current window position - call within Begin()/End(). prefer using SetNextWindowPos(), as this may incur tearing and side-effects.
+    static void SetWindowPos(ImVec2 pos, ImGuiCond cond);
+    // (not recommended) set current window size - call within Begin()/End(). set to ImVec2(0, 0) to force an auto-fit. prefer using SetNextWindowSize(), as this may incur tearing and minor side-effects.
+    static void SetWindowSize(ImVec2 size, ImGuiCond cond);
+    // (not recommended) set current window collapsed state. prefer using SetNextWindowCollapsed().
+    static void SetWindowCollapsed(bool collapsed, ImGuiCond cond);
+    // (not recommended) set current window to be focused / top-most. prefer using SetNextWindowFocus().
+    static void SetWindowFocus();
+    // set named window position.
+    static void SetWindowPosStr(cstring name, ImVec2 pos, ImGuiCond cond);
+    // set named window size. set axis to 0.0f to force an auto-fit on this axis.
+    static void SetWindowSizeStr(cstring name, ImVec2 size, ImGuiCond cond);
+    // set named window collapsed state
+    static void SetWindowCollapsedStr(cstring name, bool collapsed, ImGuiCond cond);
+    // set named window to be focused / top-most. use NULL to remove focus.
+    static void SetWindowFocusStr(cstring name);
+    // get scrolling amount [0 .. GetScrollMaxX()]
+    static f32 GetScrollX();
+    // get scrolling amount [0 .. GetScrollMaxY()]
+    static f32 GetScrollY();
+    // set scrolling amount [0 .. GetScrollMaxX()]
+    static void SetScrollX(f32 scroll_x);
+    // set scrolling amount [0 .. GetScrollMaxY()]
+    static void SetScrollY(f32 scroll_y);
+    // get maximum scrolling amount ~~ ContentSize.x - WindowSize.x - DecorationsSize.x
+    static f32 GetScrollMaxX();
+    // get maximum scrolling amount ~~ ContentSize.y - WindowSize.y - DecorationsSize.y
+    static f32 GetScrollMaxY();
+    // adjust scrolling amount to make current cursor position visible. center_x_ratio=0.0: left, 0.5: center, 1.0: right. When using to make a "default/current item" visible, consider using SetItemDefaultFocus() instead.
+    static void SetScrollHereX(f32 center_x_ratio);
+    // adjust scrolling amount to make current cursor position visible. center_y_ratio=0.0: top, 0.5: center, 1.0: bottom. When using to make a "default/current item" visible, consider using SetItemDefaultFocus() instead.
+    static void SetScrollHereY(f32 center_y_ratio);
+    // adjust scrolling amount to make given position visible. Generally GetCursorStartPos() + offset to compute a valid position.
+    static void SetScrollFromPosX(f32 local_x, f32 center_x_ratio);
+    // adjust scrolling amount to make given position visible. Generally GetCursorStartPos() + offset to compute a valid position.
+    static void SetScrollFromPosY(f32 local_y, f32 center_y_ratio);
+    static void PopFont();
+    // get current scaled font size (= height in pixels). AFTER global scale factors applied. *IMPORTANT* DO NOT PASS THIS VALUE TO PushFont()! Use ImGui::GetStyle().FontSizeBase to get value before global scale factors.
+    static f32 GetFontSize();
+    // modify a style color. always use this if you modify the style after NewFrame().
+    static void PushStyleColor(ImGuiCol idx, u32 col);
+    static void PushStyleColorImVec4(ImGuiCol idx, ImVec4 col);
+    // Implied count = 1
+    static void PopStyleColor();
+    static void PopStyleColorEx(i32 count);
+    // modify a style float variable. always use this if you modify the style after NewFrame()!
+    static void PushStyleVar(ImGuiStyleVar idx, f32 val);
+    // modify a style ImVec2 variable. "
+    static void PushStyleVarImVec2(ImGuiStyleVar idx, ImVec2 val);
+    // modify X component of a style ImVec2 variable. "
+    static void PushStyleVarX(ImGuiStyleVar idx, f32 val_x);
+    // modify Y component of a style ImVec2 variable. "
+    static void PushStyleVarY(ImGuiStyleVar idx, f32 val_y);
+    // Implied count = 1
+    static void PopStyleVar();
+    static void PopStyleVarEx(i32 count);
+    // modify specified shared item flag, e.g. PushItemFlag(ImGuiItemFlags_NoTabStop, true)
+    static void PushItemFlag(ImGuiItemFlags option, bool enabled);
+    static void PopItemFlag();
+    // push width of items for common large "item+label" widgets. >0.0f: width in pixels, <0.0f align xx pixels to the right of window (so -FLT_MIN always align width to the right side).
+    static void PushItemWidth(f32 item_width);
+    static void PopItemWidth();
+    // set width of the _next_ common large "item+label" widget. >0.0f: width in pixels, <0.0f align xx pixels to the right of window (so -FLT_MIN always align width to the right side)
+    static void SetNextItemWidth(f32 item_width);
+    // width of item given pushed settings and current cursor position. NOT necessarily the width of last item unlike most 'Item' functions.
+    static f32 CalcItemWidth();
+    // push word-wrapping position for Text*() commands. < 0.0f: no wrapping; 0.0f: wrap to end of window (or column); > 0.0f: wrap at 'wrap_pos_x' position in window local space
+    static void PushTextWrapPos(f32 wrap_local_pos_x);
+    static void PopTextWrapPos();
+    // get UV coordinate for a white pixel, useful to draw custom shapes via the ImDrawList API
+    static ImVec2 GetFontTexUvWhitePixel();
+    // Implied alpha_mul = 1.0f
+    static u32 GetColorU32(ImGuiCol idx);
+    // retrieve given style color with style alpha applied and optional extra alpha multiplier, packed as a 32-bit value suitable for ImDrawList
+    static u32 GetColorU32Ex(ImGuiCol idx, f32 alpha_mul);
+    // retrieve given color with style alpha applied, packed as a 32-bit value suitable for ImDrawList
+    static u32 GetColorU32ImVec4(ImVec4 col);
+    // Implied alpha_mul = 1.0f
+    static u32 GetColorU32ImU32(u32 col);
+    // retrieve given color with style alpha applied, packed as a 32-bit value suitable for ImDrawList
+    static u32 GetColorU32ImU32Ex(u32 col, f32 alpha_mul);
+    // cursor position, absolute coordinates. THIS IS YOUR BEST FRIEND (prefer using this rather than GetCursorPos(), also more useful to work with ImDrawList API).
+    static ImVec2 GetCursorScreenPos();
+    // cursor position, absolute coordinates. THIS IS YOUR BEST FRIEND.
+    static void SetCursorScreenPos(ImVec2 pos);
+    // available space from current position. THIS IS YOUR BEST FRIEND.
+    static ImVec2 GetContentRegionAvail();
+    // [window-local] cursor position in window-local coordinates. This is not your best friend.
+    static ImVec2 GetCursorPos();
+    // [window-local] "
+    static f32 GetCursorPosX();
+    // [window-local] "
+    static f32 GetCursorPosY();
+    // [window-local] "
+    static void SetCursorPos(ImVec2 local_pos);
+    // [window-local] "
+    static void SetCursorPosX(f32 local_x);
+    // [window-local] "
+    static void SetCursorPosY(f32 local_y);
+    // [window-local] initial cursor position, in window-local coordinates. Call GetCursorScreenPos() after Begin() to get the absolute coordinates version.
+    static ImVec2 GetCursorStartPos();
+    // separator, generally horizontal. inside a menu bar or in horizontal layout mode, this becomes a vertical separator.
+    static void Separator();
+    // Implied offset_from_start_x = 0.0f, spacing = -1.0f
+    static void SameLine();
+    // call between widgets or groups to layout them horizontally. X position given in window coordinates.
+    static void SameLineEx(f32 offset_from_start_x, f32 spacing);
+    // undo a SameLine() or force a new line when in a horizontal-layout context.
+    static void NewLine();
+    // add vertical spacing.
+    static void Spacing();
+    // add a dummy item of given size. unlike InvisibleButton(), Dummy() won't take the mouse click or be navigable into.
+    static void Dummy(ImVec2 size);
+    // Implied indent_w = 0.0f
+    static void Indent();
+    // move content position toward the right, by indent_w, or style.IndentSpacing if indent_w <= 0
+    static void IndentEx(f32 indent_w);
+    // Implied indent_w = 0.0f
+    static void Unindent();
+    // move content position back to the left, by indent_w, or style.IndentSpacing if indent_w <= 0
+    static void UnindentEx(f32 indent_w);
+    // lock horizontal starting position
+    static void BeginGroup();
+    // unlock horizontal starting position + capture the whole group bounding box into one "item" (so you can use IsItemHovered() or layout primitives such as SameLine() on whole group, etc.)
+    static void EndGroup();
+    // vertically align upcoming text baseline to FramePadding.y so that it will align properly to regularly framed items (call if you have text on a line before a framed item)
+    static void AlignTextToFramePadding();
+    // ~ FontSize
+    static f32 GetTextLineHeight();
+    // ~ FontSize + style.ItemSpacing.y (distance in pixels between 2 consecutive lines of text)
+    static f32 GetTextLineHeightWithSpacing();
+    // ~ FontSize + style.FramePadding.y * 2
+    static f32 GetFrameHeight();
+    // ~ FontSize + style.FramePadding.y * 2 + style.ItemSpacing.y (distance in pixels between 2 consecutive lines of framed widgets)
+    static f32 GetFrameHeightWithSpacing();
+    // push string into the ID stack (will hash string).
+    static void PushID(cstring str_id);
+    // push string into the ID stack (will hash string).
+    static void PushIDStr(cstring str_id_begin, cstring str_id_end);
+    // push integer into the ID stack (will hash integer).
+    static void PushIDInt(i32 int_id);
+    // pop from the ID stack.
+    static void PopID();
+    // calculate unique ID (hash of whole ID stack + given parameter). e.g. if you want to query into ImGuiStorage yourself
+    static u32 GetID(cstring str_id);
+    static u32 GetIDStr(cstring str_id_begin, cstring str_id_end);
+    static u32 GetIDInt(i32 int_id);
+    // Implied text_end = NULL
+    static void TextUnformatted(cstring text);
+    // raw text without formatting. Practically equivalent to 'Text("%s", text)' but doesn't require null terminated string if 'text_end' is specified.
+    static void TextUnformattedEx(cstring text, cstring text_end);
+    // shortcut for PushStyleColor(ImGuiCol_Text, col); Text(fmt, ...); PopStyleColor();
+    static void TextColoredUnformatted(ImVec4 col, cstring text);
+    // shortcut for PushStyleColor(ImGuiCol_Text, style.Colors[ImGuiCol_TextDisabled]); Text(fmt, ...); PopStyleColor();
+    static void TextDisabledUnformatted(cstring text);
+    // shortcut for PushTextWrapPos(0.0f); Text(fmt, ...); PopTextWrapPos();. Note that this won't work on an auto-resizing window if there's no other widgets to extend the window width, yoy may need to set a size using SetNextWindowSize().
+    static void TextWrappedUnformatted(cstring text);
+    // display text+label aligned the same way as value+label widgets
+    static void LabelTextUnformatted(cstring label, cstring text);
+    // shortcut for Bullet()+Text()
+    static void BulletTextUnformatted(cstring text);
+    // currently: formatted text with a horizontal line
+    static void SeparatorText(cstring label);
+    // Implied size = ImVec2(0, 0)
+    static bool Button(cstring label);
+    // button
+    static bool ButtonEx(cstring label, ImVec2 size);
+    // button with (FramePadding.y == 0) to easily embed within text
+    static bool SmallButton(cstring label);
+    // flexible button behavior without the visuals, frequently useful to build custom behaviors using the public api (along with IsItemActive, IsItemHovered, etc.)
+    static bool InvisibleButton(cstring str_id, ImVec2 size, ImGuiButtonFlags flags);
+    // square button with an arrow shape
+    static bool ArrowButton(cstring str_id, ImGuiDir dir);
+    static bool Checkbox(cstring label, inout bool v);
+    static bool CheckboxFlagsIntPtr(cstring label, inout i32 flags, i32 flags_value);
+    static bool CheckboxFlagsUintPtr(cstring label, inout u32 flags, u32 flags_value);
+    // use with e.g. if (RadioButton("one", my_value==1)) { my_value = 1; }
+    static bool RadioButton(cstring label, bool active);
+    // shortcut to handle the above pattern when value is an integer
+    static bool RadioButtonIntPtr(cstring label, inout i32 v, i32 v_button);
+    static void ProgressBar(f32 fraction, ImVec2 size_arg, cstring overlay);
+    // draw a small circle + keep the cursor on the same line. advance cursor x position by GetTreeNodeToLabelSpacing(), same distance that TreeNode() uses
+    static void Bullet();
+    // hyperlink text button, return true when clicked
+    static bool TextLink(cstring label);
+    // Implied url = NULL
+    static bool TextLinkOpenURL(cstring label);
+    // hyperlink text button, automatically open file/url when clicked
+    static bool TextLinkOpenURLEx(cstring label, cstring url);
+    // Implied uv0 = ImVec2(0, 0), uv1 = ImVec2(1, 1)
+    static void Image(TextureRef tex_ref, ImVec2 image_size);
+    static void ImageEx(TextureRef tex_ref, ImVec2 image_size, ImVec2 uv0, ImVec2 uv1);
+    // Implied uv0 = ImVec2(0, 0), uv1 = ImVec2(1, 1), bg_col = ImVec4(0, 0, 0, 0), tint_col = ImVec4(1, 1, 1, 1)
+    static void ImageWithBg(TextureRef tex_ref, ImVec2 image_size);
+    static void ImageWithBgEx(TextureRef tex_ref, ImVec2 image_size, ImVec2 uv0, ImVec2 uv1, ImVec4 bg_col, ImVec4 tint_col);
+    // Implied uv0 = ImVec2(0, 0), uv1 = ImVec2(1, 1), bg_col = ImVec4(0, 0, 0, 0), tint_col = ImVec4(1, 1, 1, 1)
+    static bool ImageButton(cstring str_id, TextureRef tex_ref, ImVec2 image_size);
+    static bool ImageButtonEx(cstring str_id, TextureRef tex_ref, ImVec2 image_size, ImVec2 uv0, ImVec2 uv1, ImVec4 bg_col, ImVec4 tint_col);
+    static bool BeginCombo(cstring label, cstring preview_value, ImGuiComboFlags flags);
+    // only call EndCombo() if BeginCombo() returns true!
+    static void EndCombo();
+    // Implied popup_max_height_in_items = -1
+    static bool Combo(cstring label, inout i32 current_item, cstring items_separated_by_zeros);
+    // Separate items with \0 within a string, end item-list with \0\0. e.g. "One\0Two\0Three\0"
+    static bool ComboEx(cstring label, inout i32 current_item, cstring items_separated_by_zeros, i32 popup_max_height_in_items);
+    // Implied v_speed = 1.0f, v_min = 0.0f, v_max = 0.0f, format = "%.3f", flags = 0
+    static bool DragFloat(cstring label, inout f32 v);
+    // If v_min >= v_max we have no bound
+    static bool DragFloatEx(cstring label, inout f32 v, f32 v_speed, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0.0f, v_max = 0.0f, format = "%.3f", flags = 0
+    static bool DragFloat2(cstring label, inout f32[2] v);
+    static bool DragFloat2Ex(cstring label, inout f32[2] v, f32 v_speed, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0.0f, v_max = 0.0f, format = "%.3f", flags = 0
+    static bool DragFloat3(cstring label, inout f32[3] v);
+    static bool DragFloat3Ex(cstring label, inout f32[3] v, f32 v_speed, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0.0f, v_max = 0.0f, format = "%.3f", flags = 0
+    static bool DragFloat4(cstring label, inout f32[4] v);
+    static bool DragFloat4Ex(cstring label, inout f32[4] v, f32 v_speed, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0.0f, v_max = 0.0f, format = "%.3f", format_max = NULL, flags = 0
+    static bool DragFloatRange2(cstring label, inout f32 v_current_min, inout f32 v_current_max);
+    static bool DragFloatRange2Ex(cstring label, inout f32 v_current_min, inout f32 v_current_max, f32 v_speed, f32 v_min, f32 v_max, cstring format, cstring format_max, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0, v_max = 0, format = "%d", flags = 0
+    static bool DragInt(cstring label, inout i32 v);
+    // If v_min >= v_max we have no bound
+    static bool DragIntEx(cstring label, inout i32 v, f32 v_speed, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0, v_max = 0, format = "%d", flags = 0
+    static bool DragInt2(cstring label, inout i32[2] v);
+    static bool DragInt2Ex(cstring label, inout i32[2] v, f32 v_speed, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0, v_max = 0, format = "%d", flags = 0
+    static bool DragInt3(cstring label, inout i32[3] v);
+    static bool DragInt3Ex(cstring label, inout i32[3] v, f32 v_speed, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0, v_max = 0, format = "%d", flags = 0
+    static bool DragInt4(cstring label, inout i32[4] v);
+    static bool DragInt4Ex(cstring label, inout i32[4] v, f32 v_speed, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_speed = 1.0f, v_min = 0, v_max = 0, format = "%d", format_max = NULL, flags = 0
+    static bool DragIntRange2(cstring label, inout i32 v_current_min, inout i32 v_current_max);
+    static bool DragIntRange2Ex(cstring label, inout i32 v_current_min, inout i32 v_current_max, f32 v_speed, i32 v_min, i32 v_max, cstring format, cstring format_max, ImGuiSliderFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool SliderFloat(cstring label, inout f32 v, f32 v_min, f32 v_max);
+    // adjust format to decorate the value with a prefix or a suffix for in-slider labels or unit display.
+    static bool SliderFloatEx(cstring label, inout f32 v, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool SliderFloat2(cstring label, inout f32[2] v, f32 v_min, f32 v_max);
+    static bool SliderFloat2Ex(cstring label, inout f32[2] v, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool SliderFloat3(cstring label, inout f32[3] v, f32 v_min, f32 v_max);
+    static bool SliderFloat3Ex(cstring label, inout f32[3] v, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool SliderFloat4(cstring label, inout f32[4] v, f32 v_min, f32 v_max);
+    static bool SliderFloat4Ex(cstring label, inout f32[4] v, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied v_degrees_min = -360.0f, v_degrees_max = +360.0f, format = "%.0f deg", flags = 0
+    static bool SliderAngle(cstring label, inout f32 v_rad);
+    static bool SliderAngleEx(cstring label, inout f32 v_rad, f32 v_degrees_min, f32 v_degrees_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%d", flags = 0
+    static bool SliderInt(cstring label, inout i32 v, i32 v_min, i32 v_max);
+    static bool SliderIntEx(cstring label, inout i32 v, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%d", flags = 0
+    static bool SliderInt2(cstring label, inout i32[2] v, i32 v_min, i32 v_max);
+    static bool SliderInt2Ex(cstring label, inout i32[2] v, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%d", flags = 0
+    static bool SliderInt3(cstring label, inout i32[3] v, i32 v_min, i32 v_max);
+    static bool SliderInt3Ex(cstring label, inout i32[3] v, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%d", flags = 0
+    static bool SliderInt4(cstring label, inout i32[4] v, i32 v_min, i32 v_max);
+    static bool SliderInt4Ex(cstring label, inout i32[4] v, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool VSliderFloat(cstring label, ImVec2 size, inout f32 v, f32 v_min, f32 v_max);
+    static bool VSliderFloatEx(cstring label, ImVec2 size, inout f32 v, f32 v_min, f32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied format = "%d", flags = 0
+    static bool VSliderInt(cstring label, ImVec2 size, inout i32 v, i32 v_min, i32 v_max);
+    static bool VSliderIntEx(cstring label, ImVec2 size, inout i32 v, i32 v_min, i32 v_max, cstring format, ImGuiSliderFlags flags);
+    // Implied callback = NULL, user_data = NULL
+    static bool InputText(cstring label, inout i8 buf, usize buf_size, ImGuiInputTextFlags flags);
+    // Implied size = ImVec2(0, 0), flags = 0, callback = NULL, user_data = NULL
+    static bool InputTextMultiline(cstring label, inout i8 buf, usize buf_size);
+    // Implied callback = NULL, user_data = NULL
+    static bool InputTextWithHint(cstring label, cstring hint, inout i8 buf, usize buf_size, ImGuiInputTextFlags flags);
+    // Implied step = 0.0f, step_fast = 0.0f, format = "%.3f", flags = 0
+    static bool InputFloat(cstring label, inout f32 v);
+    static bool InputFloatEx(cstring label, inout f32 v, f32 step, f32 step_fast, cstring format, ImGuiInputTextFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool InputFloat2(cstring label, inout f32[2] v);
+    static bool InputFloat2Ex(cstring label, inout f32[2] v, cstring format, ImGuiInputTextFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool InputFloat3(cstring label, inout f32[3] v);
+    static bool InputFloat3Ex(cstring label, inout f32[3] v, cstring format, ImGuiInputTextFlags flags);
+    // Implied format = "%.3f", flags = 0
+    static bool InputFloat4(cstring label, inout f32[4] v);
+    static bool InputFloat4Ex(cstring label, inout f32[4] v, cstring format, ImGuiInputTextFlags flags);
+    // Implied step = 1, step_fast = 100, flags = 0
+    static bool InputInt(cstring label, inout i32 v);
+    static bool InputIntEx(cstring label, inout i32 v, i32 step, i32 step_fast, ImGuiInputTextFlags flags);
+    static bool InputInt2(cstring label, inout i32[2] v, ImGuiInputTextFlags flags);
+    static bool InputInt3(cstring label, inout i32[3] v, ImGuiInputTextFlags flags);
+    static bool InputInt4(cstring label, inout i32[4] v, ImGuiInputTextFlags flags);
+    // Implied step = 0.0, step_fast = 0.0, format = "%.6f", flags = 0
+    static bool InputDouble(cstring label, inout f64 v);
+    static bool InputDoubleEx(cstring label, inout f64 v, f64 step, f64 step_fast, cstring format, ImGuiInputTextFlags flags);
+    static bool ColorEdit3(cstring label, inout f32[3] col, ImGuiColorEditFlags flags);
+    static bool ColorEdit4(cstring label, inout f32[4] col, ImGuiColorEditFlags flags);
+    static bool ColorPicker3(cstring label, inout f32[3] col, ImGuiColorEditFlags flags);
+    // Implied size = ImVec2(0, 0)
+    static bool ColorButton(cstring desc_id, ImVec4 col, ImGuiColorEditFlags flags);
+    // display a color square/button, hover for details, return true when pressed.
+    static bool ColorButtonEx(cstring desc_id, ImVec4 col, ImGuiColorEditFlags flags, ImVec2 size);
+    static bool TreeNode(cstring label);
+    // helper variation to easily decorrelate the id from the displayed string. Read the FAQ about why and how to use ID. to align arbitrary text at the same level as a TreeNode() you can use Bullet().
+    static bool TreeNodeStrUnformatted(cstring str_id, cstring text);
+    static bool TreeNodeEx(cstring label, ImGuiTreeNodeFlags flags);
+    static bool TreeNodeExStrUnformatted(cstring str_id, ImGuiTreeNodeFlags flags, cstring text);
+    // ~ Indent()+PushID(). Already called by TreeNode() when returning true, but you can call TreePush/TreePop yourself if desired.
+    static void TreePush(cstring str_id);
+    // ~ Unindent()+PopID()
+    static void TreePop();
+    // horizontal distance preceding label when using TreeNode*() or Bullet() == (g.FontSize + style.FramePadding.x*2) for a regular unframed TreeNode
+    static f32 GetTreeNodeToLabelSpacing();
+    // if returning 'true' the header is open. doesn't indent nor push on ID stack. user doesn't have to call TreePop().
+    static bool CollapsingHeader(cstring label, ImGuiTreeNodeFlags flags);
+    // when 'p_visible != NULL': if '*p_visible==true' display an additional small close button on upper right of the header which will set the bool to false when clicked, if '*p_visible==false' don't display the header.
+    static bool CollapsingHeaderBoolPtr(cstring label, inout bool p_visible, ImGuiTreeNodeFlags flags);
+    // set next TreeNode/CollapsingHeader open state.
+    static void SetNextItemOpen(bool is_open, ImGuiCond cond);
+    // set id to use for open/close storage (default to same as item id).
+    static void SetNextItemStorageID(u32 storage_id);
+    // retrieve tree node open/close state.
+    static bool TreeNodeGetOpen(u32 storage_id);
+    // Implied selected = false, flags = 0, size = ImVec2(0, 0)
+    static bool Selectable(cstring label);
+    // "bool selected" carry the selection state (read-only). Selectable() is clicked is returns true so you can modify your selection state. size.x==0.0: use remaining width, size.x>0.0: specify width. size.y==0.0: use label height, size.y>0.0: specify height
+    static bool SelectableEx(cstring label, bool selected, ImGuiSelectableFlags flags, ImVec2 size);
+    // Implied size = ImVec2(0, 0)
+    static bool SelectableBoolPtr(cstring label, inout bool p_selected, ImGuiSelectableFlags flags);
+    // "bool* p_selected" point to the selection state (read-write), as a convenient helper.
+    static bool SelectableBoolPtrEx(cstring label, inout bool p_selected, ImGuiSelectableFlags flags, ImVec2 size);
+    // Was the last item selection state toggled? Useful if you need the per-item information _before_ reaching EndMultiSelect(). We only returns toggle _event_ in order to handle clipping correctly.
+    static bool IsItemToggledSelection();
+    // open a framed scrolling region
+    static bool BeginListBox(cstring label, ImVec2 size);
+    // only call EndListBox() if BeginListBox() returned true!
+    static void EndListBox();
+    // append to menu-bar of current window (requires ImGuiWindowFlags_MenuBar flag set on parent window).
+    static bool BeginMenuBar();
+    // only call EndMenuBar() if BeginMenuBar() returns true!
+    static void EndMenuBar();
+    // create and append to a full screen menu-bar.
+    static bool BeginMainMenuBar();
+    // only call EndMainMenuBar() if BeginMainMenuBar() returns true!
+    static void EndMainMenuBar();
+    // Implied enabled = true
+    static bool BeginMenu(cstring label);
+    // create a sub-menu entry. only call EndMenu() if this returns true!
+    static bool BeginMenuEx(cstring label, bool enabled);
+    // only call EndMenu() if BeginMenu() returns true!
+    static void EndMenu();
+    // Implied shortcut = NULL, selected = false, enabled = true
+    static bool MenuItem(cstring label);
+    // return true when activated.
+    static bool MenuItemEx(cstring label, cstring shortcut, bool selected, bool enabled);
+    // return true when activated + toggle (*p_selected) if p_selected != NULL
+    static bool MenuItemBoolPtr(cstring label, cstring shortcut, inout bool p_selected, bool enabled);
+    // begin/append a tooltip window.
+    static bool BeginTooltip();
+    // only call EndTooltip() if BeginTooltip()/BeginItemTooltip() returns true!
+    static void EndTooltip();
+    // set a text-only tooltip. Often used after a ImGui::IsItemHovered() check. Override any previous call to SetTooltip().
+    static void SetTooltipUnformatted(cstring text);
+    // begin/append a tooltip window if preceding item was hovered.
+    static bool BeginItemTooltip();
+    // set a text-only tooltip if preceding item was hovered. override any previous call to SetTooltip().
+    static void SetItemTooltipUnformatted(cstring text);
+    // return true if the popup is open, and you can start outputting to it.
+    static bool BeginPopup(cstring str_id, ImGuiWindowFlags flags);
+    // return true if the modal is open, and you can start outputting to it.
+    static bool BeginPopupModal(cstring name, inout ?bool p_open, ImGuiWindowFlags flags);
+    // only call EndPopup() if BeginPopupXXX() returns true!
+    static void EndPopup();
+    // call to mark popup as open (don't call every frame!).
+    static bool OpenPopup(cstring str_id, ImGuiPopupFlags popup_flags);
+    // id overload to facilitate calling from nested stacks
+    static bool OpenPopupID(u32 id, ImGuiPopupFlags popup_flags);
+    // helper to open popup when clicked on last item. Default to ImGuiPopupFlags_MouseButtonRight == 1. (note: actually triggers on the mouse _released_ event to be consistent with popup behaviors)
+    static bool OpenPopupOnItemClick(cstring str_id, ImGuiPopupFlags popup_flags);
+    // manually close the popup we have begin-ed into.
+    static void CloseCurrentPopup();
+    // Implied str_id = NULL, popup_flags = 0
+    static bool BeginPopupContextItem();
+    // open+begin popup when clicked on last item. Use str_id==NULL to associate the popup to previous item. If you want to use that on a non-interactive item such as Text() you need to pass in an explicit ID here. read comments in .cpp!
+    static bool BeginPopupContextItemEx(cstring str_id, ImGuiPopupFlags popup_flags);
+    // Implied str_id = NULL, popup_flags = 0
+    static bool BeginPopupContextWindow();
+    // open+begin popup when clicked on current window.
+    static bool BeginPopupContextWindowEx(cstring str_id, ImGuiPopupFlags popup_flags);
+    // Implied str_id = NULL, popup_flags = 0
+    static bool BeginPopupContextVoid();
+    // open+begin popup when clicked in void (where there are no windows).
+    static bool BeginPopupContextVoidEx(cstring str_id, ImGuiPopupFlags popup_flags);
+    // return true if the popup is open.
+    static bool IsPopupOpen(cstring str_id, ImGuiPopupFlags flags);
+    // Implied outer_size = ImVec2(0.0f, 0.0f), inner_width = 0.0f
+    static bool BeginTable(cstring str_id, i32 columns, ImGuiTableFlags flags);
+    static bool BeginTableEx(cstring str_id, i32 columns, ImGuiTableFlags flags, ImVec2 outer_size, f32 inner_width);
+    // only call EndTable() if BeginTable() returns true!
+    static void EndTable();
+    // Implied row_flags = 0, min_row_height = 0.0f
+    static void TableNextRow();
+    // append into the first cell of a new row. 'min_row_height' include the minimum top and bottom padding aka CellPadding.y * 2.0f.
+    static void TableNextRowEx(ImGuiTableRowFlags row_flags, f32 min_row_height);
+    // append into the next column (or first column of next row if currently in last column). Return true when column is visible.
+    static bool TableNextColumn();
+    // append into the specified column. Return true when column is visible.
+    static bool TableSetColumnIndex(i32 column_n);
+    // Implied init_width_or_weight = 0.0f, user_data = 0
+    static void TableSetupColumn(cstring label, ImGuiTableColumnFlags flags);
+    static void TableSetupColumnEx(cstring label, ImGuiTableColumnFlags flags, f32 init_width_or_weight, u32 user_data);
+    // lock columns/rows so they stay visible when scrolled.
+    static void TableSetupScrollFreeze(i32 cols, i32 rows);
+    // submit one header cell manually (rarely used)
+    static void TableHeader(cstring label);
+    // submit a row with headers cells based on data provided to TableSetupColumn() + submit context menu
+    static void TableHeadersRow();
+    // submit a row with angled headers for every column with the ImGuiTableColumnFlags_AngledHeader flag. MUST BE FIRST ROW.
+    static void TableAngledHeadersRow();
+    // return number of columns (value passed to BeginTable)
+    static i32 TableGetColumnCount();
+    // return current column index.
+    static i32 TableGetColumnIndex();
+    // return current row index (header rows are accounted for)
+    static i32 TableGetRowIndex();
+    // return "" if column didn't have a name declared by TableSetupColumn(). Pass -1 to use current column.
+    static cstring TableGetColumnName(i32 column_n);
+    // return column flags so you can query their Enabled/Visible/Sorted/Hovered status flags. Pass -1 to use current column.
+    static ImGuiTableColumnFlags TableGetColumnFlags(i32 column_n);
+    // change user accessible enabled/disabled state of a column. Set to false to hide the column. User can use the context menu to change this themselves (right-click in headers, or right-click in columns body with ImGuiTableFlags_ContextMenuInBody)
+    static void TableSetColumnEnabled(i32 column_n, bool v);
+    // return hovered column. return -1 when table is not hovered. return columns_count if the unused space at the right of visible columns is hovered. Can also use (TableGetColumnFlags() & ImGuiTableColumnFlags_IsHovered) instead.
+    static i32 TableGetHoveredColumn();
+    // change the color of a cell, row, or column. See ImGuiTableBgTarget_ flags for details.
+    static void TableSetBgColor(ImGuiTableBgTarget target, u32 color, i32 column_n);
+    // Implied count = 1, id = NULL, borders = true
+    static void Columns();
+    static void ColumnsEx(i32 count, cstring id, bool borders);
+    // next column, defaults to current row or next row if the current row is finished
+    static void NextColumn();
+    // get current column index
+    static i32 GetColumnIndex();
+    // get column width (in pixels). pass -1 to use current column
+    static f32 GetColumnWidth(i32 column_index);
+    // set column width (in pixels). pass -1 to use current column
+    static void SetColumnWidth(i32 column_index, f32 width);
+    // get position of column line (in pixels, from the left side of the contents region). pass -1 to use current column, otherwise 0..GetColumnsCount() inclusive. column 0 is typically 0.0f
+    static f32 GetColumnOffset(i32 column_index);
+    // set position of column line (in pixels, from the left side of the contents region). pass -1 to use current column
+    static void SetColumnOffset(i32 column_index, f32 offset_x);
+    static i32 GetColumnsCount();
+    // create and append into a TabBar
+    static bool BeginTabBar(cstring str_id, ImGuiTabBarFlags flags);
+    // only call EndTabBar() if BeginTabBar() returns true!
+    static void EndTabBar();
+    // create a Tab. Returns true if the Tab is selected.
+    static bool BeginTabItem(cstring label, inout ?bool p_open, ImGuiTabItemFlags flags);
+    // only call EndTabItem() if BeginTabItem() returns true!
+    static void EndTabItem();
+    // create a Tab behaving like a button. return true when clicked. cannot be selected in the tab bar.
+    static bool TabItemButton(cstring label, ImGuiTabItemFlags flags);
+    // notify TabBar or Docking system of a closed tab/window ahead (useful to reduce visual flicker on reorderable tab bars). For tab-bar: call after BeginTabBar() and before Tab submissions. Otherwise call with a window name.
+    static void SetTabItemClosed(cstring tab_or_docked_window_label);
+    // Implied size = ImVec2(0, 0), flags = 0, window_class = NULL
+    static u32 DockSpace(u32 dockspace_id);
+    // Implied dockspace_id = 0, viewport = NULL, flags = 0, window_class = NULL
+    static u32 DockSpaceOverViewport();
+    // set next window dock id
+    static void SetNextWindowDockID(u32 dock_id, ImGuiCond cond);
+    // get dock id of current window, or 0 if not associated to any docking node.
+    static u32 GetWindowDockID();
+    // is current window docked into another window?
+    static bool IsWindowDocked();
+    // start logging to tty (stdout)
+    static void LogToTTY(i32 auto_open_depth);
+    // start logging to file
+    static void LogToFile(i32 auto_open_depth, cstring filename);
+    // start logging to OS clipboard
+    static void LogToClipboard(i32 auto_open_depth);
+    // stop logging (close file, etc.)
+    static void LogFinish();
+    // helper to display buttons for logging to tty/file/clipboard
+    static void LogButtons();
+    // pass text data straight to log (without being displayed)
+    static void LogTextUnformatted(cstring text);
+    // call after submitting an item which may be dragged. when this return true, you can call SetDragDropPayload() + EndDragDropSource()
+    static bool BeginDragDropSource(ImGuiDragDropFlags flags);
+    // only call EndDragDropSource() if BeginDragDropSource() returns true!
+    static void EndDragDropSource();
+    // call after submitting an item that may receive a payload. If this returns true, you can call AcceptDragDropPayload() + EndDragDropTarget()
+    static bool BeginDragDropTarget();
+    // only call EndDragDropTarget() if BeginDragDropTarget() returns true!
+    static void EndDragDropTarget();
+    static void BeginDisabled(bool disabled);
+    static void EndDisabled();
+    static void PushClipRect(ImVec2 clip_rect_min, ImVec2 clip_rect_max, bool intersect_with_current_clip_rect);
+    static void PopClipRect();
+    // make last item the default focused item of a newly appearing window.
+    static void SetItemDefaultFocus();
+    // Implied offset = 0
+    static void SetKeyboardFocusHere();
+    // focus keyboard on the next widget. Use positive 'offset' to access sub components of a multiple component widget. Use -1 to access previous widget.
+    static void SetKeyboardFocusHereEx(i32 offset);
+    // alter visibility of keyboard/gamepad cursor. by default: show when using an arrow key, hide when clicking with mouse.
+    static void SetNavCursorVisible(bool visible);
+    // allow next item to be overlapped by a subsequent item. Typically useful with InvisibleButton(), Selectable(), TreeNode() covering an area where subsequent items may need to be added. Note that both Selectable() and TreeNode() have dedicated flags doing this.
+    static void SetNextItemAllowOverlap();
+    // is the last item hovered? (and usable, aka not blocked by a popup, etc.). See ImGuiHoveredFlags for more options.
+    static bool IsItemHovered(ImGuiHoveredFlags flags);
+    // is the last item active? (e.g. button being held, text field being edited. This will continuously return true while holding mouse button on an item. Items that don't interact will always return false)
+    static bool IsItemActive();
+    // is the last item focused for keyboard/gamepad navigation?
+    static bool IsItemFocused();
+    // Implied mouse_button = 0
+    static bool IsItemClicked();
+    // is the last item hovered and mouse clicked on? (**)  == IsMouseClicked(mouse_button) && IsItemHovered()Important. (**) this is NOT equivalent to the behavior of e.g. Button(). Read comments in function definition.
+    static bool IsItemClickedEx(ImGuiMouseButton mouse_button);
+    // is the last item visible? (items may be out of sight because of clipping/scrolling)
+    static bool IsItemVisible();
+    // did the last item modify its underlying value this frame? or was pressed? This is generally the same as the "bool" return value of many widgets.
+    static bool IsItemEdited();
+    // was the last item just made active (item was previously inactive).
+    static bool IsItemActivated();
+    // was the last item just made inactive (item was previously active). Useful for Undo/Redo patterns with widgets that require continuous editing.
+    static bool IsItemDeactivated();
+    // was the last item just made inactive and made a value change when it was active? (e.g. Slider/Drag moved). Useful for Undo/Redo patterns with widgets that require continuous editing. Note that you may get false positives (some widgets such as Combo()/ListBox()/Selectable() will return true even when clicking an already selected item).
+    static bool IsItemDeactivatedAfterEdit();
+    // was the last item open state toggled? set by TreeNode().
+    static bool IsItemToggledOpen();
+    // is any item hovered?
+    static bool IsAnyItemHovered();
+    // is any item active?
+    static bool IsAnyItemActive();
+    // is any item focused?
+    static bool IsAnyItemFocused();
+    // get ID of last item (~~ often same ImGui::GetID(label) beforehand)
+    static u32 GetItemID();
+    // get upper-left bounding rectangle of the last item (screen space)
+    static ImVec2 GetItemRectMin();
+    // get lower-right bounding rectangle of the last item (screen space)
+    static ImVec2 GetItemRectMax();
+    // get size of last item
+    static ImVec2 GetItemRectSize();
+    // get generic flags of last item
+    static ImGuiItemFlags GetItemFlags();
+    // Implied mouse_button = 0, delay = -1.0f
+    static i32 GetItemClickedCountWithSingleClickDelay();
+    // [BETA] building block for disambiguation between single-click and double-click. Returns 1 on single-click but delayed by io.MouseSingleClickDelay after mouse release. Returns 2+ on double-click or repeated clicks.
+    static i32 GetItemClickedCountWithSingleClickDelayEx(ImGuiMouseButton mouse_button, f32 delay);
+    // test if rectangle (of given size, starting from cursor position) is visible / not clipped.
+    static bool IsRectVisibleBySize(ImVec2 size);
+    // test if rectangle (in screen space) is visible / not clipped. to perform coarse clipping on user's side.
+    static bool IsRectVisible(ImVec2 rect_min, ImVec2 rect_max);
+    // get global imgui time. incremented by io.DeltaTime every frame.
+    static f64 GetTime();
+    // get global imgui frame count. incremented by 1 every frame.
+    static i32 GetFrameCount();
+    // get a string corresponding to the enum value (for display, saving, etc.).
+    static cstring GetStyleColorName(ImGuiCol idx);
+    // Implied text_end = NULL, hide_text_after_double_hash = false, wrap_width = -1.0f
+    static ImVec2 CalcTextSize(cstring text);
+    static ImVec2 CalcTextSizeEx(cstring text, cstring text_end, bool hide_text_after_double_hash, f32 wrap_width);
+    static ImVec4 ColorConvertU32ToFloat4(u32 in);
+    static u32 ColorConvertFloat4ToU32(ImVec4 in);
+    static void ColorConvertRGBtoHSV(f32 r, f32 g, f32 b, inout f32 out_h, inout f32 out_s, inout f32 out_v);
+    static void ColorConvertHSVtoRGB(f32 h, f32 s, f32 v, inout f32 out_r, inout f32 out_g, inout f32 out_b);
+    // is key being held.
+    static bool IsKeyDown(ImGuiKey key);
+    // Implied repeat = true
+    static bool IsKeyPressed(ImGuiKey key);
+    // was key pressed (went from !Down to Down)? Repeat rate uses io.KeyRepeatDelay / KeyRepeatRate.
+    static bool IsKeyPressedEx(ImGuiKey key, bool repeat);
+    // was key released (went from Down to !Down)?
+    static bool IsKeyReleased(ImGuiKey key);
+    // was key chord (mods + key) pressed, e.g. you can pass 'ImGuiMod_Ctrl | ImGuiKey_S' as a key-chord. This doesn't do any routing or focus check, please consider using Shortcut() function instead.
+    static bool IsKeyChordPressed(i32 key_chord);
+    // uses provided repeat rate/delay. return a count, most often 0 or 1 but might be >1 if RepeatRate is small enough that DeltaTime > RepeatRate
+    static i32 GetKeyPressedAmount(ImGuiKey key, f32 repeat_delay, f32 rate);
+    // [DEBUG] returns English name of the key. Those names are provided for debugging purpose and are not meant to be saved persistently nor compared.
+    static cstring GetKeyName(ImGuiKey key);
+    // Override io.WantCaptureKeyboard flag next frame (said flag is left for your application to handle, typically when true it instructs your app to ignore inputs). e.g. force capture keyboard when your widget is being hovered. This is equivalent to setting "io.WantCaptureKeyboard = want_capture_keyboard"; after the next NewFrame() call.
+    static void SetNextFrameWantCaptureKeyboard(bool want_capture_keyboard);
+    static bool Shortcut(i32 key_chord, ImGuiInputFlags flags);
+    static void SetNextItemShortcut(i32 key_chord, ImGuiInputFlags flags);
+    // Set key owner to last item ID if it is hovered or active. Return true when ownership has been set. Roughly equivalent to 'if (TestKeyOwner(key, GetItemID()) && (IsItemHovered() || IsItemActive())) { SetKeyOwner(key, GetItemID());'.
+    static bool SetItemKeyOwner(ImGuiKey key);
+    // is mouse button held?
+    static bool IsMouseDown(ImGuiMouseButton button);
+    // Implied repeat = false
+    static bool IsMouseClicked(ImGuiMouseButton button);
+    // did mouse button clicked? (went from !Down to Down). Same as GetMouseClickedCount() == 1.
+    static bool IsMouseClickedEx(ImGuiMouseButton button, bool repeat);
+    // did mouse button released? (went from Down to !Down)
+    static bool IsMouseReleased(ImGuiMouseButton button);
+    // did mouse button double-clicked? Same as GetMouseClickedCount() == 2. (note that a double-click will also report IsMouseClicked() == true)
+    static bool IsMouseDoubleClicked(ImGuiMouseButton button);
+    // Implied delay = -1.f
+    static bool IsMouseReleasedWithDelay(ImGuiMouseButton button);
+    // delayed mouse release. Use sparingly. Prefer higher-level helper GetItemClickedCountWithSingleClickDelay(). Generally used with 'delay >= io.MouseDoubleClickTime' + combined with a 'io.MouseClickedLastCount==1' test.
+    static bool IsMouseReleasedWithDelayEx(ImGuiMouseButton button, f32 delay);
+    // return the number of successive mouse-clicks at the time where a click happen (otherwise 0).
+    static i32 GetMouseClickedCount(ImGuiMouseButton button);
+    // Implied clip = true
+    static bool IsMouseHoveringRect(ImVec2 r_min, ImVec2 r_max);
+    // is mouse hovering given bounding rect (in screen space). clipped by current clipping settings, but disregarding of other consideration of focus/window ordering/popup-block.
+    static bool IsMouseHoveringRectEx(ImVec2 r_min, ImVec2 r_max, bool clip);
+    // [WILL OBSOLETE] is any mouse button held? This was designed for backends, but prefer having backend maintain a mask of held mouse buttons, because upcoming input queue system will make this invalid.
+    static bool IsAnyMouseDown();
+    // shortcut to ImGui::GetIO().MousePos provided by user, to be consistent with other calls
+    static ImVec2 GetMousePos();
+    // retrieve mouse position at the time of opening popup we have BeginPopup() into (helper to avoid user backing that value themselves)
+    static ImVec2 GetMousePosOnOpeningCurrentPopup();
+    // is mouse dragging? (uses io.MouseDraggingThreshold if lock_threshold < 0.0f)
+    static bool IsMouseDragging(ImGuiMouseButton button, f32 lock_threshold);
+    // return the delta from the initial clicking position while the mouse button is pressed or was just released. This is locked and return 0.0f until the mouse moves past a distance threshold at least once (uses io.MouseDraggingThreshold if lock_threshold < 0.0f)
+    static ImVec2 GetMouseDragDelta(ImGuiMouseButton button, f32 lock_threshold);
+    // Implied button = 0
+    static void ResetMouseDragDelta();
+    //
+    static void ResetMouseDragDeltaEx(ImGuiMouseButton button);
+    // get desired mouse cursor shape. Important: reset in ImGui::NewFrame(), this is updated during the frame. valid before Render(). If you use software rendering by setting io.MouseDrawCursor ImGui will render those for you
+    static ImGuiMouseCursor GetMouseCursor();
+    // set desired mouse cursor shape
+    static void SetMouseCursor(ImGuiMouseCursor cursor_type);
+    // Override io.WantCaptureMouse flag next frame (said flag is left for your application to handle, typical when true it instructs your app to ignore inputs). This is equivalent to setting "io.WantCaptureMouse = want_capture_mouse;" after the next NewFrame() call.
+    static void SetNextFrameWantCaptureMouse(bool want_capture_mouse);
+    static cstring GetClipboardText();
+    static void SetClipboardText(cstring text);
+    static void DebugTextEncoding(cstring text);
+    static void DebugFlashStyleColor(ImGuiCol idx);
+    static void DebugStartItemPicker();
+    // Call via IMGUI_DEBUG_LOG() for maximum stripping in caller code!
+    static void DebugLogUnformatted(cstring text);
+    // set current options for if you want to select a default format, picker type, etc. User will be able to change those settings, unless you pass the _NoOptions flag to your calls.
+    static void SetColorEditOptions(ImGuiColorEditFlags flags);
+    // Set font scale factor for current window. Prefer using PushFont(NULL, style.FontSizeBase * factor) or use style.FontScaleMain to scale all windows.
+    static void SetWindowFontScale(f32 scale);
+    // <-- 'border_col' was removed in favor of ImGuiCol_ImageBorder. If you use 'tint_col', use ImageWithBg() instead.
+    static void ImageImVec4(TextureRef tex_ref, ImVec2 image_size, ImVec2 uv0, ImVec2 uv1, ImVec4 tint_col, ImVec4 border_col);
+    static void PushButtonRepeat(bool repeat);
+    static void PopButtonRepeat();
+    static void PushTabStop(bool tab_stop);
+    static void PopTabStop();
+    // Content boundaries max (e.g. window boundaries including scrolling, or current column boundaries). You should never need this. Always use GetCursorScreenPos() and GetContentRegionAvail()!
+    static ImVec2 GetContentRegionMax();
+    // Content boundaries min for the window (roughly (0,0)-Scroll), in window-local coordinates. You should never need this. Always use GetCursorScreenPos() and GetContentRegionAvail()!
+    static ImVec2 GetWindowContentRegionMin();
+    // Content boundaries max for the window (roughly (0,0)+Size-Scroll), in window-local coordinates. You should never need this. Always use GetCursorScreenPos() and GetContentRegionAvail()!
+    static ImVec2 GetWindowContentRegionMax();
+}
+
+// Where ImGui draws shapes and text, from the Ui area. Each function's dcimgui's without
+// `ImDrawList_`, so `ImDrawList::AddLine` is `AddLine`.
+trait ImDrawList {
+    // Render-level scissoring. This is passed down to your render function but not used for CPU-side coarse clipping. Prefer using higher-level ImGui::PushClipRect() to affect logic (hit-testing and widget culling)
+    void PushClipRect(ImVec2 clip_rect_min, ImVec2 clip_rect_max, bool intersect_with_current_clip_rect);
+    void PushClipRectFullScreen();
+    void PopClipRect();
+    void PushTexture(TextureRef tex_ref);
+    void PopTexture();
+    // [BETA] Please notify me if you are using this.
+    void PushDrawFlag(ImDrawFlags flags, bool enabled);
+    void PopDrawFlag();
+    ImVec2 GetClipRectMin();
+    ImVec2 GetClipRectMax();
+    // Implied thickness = 1.0f, flags = 0
+    void AddLine(ImVec2 p1, ImVec2 p2, u32 col);
+    void AddLineEx(ImVec2 p1, ImVec2 p2, u32 col, f32 thickness, ImDrawFlags flags);
+    // Implied thickness = 1.0f, flags = 0
+    void AddLineH(f32 min_x, f32 max_x, f32 y, u32 col);
+    void AddLineHEx(f32 min_x, f32 max_x, f32 y, u32 col, f32 thickness, ImDrawFlags flags);
+    // Implied thickness = 1.0f, flags = 0
+    void AddLineV(f32 x, f32 min_y, f32 max_y, u32 col);
+    void AddLineVEx(f32 x, f32 min_y, f32 max_y, u32 col, f32 thickness, ImDrawFlags flags);
+    // Implied rounding = 0.0f, thickness = 1.0f, flags = 0
+    void AddRect(ImVec2 p_min, ImVec2 p_max, u32 col);
+    // a: upper-left, b: lower-right (== upper-left + size)
+    void AddRectEx(ImVec2 p_min, ImVec2 p_max, u32 col, f32 rounding, f32 thickness, ImDrawFlags flags);
+    // Implied rounding = 0.0f, flags = 0
+    void AddRectFilled(ImVec2 p_min, ImVec2 p_max, u32 col);
+    // a: upper-left, b: lower-right (== upper-left + size)
+    void AddRectFilledEx(ImVec2 p_min, ImVec2 p_max, u32 col, f32 rounding, ImDrawFlags flags);
+    void AddRectFilledMultiColor(ImVec2 p_min, ImVec2 p_max, u32 col_upr_left, u32 col_upr_right, u32 col_bot_right, u32 col_bot_left);
+    // Implied thickness = 1.0f, flags = 0
+    void AddQuad(ImVec2 p1, ImVec2 p2, ImVec2 p3, ImVec2 p4, u32 col);
+    void AddQuadEx(ImVec2 p1, ImVec2 p2, ImVec2 p3, ImVec2 p4, u32 col, f32 thickness, ImDrawFlags flags);
+    void AddQuadFilled(ImVec2 p1, ImVec2 p2, ImVec2 p3, ImVec2 p4, u32 col);
+    // Implied thickness = 1.0f, flags = 0
+    void AddTriangle(ImVec2 p1, ImVec2 p2, ImVec2 p3, u32 col);
+    void AddTriangleEx(ImVec2 p1, ImVec2 p2, ImVec2 p3, u32 col, f32 thickness, ImDrawFlags flags);
+    void AddTriangleFilled(ImVec2 p1, ImVec2 p2, ImVec2 p3, u32 col);
+    // Implied num_segments = 0, thickness = 1.0f, flags = 0
+    void AddCircle(ImVec2 center, f32 radius, u32 col);
+    void AddCircleEx(ImVec2 center, f32 radius, u32 col, i32 num_segments, f32 thickness, ImDrawFlags flags);
+    void AddCircleFilled(ImVec2 center, f32 radius, u32 col, i32 num_segments);
+    // Implied thickness = 1.0f, flags = 0
+    void AddNgon(ImVec2 center, f32 radius, u32 col, i32 num_segments);
+    void AddNgonEx(ImVec2 center, f32 radius, u32 col, i32 num_segments, f32 thickness, ImDrawFlags flags);
+    void AddNgonFilled(ImVec2 center, f32 radius, u32 col, i32 num_segments);
+    // Implied rot = 0.0f, num_segments = 0, thickness = 1.0f, flags = 0
+    void AddEllipse(ImVec2 center, ImVec2 radius, u32 col);
+    void AddEllipseEx(ImVec2 center, ImVec2 radius, u32 col, f32 rot, i32 num_segments, f32 thickness, ImDrawFlags flags);
+    // Implied rot = 0.0f, num_segments = 0
+    void AddEllipseFilled(ImVec2 center, ImVec2 radius, u32 col);
+    void AddEllipseFilledEx(ImVec2 center, ImVec2 radius, u32 col, f32 rot, i32 num_segments);
+    // Implied text_end = NULL
+    void AddText(ImVec2 pos, u32 col, cstring text_begin);
+    void AddTextEx(ImVec2 pos, u32 col, cstring text_begin, cstring text_end);
+    // Cubic Bezier (4 control points)
+    void AddBezierCubic(ImVec2 p1, ImVec2 p2, ImVec2 p3, ImVec2 p4, u32 col, f32 thickness, i32 num_segments, ImDrawFlags flags);
+    // Quadratic Bezier (3 control points)
+    void AddBezierQuadratic(ImVec2 p1, ImVec2 p2, ImVec2 p3, u32 col, f32 thickness, i32 num_segments, ImDrawFlags flags);
+    // Implied uv_min = ImVec2(0, 0), uv_max = ImVec2(1, 1), col = IM_COL32_WHITE
+    void AddImage(TextureRef tex_ref, ImVec2 p_min, ImVec2 p_max);
+    void AddImageEx(TextureRef tex_ref, ImVec2 p_min, ImVec2 p_max, ImVec2 uv_min, ImVec2 uv_max, u32 col);
+    // Implied uv1 = ImVec2(0, 0), uv2 = ImVec2(1, 0), uv3 = ImVec2(1, 1), uv4 = ImVec2(0, 1), col = IM_COL32_WHITE
+    void AddImageQuad(TextureRef tex_ref, ImVec2 p1, ImVec2 p2, ImVec2 p3, ImVec2 p4);
+    void AddImageQuadEx(TextureRef tex_ref, ImVec2 p1, ImVec2 p2, ImVec2 p3, ImVec2 p4, ImVec2 uv1, ImVec2 uv2, ImVec2 uv3, ImVec2 uv4, u32 col);
+    void AddImageRounded(TextureRef tex_ref, ImVec2 p_min, ImVec2 p_max, ImVec2 uv_min, ImVec2 uv_max, u32 col, f32 rounding, ImDrawFlags flags);
+    void PathClear();
+    void PathLineTo(ImVec2 pos);
+    void PathLineToMergeDuplicate(ImVec2 pos);
+    void PathFillConvex(u32 col, ImDrawFlags flags);
+    void PathFillConcave(u32 col);
+    void PathStroke(u32 col, f32 thickness, ImDrawFlags flags);
+    void PathArcTo(ImVec2 center, f32 radius, f32 a_min, f32 a_max, i32 num_segments);
+    // Use precomputed angles for a 12 steps circle
+    void PathArcToFast(ImVec2 center, f32 radius, i32 a_min_of_12, i32 a_max_of_12);
+    // Implied num_segments = 0
+    void PathEllipticalArcTo(ImVec2 center, ImVec2 radius, f32 rot, f32 a_min, f32 a_max);
+    // Ellipse
+    void PathEllipticalArcToEx(ImVec2 center, ImVec2 radius, f32 rot, f32 a_min, f32 a_max, i32 num_segments);
+    // Cubic Bezier (4 control points)
+    void PathBezierCubicCurveTo(ImVec2 p2, ImVec2 p3, ImVec2 p4, i32 num_segments);
+    // Quadratic Bezier (3 control points)
+    void PathBezierQuadraticCurveTo(ImVec2 p2, ImVec2 p3, i32 num_segments);
+    void PathRect(ImVec2 rect_min, ImVec2 rect_max, f32 rounding, ImDrawFlags flags);
+    // This is useful if you need to forcefully create a new draw call (to allow for dependent rendering / blending). Otherwise primitives are merged into the same draw-call as much as possible
+    void AddDrawCmd();
+    void ChannelsSplit(i32 count);
+    void ChannelsMerge();
+    void ChannelsSetCurrent(i32 n);
+    void PrimReserve(i32 idx_count, i32 vtx_count);
+    void PrimUnreserve(i32 idx_count, i32 vtx_count);
+    // Axis aligned rectangle (composed of two triangles)
+    void PrimRect(ImVec2 a, ImVec2 b, u32 col);
+    void PrimRectUV(ImVec2 a, ImVec2 b, ImVec2 uv_a, ImVec2 uv_b, u32 col);
+    void PrimQuadUV(ImVec2 a, ImVec2 b, ImVec2 c, ImVec2 d, ImVec2 uv_a, ImVec2 uv_b, ImVec2 uv_c, ImVec2 uv_d, u32 col);
+    void PrimWriteVtx(ImVec2 pos, ImVec2 uv, u32 col);
+    void PrimWriteIdx(u16 idx);
+    // Write vertex with unique index
+    void PrimVtx(ImVec2 pos, ImVec2 uv, u32 col);
+    // OBSOLETED in 1.92.8: NEW FUNCTION SIGNATURE HAS 'thickness' AND 'flags' SWAPPED.
+    void AddRectImDrawFlags(ImVec2 p_min, ImVec2 p_max, u32 col, f32 rounding, ImDrawFlags flags, f32 thickness);
+    // OBSOLETED in 1.92.8: NEW FUNCTION SIGNATURE HAS 'thickness' AND 'flags' SWAPPED.
+    void PathStrokeImDrawFlags(u32 col, ImDrawFlags flags, f32 thickness);
+    // RENAMED in 1.92.0
+    void PushTextureID(TextureRef tex_ref);
+    // RENAMED in 1.92.0
+    void PopTextureID();
+}
