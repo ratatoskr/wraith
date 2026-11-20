@@ -78,6 +78,8 @@ pub const Manifest = struct {
     /// Null means `zig`.
     provider: ?[]const u8 = null,
     autoLoad: bool = true,
+    /// Code for other plugins, with nothing of its own to use. 
+    library: bool = false,
     /// Plugins it needs loaded first, as `name` or `name@minimum-version`.
     depends: []const []const u8 = &.{},
 
@@ -195,11 +197,12 @@ test "manifest parsing" {
         \\{
         \\    "id": "kai", "kind": "plugin", "title": "Kai", "version": "1.0.0", "wraith": "0.2.0", "arches": ["x64"],
         \\    "game": { "ids": ["steam-3316940", "gog-1"], "exes": ["Kai.exe", "kai_dx12.exe"], "builds": ["steam:5"] },
-        \\    "autoLoad": false, "from_the_future": 1
+        \\    "autoLoad": false, "library": true, "from_the_future": 1
         \\}
     , null);
     try std.testing.expectEqualStrings("Kai", m.title.?);
     try std.testing.expect(!m.autoLoad);
+    try std.testing.expect(m.library);
     try std.testing.expect(m.isFor(.{ .id = "steam-3316940" }));
     try std.testing.expect(m.isFor(.{ .id = "gog-1" }));
     try std.testing.expect(m.isFor(.{ .exe = "D:\\Games\\kai.EXE" }));
