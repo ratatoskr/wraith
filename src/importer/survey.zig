@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
     var dir = try std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
     defer dir.close(io);
     var walker = try dir.walk(arena);
-    defer walker.deinit();
+    defer walker.deinit(io);
     while (try walker.next(io)) |entry| {
         if (entry.kind == .file and std.ascii.endsWithIgnoreCase(entry.basename, ".ct")) try tables.append(arena, try arena.dupe(u8, entry.path));
     }

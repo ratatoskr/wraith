@@ -297,7 +297,7 @@ pub const MenuItemImpl = struct {
     }
 };
 
-fn cs(p: [*]const u8) [*c]const c_char {
+fn cs(p: [*]const u8) [*c]const u8 {
     return @ptrCast(p);
 }
 
@@ -363,7 +363,7 @@ fn textBox(loaded: *Loaded, label: ?[*:0]const u8, text: []const u8, flags: i32,
         @memcpy(input.buf[0..text.len], text);
         input.buf[text.len] = 0;
     }
-    const buf: [*c]c_char = @ptrCast(input.buf.ptr);
+    const buf: [*c]u8 = @ptrCast(input.buf.ptr);
     _ = if (size) |s|
         c.ImGui_InputTextMultilineEx(cs(z), buf, input.buf.len, s, flags, null, null)
     else

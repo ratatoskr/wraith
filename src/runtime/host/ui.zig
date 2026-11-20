@@ -88,7 +88,7 @@ const by_name_window_procs = std.StaticStringMap(*const anyopaque).initComptime(
 
 /// ImGui copies the name, so the scoped one only has to outlive the call.
 const scoped = struct {
-    const Name = [*c]const c_char;
+    const Name = [*c]const u8;
 
     fn begin(name: Name, open: [*c]bool, flags: c.ImGuiWindowFlags) callconv(.c) bool {
         var buf: [window_name_max]u8 = undefined;
@@ -126,7 +126,7 @@ comptime {
 
 const window_name_max = 256;
 
-fn scopedWindowName(buf: *[window_name_max]u8, name: [*c]const c_char) [*c]const c_char {
+fn scopedWindowName(buf: *[window_name_max]u8, name: [*c]const u8) [*c]const u8 {
     const loaded = drawing orelse return name;
     if (name == null) return name;
     const s = std.mem.span(@as([*:0]const u8, @ptrCast(name)));

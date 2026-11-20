@@ -318,7 +318,7 @@ fn readFolder(io: std.Io, name: []const u8, dir_path: []const u8, files: *std.Ar
     };
     defer dir.close(io);
     var walker = try dir.walk(allocator);
-    defer walker.deinit();
+    defer walker.deinit(io);
     const start = files.items.len;
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".sal")) continue;

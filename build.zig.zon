@@ -1,7 +1,7 @@
 .{
     .name = .wraith,
     .version = "0.0.0",
-    .minimum_zig_version = "0.18.0-dev.1005+75d48dfff",
+    .minimum_zig_version = "0.18.0-dev.1244+b5ffcbd70",
     .fingerprint = 0xe8511a24f73f9ab1,
     .paths = .{
         "src",
@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .salamander = .{
-            .url = "git+https://github.com/ratatoskr/salamander#95a8169b210e9ced5760f197aaa7fa58307f2c90",
-            .hash = "salamander-0.0.1-6ZeDNo_5DADMfDi3L_QB2cutsWXbkWXbLL5NDgwPSDDi",
+            .url = "git+https://github.com/ratatoskr/salamander#404f74ffe1b6f66a85719b0501b0b79711050116",
+            .hash = "salamander-0.0.1-6ZeDNhT6DABmOYMlBjx3nUjf_N7gjnI-0Q8hy4DOhg2e",
         },
         .tuft = .{
-            .url = "git+https://github.com/ratatoskr/tuft.git#939f99e69fc4bda850f21451e494825a5fa05b67",
-            .hash = "tuft-0.0.0-DNo4yoY2JADVlWdBrpH8vMGp6vwuvSfStkr3EGuw87rz",
+            .url = "git+https://github.com/ratatoskr/tuft#ee6825e5c6413d2c4fa531ce179aa08e46455165",
+            .hash = "tuft-0.0.0-DNo4ym41JADakfD8OF9t0WEq-S8pOWs1LYc_997LTelA",
         },
     },
 }

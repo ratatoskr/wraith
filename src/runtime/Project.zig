@@ -438,7 +438,7 @@ fn unzipAll(io: std.Io, gpa: std.mem.Allocator, path: []const u8, scratch: []con
     var dir = try cwd.openDir(io, scratch, .{ .iterate = true });
     defer dir.close(io);
     var walker = try dir.walk(gpa);
-    defer walker.deinit();
+    defer walker.deinit(io);
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
         const text = try dir.readFileAlloc(io, entry.path, gpa, .limited(max_file));

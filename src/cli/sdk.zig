@@ -292,7 +292,7 @@ fn collect(arena: std.mem.Allocator, io: std.Io, input: []const u8, files: *std.
     };
     defer dir.close(io);
     var walker = try dir.walk(arena);
-    defer walker.deinit();
+    defer walker.deinit(io);
     var found: std.ArrayList([]const u8) = .empty;
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".sal")) continue;

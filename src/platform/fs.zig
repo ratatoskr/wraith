@@ -60,7 +60,7 @@ pub fn copyDirectory(alloc: std.mem.Allocator, io: std.Io, src_path: []const u8,
     defer target_dir.close(io);
 
     var walker = try src_dir.walk(alloc);
-    defer walker.deinit();
+    defer walker.deinit(io);
 
     while (try walker.next(io)) |entry| {
         switch (entry.kind) {
