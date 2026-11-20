@@ -69,7 +69,9 @@ pub fn draw(self: *Disassembly) void {
     if (menu.item(.{ .label = "Show in memory", .chord = keys.show_memory, .enabled = selected != null, .tooltip = "The selected instructions' bytes" })) {
         self.wb.openMemory(selected.?.start, selected.?.len, null);
     }
-    if (menu.item(.{ .label = "Make signature", .chord = keys.make_sig, .enabled = selected != null and !self.wb.sig_maker.busy(), .tooltip = "The shortest pattern that only matches here, or at code that points here. Copied as a location" })) {
+    if (self.wb.sig_maker.busy()) {
+        if (menu.item(.{ .label = "Stop making signature", .chord = keys.make_sig })) self.wb.sig_maker.stop();
+    } else if (menu.item(.{ .label = "Make signature", .chord = keys.make_sig, .enabled = selected != null, .tooltip = "The shortest pattern that only matches here, or at code that points here. Copied as a location" })) {
         self.wb.sig_maker.start(self.wb, selected.?.start);
     }
     if (menu.item(.{ .label = "Go to address", .chord = keys.go_to })) self.bar.focus();

@@ -187,12 +187,11 @@ fn run(wb: *Workbench, action: Action) bool {
             return true;
         },
     }
-    wb.problem = null;
     return true;
 }
 
 fn failed(wb: *Workbench, what: []const u8, err: anyerror) bool {
-    wb.problem = .init("Couldn't {s}: {t}", .{ what, err });
+    wb.fail("Couldn't {s}: {t}", .{ what, err });
     return false;
 }
 

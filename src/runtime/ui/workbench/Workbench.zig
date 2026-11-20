@@ -39,6 +39,7 @@ pub const TweakEditor = @import("documents/TweakEditor.zig");
 const TweaksPanel = @import("panels/Tweaks.zig");
 const ProjectMenu = @import("ProjectMenu.zig");
 const SigMaker = @import("SigMaker.zig");
+const StatusBar = @import("StatusBar.zig");
 pub const ExportMod = @import("ExportMod.zig");
 pub const Scripts = @import("Scripts.zig");
 const Addresses = @import("panels/Addresses.zig");
@@ -244,7 +245,8 @@ reset_layout: bool = false,
 /// Also puts windows back where they first were, next frame.
 reset_windows: bool = false,
 go_to: devtools.AddressBar = .{ .symbols = Names.global_symbols, .memory = .local },
-problem: ?devtools.Problem = null,
+/// How many `fail` has shown, for tests.
+failures: u32 = 0,
 project_menu: ProjectMenu = .{},
 sig_maker: SigMaker = .{},
 export_mod: ExportMod = .{},
@@ -517,8 +519,13 @@ pub fn draw(self: *Workbench) void {
 
     var keep_open = true;
     var on_screen = false;
-    const flags = c.ImGuiWindowFlags_MenuBar | c.ImGuiWindowFlags_NoCollapse | c.ImGuiWindowFlags_NoDocking;
-    if (c.ImGui_Begin(@ptrCast(self.windowTitle()), &keep_open, flags)) {
+    const flags = c.ImGuiWindowFlags_MenuBar | c.ImGuiWindowFlags_NoCollapse | c.ImGuiWindowFlags_NoDocking |
+        c.ImGuiWindowFlags_NoScrollbar | c.ImGuiWindowFlags_NoScrollWithMouse;
+    // Edge to edge, so the dock space and status bar meet the window's sides
+    c.ImGui_PushStyleVarImVec2(c.ImGuiStyleVar_WindowPadding, .{ .x = 0, .y = 0 });
+    const shown = c.ImGui_Begin(@ptrCast(self.windowTitle()), &keep_open, flags);
+    c.ImGui_PopStyleVar();
+    if (shown) {
         // Its own OS window, not the app's hidden one. Making it can fail
         const viewport = c.ImGui_GetWindowViewport();
         on_screen = viewport != c.ImGui_GetMainViewport() and viewport.*.PlatformHandle != null;
@@ -541,7 +548,8 @@ pub fn draw(self: *Workbench) void {
         }
         DebugControl.applyPendingFocus(self);
         self.redockReopened();
-        _ = c.ImGui_DockSpaceEx(id, .{ .x = 0, .y = 0 }, 0, null);
+        _ = c.ImGui_DockSpaceEx(id, .{ .x = 0, .y = -StatusBar.height() }, 0, null);
+        self.drawStatusBar();
     }
     c.ImGui_End();
     if (!keep_open) self.close();
@@ -555,6 +563,13 @@ pub fn draw(self: *Workbench) void {
     self.memory_in_front.store(on_screen and memory_front, .release);
     const code = self.active_code orelse return self.code_in_front.store(false, .release);
     self.code_in_front.store(on_screen and tuft_imgui.dock.inFront(code.window().title), .release);
+}
+
+/// What's going on, along the bottom.
+fn drawStatusBar(self: *Workbench) void {
+    var bar = StatusBar.begin();
+    self.sig_maker.status(&bar);
+    self.project_menu.ce.status(&bar);
 }
 
 /// The project's name, with a star if it's not saved. The part after ### keeps it the same window.
@@ -738,11 +753,16 @@ fn drawMenuBar(self: *Workbench) void {
     self.dev_menus.drawMenus();
 
     if (self.go_to.draw()) |address| self.go(.{ .address = address });
-    if (self.problem) |*p| {
-        ui.sameLine();
-        ui.textColored(.{ 1, 0.4, 0.4, 1 }, "{s}", .{p.message()});
-    }
-    self.sig_maker.drawStatus();
+}
+
+/// Says what went wrong, in a toast and the log. Its thread.
+pub fn fail(self: *Workbench, comptime fmt: []const u8, args: anytype) void {
+    self.failures += 1;
+    log.warn(fmt, args);
+    const app = self.app orelse return;
+    var buf: [ui.Toasts.max_text]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
+    _ = app.toasts.push(.{ .kind = .@"error", .text = text, .seconds = 8 });
 }
 
 test {

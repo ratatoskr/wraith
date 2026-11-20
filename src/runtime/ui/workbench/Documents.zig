@@ -194,7 +194,7 @@ pub fn scriptDocument(self: *Workbench, session: u32) ?*Document {
 
 pub fn openScript(self: *Workbench, session: u32) void {
     const doc = scriptDocument(self, session) orelse (newScriptDocument(self, session) catch |err| {
-        self.problem = .init("Couldn't open it: {t}", .{err});
+        self.fail("Couldn't open it: {t}", .{err});
         return;
     });
     doc.window().focus();
@@ -244,13 +244,13 @@ fn tweakDocument(self: *Workbench, path: []const u8) ?*Document {
 pub fn openTweak(self: *Workbench, path: []const u8) void {
     if (tweakDocument(self, path)) |d| return d.window().focus();
     const doc = newDocument(self, .tweak) catch |err| {
-        self.problem = .init("Couldn't open it: {t}", .{err});
+        self.fail("Couldn't open it: {t}", .{err});
         return;
     };
     doc.body.tweak.init(path, .tweak) catch |err| {
         _ = self.documents.pop();
         freeDocument(self, doc);
-        self.problem = .init("Couldn't open it: {t}", .{err});
+        self.fail("Couldn't open it: {t}", .{err});
         return;
     };
     _ = std.fmt.bufPrintSentinel(&doc.title, "{s}###tweak.{d}", .{ doc.body.tweak.name(), doc.id }, 0) catch {};
@@ -272,10 +272,9 @@ pub fn newTweakDocument(self: *Workbench, kind: TweakEditor.Kind) !*Document {
 
 pub fn openNewTweak(self: *Workbench, kind: TweakEditor.Kind) void {
     const doc = newTweakDocument(self, kind) catch |err| {
-        self.problem = .init("Couldn't open another: {t}", .{err});
+        self.fail("Couldn't open another: {t}", .{err});
         return;
     };
-    self.problem = null;
     doc.window().focus();
 }
 
@@ -334,13 +333,13 @@ pub fn openProjectSchema(self: *Workbench, path: []const u8) void {
         else => {},
     };
     const doc = newDocument(self, .schema) catch |err| {
-        self.problem = .init("Couldn't open it: {t}", .{err});
+        self.fail("Couldn't open it: {t}", .{err});
         return;
     };
     doc.body.schema.openInProject(project, path) catch |err| {
         _ = self.documents.pop();
         freeDocument(self, doc);
-        self.problem = .init("Couldn't open {s}: {t}", .{ path, err });
+        self.fail("Couldn't open {s}: {t}", .{ path, err });
         return;
     };
     retitle(doc, std.fs.path.basename(path));
@@ -354,7 +353,7 @@ pub fn openProjectScript(self: *Workbench, path: []const u8) void {
     const text = (project.read(self.allocator, path) catch null) orelse return;
     defer self.allocator.free(text);
     const doc = newScriptDocument(self, null) catch |err| {
-        self.problem = .init("Couldn't open it: {t}", .{err});
+        self.fail("Couldn't open it: {t}", .{err});
         return;
     };
     doc.body.script.setProjectFile(path, text);
@@ -382,10 +381,9 @@ pub fn openSchema(self: *Workbench, path: []const u8) void {
         else => {},
     };
     const doc = newSchemaDocument(self, path) catch |err| {
-        self.problem = .init("Couldn't open {s}: {t}", .{ std.fs.path.basename(path), err });
+        self.fail("Couldn't open {s}: {t}", .{ std.fs.path.basename(path), err });
         return;
     };
-    self.problem = null;
     doc.window().focus();
 }
 
@@ -397,10 +395,9 @@ pub fn openNew(self: *Workbench, kind: Kind) void {
         else => newDocument(self, kind),
     };
     const doc = made catch |err| {
-        self.problem = .init("Couldn't open another: {t}", .{err});
+        self.fail("Couldn't open another: {t}", .{err});
         return;
     };
-    self.problem = null;
     doc.window().focus();
 }
 

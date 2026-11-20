@@ -9,6 +9,7 @@ const ce = @import("wraith_importer").ce;
 const ui = @import("wraith_ui");
 const sync = @import("tuft_sys").sync;
 
+const StatusBar = @import("StatusBar.zig");
 const Workbench = @import("Workbench.zig");
 
 const done_popup = "Imported##ce";
@@ -71,11 +72,17 @@ pub fn start(self: *CeImport, wb: *Workbench, path: []const u8) void {
     };
 }
 
+/// In the status bar while it's going.
+pub fn status(self: *CeImport, bar: *StatusBar) void {
+    if (!self.busy()) return;
+    _ = bar.item(.{ .id = "##ce_import", .text = "Importing Cheat Engine table", .color = .{ 1, 0.75, 0.3, 1 }, .tooltip = "It becomes the project once it's done" });
+}
+
 fn failed(self: *CeImport, wb: *Workbench, err: anyerror) void {
     self.lock.lock();
     self.running = false;
     self.lock.unlock();
-    wb.problem = .init("Couldn't import it: {t}", .{err});
+    wb.fail("Couldn't import it: {t}", .{err});
 }
 
 fn free(gpa: std.mem.Allocator, result: *Result) void {
@@ -118,17 +125,16 @@ pub fn poll(self: *CeImport, wb: *Workbench) bool {
         const gpa = self.allocator.?;
         defer free(gpa, r);
         if (r.err) |err| {
-            wb.problem = .init("Couldn't import it: {t}", .{err});
+            wb.fail("Couldn't import it: {t}", .{err});
         } else if (wb.project) |project| {
             wb.dropEditors();
             if (project.load(r.files)) {
                 loaded = true;
-                wb.problem = null;
                 const s = r.stats;
                 self.summary.clearRetainingCapacity();
                 self.summary.print(gpa, "{d} scripts became tweaks, {d} are off for review and {d} are Lua that runs with the CE layer.\n{d} records went to the Addresses list.\n\nWhat needs a look is in import-report.md in the project. Save it to keep it.", .{ s.clean, s.review, s.lua, s.records }) catch {};
                 self.open_popup = true;
-            } else |err| wb.problem = .init("Couldn't import it: {t}", .{err});
+            } else |err| wb.fail("Couldn't import it: {t}", .{err});
         }
     }
     if (self.open_popup) {

@@ -396,7 +396,7 @@ fn exportPicked(self: *Addresses) void {
     const path = self.wb.pickFile(.save, Workbench.FileType.addresses, "addresses" ++ Project.ext.addresses) orelse return;
     defer self.wb.allocator.free(path);
     _ = self.exportTo(path) catch |err| {
-        self.wb.problem = .init("Couldn't export them: {t}", .{err});
+        self.wb.fail("Couldn't export them: {t}", .{err});
     };
 }
 
@@ -404,7 +404,7 @@ fn importPicked(self: *Addresses) void {
     const path = self.wb.pickFile(.open, Workbench.FileType.addresses, "") orelse return;
     defer self.wb.allocator.free(path);
     _ = self.importFrom(path) catch |err| {
-        self.wb.problem = .init("Couldn't import them: {t}", .{err});
+        self.wb.fail("Couldn't import them: {t}", .{err});
     };
 }
 

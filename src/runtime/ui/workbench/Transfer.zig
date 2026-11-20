@@ -77,7 +77,7 @@ pub fn pickFile(self: *Workbench, mode: tuft_window.FileDialog.Mode, file_type: 
         .kind = file_type.kind,
         .extension = file_type.extension,
     }) catch |err| {
-        self.problem = .init("Couldn't show the file dialog: {t}", .{err});
+        self.fail("Couldn't show the file dialog: {t}", .{err});
         return null;
     };
     const picked = result orelse return null;
@@ -91,7 +91,6 @@ pub fn exportText(self: *Workbench, file_type: FileType, file_name: []const u8, 
     const path = pickFile(self, .save, file_type, file_name) orelse return;
     defer self.allocator.free(path);
     core.files.write(io, path, text, .{ .make_dir = true }) catch |err| return failedTransfer(self, "export", err);
-    self.problem = null;
 }
 
 /// Asks for a file and copies it into the project's `folder`, under a free name. Returns where
@@ -118,12 +117,11 @@ pub fn importPath(self: *Workbench, file_type: FileType, folder: []const u8, pat
     const at = try project.freeName(want);
     errdefer project.allocator.free(at);
     try project.write(at, text);
-    self.problem = null;
     return at;
 }
 
 fn failedTransfer(self: *Workbench, what: []const u8, err: anyerror) void {
-    self.problem = .init("Couldn't {s} it: {t}", .{ what, err });
+    self.fail("Couldn't {s} it: {t}", .{ what, err });
 }
 
 fn failedImport(self: *Workbench, err: anyerror) ?[]u8 {

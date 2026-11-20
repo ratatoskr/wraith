@@ -220,6 +220,5 @@ fn exportTo(self: *ExportMod, wb: *Workbench) bool {
         return false;
     };
     self.problem = .{};
-    wb.problem = null;
     return true;
 }

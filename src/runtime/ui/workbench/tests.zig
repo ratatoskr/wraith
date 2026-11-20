@@ -830,7 +830,7 @@ test "importing a Cheat Engine table becomes the project" {
     while (wb.project_menu.ce.busy()) try io.sleep(.fromMilliseconds(1), .awake);
     frames.run(wb, 3);
 
-    try testing.expect(wb.problem == null);
+    try testing.expectEqual(0, wb.failures);
     try testing.expect(project.isDirty() and project.isUnnamed());
     const tweak = (try project.read(testing.allocator, "tweaks/game.rwt")).?;
     defer testing.allocator.free(tweak);
