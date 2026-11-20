@@ -54,6 +54,28 @@ pub const Copy = struct {
 pub const Here = struct {
     id: ?[]const u8 = null,
     exe: ?[]const u8 = null,
+    /// Like `unity`, from the files beside its exe.
+    game_engine: ?[]const u8 = null,
+    /// Like `IL2CPP`.
+    game_engine_variant: ?[]const u8 = null,
+};
+
+/// Every game made with a game engine, for a package that works on any of them. Not script engines
+/// or the hook engine.
+pub const GameEngine = struct {
+    /// Like `unity`, the way Wraith names them.
+    id: []const u8 = "",
+    /// Like `IL2CPP`. Empty means any.
+    variants: []const []const u8 = &.{},
+
+    pub fn matches(self: GameEngine, here: Here) bool {
+        const have = here.game_engine orelse return false;
+        if (!std.ascii.eqlIgnoreCase(self.id, have)) return false;
+        if (self.variants.len == 0) return true;
+        const variant = here.game_engine_variant orelse return false;
+        for (self.variants) |v| if (std.ascii.eqlIgnoreCase(v, variant)) return true;
+        return false;
+    }
 };
 
 pub const Kind = enum { plugin, project, provider };
@@ -71,8 +93,10 @@ pub const Manifest = struct {
     homepage: ?[]const u8 = null,
     /// The oldest Wraith it runs on. Null means any.
     wraith: ?[]const u8 = null,
-    /// Null means any game.
+    /// One game. Null, with no `gameEngine` either, means any game.
     game: ?Game = null,
+    /// Every game made with one game engine, instead of `game`.
+    gameEngine: ?GameEngine = null,
     /// Null means every arch.
     arches: ?[]const Arch = null,
     /// Null means `zig`.
@@ -84,8 +108,9 @@ pub const Manifest = struct {
     depends: []const []const u8 = &.{},
 
     pub fn isFor(self: Manifest, here: Here) bool {
-        const game = self.game orelse return true;
-        return game.matches(here);
+        if (self.game) |game| return game.matches(here);
+        if (self.gameEngine) |engine| return engine.matches(here);
+        return true;
     }
 
     pub fn builtFor(self: Manifest, arch: Arch) bool {
@@ -231,6 +256,21 @@ test "bad manifests say why" {
     try std.testing.expect(problem.len > 0);
     try std.testing.expectError(error.BadId, parse(arena.allocator(), "{ \"id\": \"Kai Bones\" }", &problem));
     try std.testing.expectError(error.BadId, parse(arena.allocator(), "{}", null));
+}
+
+test "for every game of a game engine" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const m = try parse(arena.allocator(),
+        \\{ "id": "unity_tools", "kind": "plugin", "gameEngine": { "id": "unity", "variants": ["IL2CPP"] } }
+    , null);
+    try std.testing.expect(m.isFor(.{ .game_engine = "unity", .game_engine_variant = "il2cpp" }));
+    try std.testing.expect(!m.isFor(.{ .game_engine = "unity", .game_engine_variant = "Mono" }));
+    try std.testing.expect(!m.isFor(.{ .game_engine = "unreal" }));
+    try std.testing.expect(!m.isFor(.{ .id = "steam-1" }));
+    // Any variant without a list
+    const any: Manifest = .{ .gameEngine = .{ .id = "unity" } };
+    try std.testing.expect(any.isFor(.{ .game_engine = "unity" }));
 }
 
 test "tested builds go by store" {

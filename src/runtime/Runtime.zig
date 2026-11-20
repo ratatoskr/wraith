@@ -133,6 +133,8 @@ pub fn create(allocator: std.mem.Allocator, info: *const RuntimeInfo) !*Runtime 
     self.loader = try openLoader(allocator, io, info, locations, config_root, game_dir);
     errdefer self.loader.deinit();
     self.loader.game_id.set(GameInfo.global.id());
+    if (GameInfo.global.game_engine) |e| self.loader.game_engine.set(@tagName(e));
+    self.loader.game_engine_variant.set(GameInfo.global.engineVariant());
     if (self.game) |g| g.shell.setLoader(&self.loader);
     errdefer if (self.game) |g| g.shell.setLoader(null);
     try self.loader.start(self.game_settings.value.disabled_plugins);

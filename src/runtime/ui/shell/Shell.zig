@@ -232,8 +232,7 @@ fn readModProjects(self: *Shell, io: std.Io) void {
 /// removed. Not the render thread.
 pub fn refreshModProjects(self: *Shell, io: std.Io, loader: *PluginLoader) void {
     const tweaks = self.tweaks orelse return;
-    const id = loader.game_id.get();
-    ModProjects.refresh(tweaks, self.allocator, io, loader.plugins_dir, loader.cache_dir, .{ .id = if (id.len > 0) id else null, .exe = loader.executable.get() });
+    ModProjects.refresh(tweaks, self.allocator, io, loader.plugins_dir, loader.cache_dir, loader.here());
 }
 
 /// Whether scripts and tweaks can run.

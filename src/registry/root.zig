@@ -23,6 +23,7 @@ pub const format = 1;
 
 pub const Kind = enum { plugin, project };
 pub const Game = core.manifest.Game;
+pub const GameEngine = core.manifest.GameEngine;
 pub const Arch = core.arch.Arch;
 
 /// A package in a list, at its newest version for there.
@@ -34,8 +35,10 @@ pub const Entry = struct {
     summary: []const u8 = "",
     version: []const u8 = "",
     wraith: ?[]const u8 = null,
-    /// Empty means any game.
+    /// Empty, with no `gameEngine` either, means any game.
     games: []const []const u8 = &.{},
+    /// Every game made with this game engine, instead of `games`.
+    gameEngine: ?GameEngine = null,
     /// Builds it was tested on, in a game's list.
     builds: []const []const u8 = &.{},
     /// Picked for that game, or for every game in the any-game and featured lists.
@@ -58,12 +61,14 @@ pub const GameInfo = struct {
     links: []const Link = &.{},
 };
 
-/// `v1/games/<id>.json`, `v1/any.json` or `v1/featured.json`.
+/// `v1/games/<id>.json`, `v1/engines/<id>.json`, `v1/any.json` or `v1/featured.json`.
 pub const List = struct {
     format: u32,
     generated: []const u8 = "",
-    /// Null for the any-game and featured lists.
+    /// Null for the game engine, any-game and featured lists.
     game: ?GameInfo = null,
+    /// For a game engine's list.
+    gameEngine: ?struct { id: []const u8, label: []const u8 = "" } = null,
     packages: []const Entry = &.{},
 };
 
@@ -95,8 +100,9 @@ pub const Version = struct {
     /// Hidden from new installs.
     yanked: bool = false,
     wraith: ?[]const u8 = null,
-    /// Null means any game.
+    /// Null, with no `gameEngine` either, means any game.
     game: ?Game = null,
+    gameEngine: ?GameEngine = null,
     /// Null means both.
     arches: ?[]const Arch = null,
     provider: ?[]const u8 = null,
@@ -190,6 +196,12 @@ fn safe(name: []const u8) bool {
 pub fn forGame(arena: std.mem.Allocator, io: std.Io, source: Source, ident: []const u8) !?List {
     if (!safe(ident)) return error.BadName;
     return read(List, arena, io, source, try std.fmt.allocPrint(arena, "v1/games/{s}.json", .{ident}));
+}
+
+/// Packages for every game made with a game engine, like `unity`. Null if the hub has none.
+pub fn forGameEngine(arena: std.mem.Allocator, io: std.Io, source: Source, id: []const u8) !?List {
+    if (!safe(id)) return error.BadName;
+    return read(List, arena, io, source, try std.fmt.allocPrint(arena, "v1/engines/{s}.json", .{id}));
 }
 
 /// Packages that work in any game.

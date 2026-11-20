@@ -5,6 +5,7 @@
 const std = @import("std");
 
 const core = @import("wraith_core");
+const game_engine = @import("wraith_game").game_engine;
 
 const Project = @import("Project.zig");
 
@@ -22,9 +23,13 @@ pub const Details = struct {
     homepage: []const u8 = "",
     /// The oldest Wraith it runs on. Empty means any.
     wraith: []const u8 = "",
-    /// Game ids, like steam-1245620. Neither ids nor exes means any game.
+    /// Game ids, like steam-1245620. No ids, exes or game engine means any game.
     ids: []const []const u8 = &.{},
     exes: []const []const u8 = &.{},
+    /// Every game made with this game engine, like `unity`, instead of ids and exes.
+    game_engine: []const u8 = "",
+    /// Like `IL2CPP`. Empty means any.
+    game_engine_variants: []const []const u8 = &.{},
     depends: []const []const u8 = &.{},
 };
 
@@ -87,6 +92,8 @@ pub fn read(arena: std.mem.Allocator, project: *Project, problem: *[]const u8) !
         .wraith = m.wraith orelse "",
         .ids = game.ids,
         .exes = game.exes,
+        .game_engine = if (m.gameEngine) |e| e.id else "",
+        .game_engine_variants = if (m.gameEngine) |e| e.variants else &.{},
         .depends = m.depends,
     };
 }
@@ -102,6 +109,10 @@ pub fn check(d: Details) ?[]const u8 {
     for (d.exes) |e| if (!std.ascii.endsWithIgnoreCase(e, ".exe") or std.mem.indexOfAny(u8, e, "/\\:") != null) return "Exes should be just a file's name, like game.exe";
     for (d.ids) |id| if (id.len == 0 or std.mem.indexOfAny(u8, id, " /\\") != null) return "Game ids look like steam-1245620, with no spaces";
     for (d.depends) |dep| if (!core.manifest.validId(core.manifest.Dependency.parse(dep).name)) return "Depends should be mod ids, like unity or unity@1.2";
+    if (d.game_engine.len > 0) {
+        if (d.ids.len > 0 or d.exes.len > 0) return "It's for one game or every game made with a game engine, not both";
+        if (std.meta.stringToEnum(game_engine.GameEngine, d.game_engine) == null) return "That's not a game engine Wraith knows";
+    } else if (d.game_engine_variants.len > 0) return "Variants need a game engine";
     return null;
 }
 
@@ -132,6 +143,10 @@ pub fn toJson(arena: std.mem.Allocator, d: Details) ![]u8 {
         ids: ?[]const []const u8 = null,
         exes: ?[]const []const u8 = null,
     };
+    const GameEngine_ = struct {
+        id: []const u8,
+        variants: ?[]const []const u8 = null,
+    };
     const Out = struct {
         @"$schema": []const u8 = schema_url,
         id: []const u8,
@@ -145,6 +160,7 @@ pub fn toJson(arena: std.mem.Allocator, d: Details) ![]u8 {
         homepage: ?[]const u8 = null,
         wraith: ?[]const u8 = null,
         game: ?Game_ = null,
+        gameEngine: ?GameEngine_ = null,
         depends: ?[]const []const u8 = null,
     };
     const has_game = d.ids.len > 0 or d.exes.len > 0;
@@ -159,6 +175,7 @@ pub fn toJson(arena: std.mem.Allocator, d: Details) ![]u8 {
         .homepage = nonEmpty(d.homepage),
         .wraith = nonEmpty(d.wraith),
         .game = if (has_game) .{ .ids = if (d.ids.len > 0) d.ids else null, .exes = if (d.exes.len > 0) d.exes else null } else null,
+        .gameEngine = if (d.game_engine.len > 0) .{ .id = d.game_engine, .variants = if (d.game_engine_variants.len > 0) d.game_engine_variants else null } else null,
         .depends = if (d.depends.len > 0) d.depends else null,
     };
     const text = try std.json.Stringify.valueAlloc(arena, out, .{ .whitespace = .indent_2, .emit_null_optional_fields = false });
@@ -219,6 +236,22 @@ test "written, read back and checked like the hub" {
     const again = (try read(a, project, &problem)).?;
     try testing.expectEqualStrings("Asgard", again.author);
     try testing.expectEqual(0, again.ids.len + again.exes.len);
+
+    // Every Unity IL2CPP game, never one game as well
+    var engine = again;
+    engine.game_engine = "unity";
+    engine.game_engine_variants = &.{"IL2CPP"};
+    try write(project, testing.allocator, engine);
+    const for_engine = (try read(a, project, &problem)).?;
+    try testing.expectEqualStrings("unity", for_engine.game_engine);
+    try testing.expectEqualStrings("IL2CPP", for_engine.game_engine_variants[0]);
+    try testing.expect(std.mem.indexOf(u8, (try project.read(a, file)).?, "\"gameEngine\"") != null);
+    var both = for_engine;
+    both.ids = &.{"steam-1"};
+    try testing.expect(check(both) != null);
+    var unknown = for_engine;
+    unknown.game_engine = "frostbite9";
+    try testing.expect(check(unknown) != null);
 
     var bad = again;
     bad.version = "1.2";

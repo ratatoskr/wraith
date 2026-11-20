@@ -6,6 +6,7 @@ const std = @import("std");
 
 const api = @import("wraith_api");
 const core = @import("wraith_core");
+const game_engine = @import("wraith_game").game_engine;
 
 const log = core.log.scoped(.wraith_runtime);
 
@@ -56,7 +57,16 @@ pub fn providerName(self: Manifest) []const u8 {
 
 pub fn gamesText(self: Manifest, buf: []u8) []const u8 {
     var w: std.Io.Writer = .fixed(buf);
-    const game = self.value.game orelse return "";
+    const game = self.value.game orelse {
+        // Like `Unity (IL2CPP) games`
+        const engine = self.value.gameEngine orelse return "";
+        const label = if (std.meta.stringToEnum(game_engine.GameEngine, engine.id)) |e| e.label() else engine.id;
+        w.writeAll(label) catch return w.buffered();
+        for (engine.variants, 0..) |v, i| w.print("{s}{s}", .{ if (i == 0) " (" else ", ", v }) catch return w.buffered();
+        if (engine.variants.len > 0) w.writeAll(")") catch return w.buffered();
+        w.writeAll(" games") catch return w.buffered();
+        return w.buffered();
+    };
     for (game.ids, 0..) |id, i| {
         if (i != 0) w.writeAll(", ") catch return w.buffered();
         w.writeAll(id) catch return w.buffered();

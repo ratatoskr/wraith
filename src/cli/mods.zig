@@ -15,8 +15,8 @@ const log = core.log.scoped(.wraith_cli);
 
 pub const usage =
     \\  mods [<game.exe | game id>]          mods from the hub, plugins and projects: ours, ones
-    \\                                       for any game, and those for the game, if given (see
-    \\                                       `games` for IDs)
+    \\                                       for any game, and those for the game and its game
+    \\                                       engine, if given (see `games` for IDs)
     \\  mods install <id> [<version>]        install one (its newest, unless a version's given),
     \\                                       or update it, plus any mods it needs
     \\  mods update                          update every installed one that has a newer version,
@@ -61,7 +61,12 @@ pub fn catalog(ctx: ops.Context, arena: std.mem.Allocator) !Catalog {
     const yours = ops.discover(ctx, arena) catch &.{};
     const ids = try arena.alloc([]const u8, yours.len);
     for (ids, yours) |*id, g| id.* = g.id;
-    const listing = try registry.mods.list(arena, ctx.io, w.source, w.mods_dir, w.wraith, ids);
+    // Each game's engine, so mods for every game made with it are listed under it too
+    var made_with: std.ArrayList(registry.mods.MadeWith) = .empty;
+    for (yours) |g| if (games.game_engine.ofInstall(arena, ctx.io, g.dir) catch null) |e| {
+        try made_with.append(arena, .{ .game = g.id, .here = .{ .game_engine = @tagName(e.game_engine), .game_engine_variant = e.variant } });
+    };
+    const listing = try registry.mods.list(arena, ctx.io, w.source, w.mods_dir, w.wraith, ids, made_with.items);
     return .{ .generated = listing.generated, .mods_dir = w.mods_dir, .mods = listing.mods };
 }
 
@@ -130,6 +135,11 @@ fn list(ctx: ops.Context, arena: std.mem.Allocator, game_arg: ?[]const u8) !u8 {
             log.printLn("For {s}:", .{if (g.game) |info| info.name else id});
             try shown.appendSlice(arena, g.packages);
         } else log.printLn("Nothing on the hub for {s} yet", .{id});
+        if (madeWith(ctx, arena, arg, id)) |here| {
+            if (registry.forGameEngine(arena, io, at.source, here.game_engine.?) catch null) |l| {
+                for (l.packages) |e| if (e.gameEngine == null or e.gameEngine.?.matches(here)) try shown.append(arena, e);
+            }
+        }
     } else {
         try shown.appendSlice(arena, (registry.featured(arena, io, at.source) catch return 2).packages);
     }
@@ -155,6 +165,19 @@ fn list(ctx: ops.Context, arena: std.mem.Allocator, game_arg: ?[]const u8) !u8 {
     if (shown.items.len == 0) log.printLn("None", .{});
     log.printLn("Installed in {s}", .{at.mods_dir});
     return 0;
+}
+
+/// What the game's made with, from its exe or, for an id, its install. Null if Wraith can't tell.
+fn madeWith(ctx: ops.Context, arena: std.mem.Allocator, arg: []const u8, id: []const u8) ?core.manifest.Here {
+    const found = if (std.ascii.endsWithIgnoreCase(arg, ".exe"))
+        games.game_engine.ofGame(arena, ctx.io, arg) catch null
+    else blk: {
+        const yours = ops.discover(ctx, arena) catch break :blk null;
+        for (yours) |g| if (std.mem.eql(u8, g.id, id)) break :blk games.game_engine.ofInstall(arena, ctx.io, g.dir) catch null;
+        break :blk null;
+    };
+    const e = found orelse return null;
+    return .{ .game_engine = @tagName(e.game_engine), .game_engine_variant = e.variant };
 }
 
 /// An exe or a game ID.

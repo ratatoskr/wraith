@@ -17,8 +17,10 @@ pub const Listed = struct {
     summary: []const u8,
     author: []const u8,
     any_game: bool,
-    /// Which of the games asked about it's for.
+    /// Which of the games asked about it's for, by their game engine too.
     games: []const []const u8,
+    /// Every game made with this game engine, instead of a list of games.
+    game_engine: ?registry.GameEngine = null,
     /// Recommended, for every game or one of those.
     featured: bool,
     /// Why, if it's recommended for every game.
@@ -67,8 +69,9 @@ const Gather = struct {
                 .title = e.title,
                 .summary = e.summary,
                 .author = e.author,
-                .any_game = e.games.len == 0,
+                .any_game = e.games.len == 0 and e.gameEngine == null,
                 .games = &.{},
+                .game_engine = e.gameEngine,
                 .featured = false,
                 .why = null,
                 .latest = if (runs) e.version else null,
@@ -84,9 +87,17 @@ const Gather = struct {
     }
 };
 
-/// Our picks, ones for any game and ones for `games`, by any id Wraith knows them by, plus
-/// what's installed. `wraith` is the running Wraith's version.
-pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []const u8, wraith: []const u8, games: []const []const u8) !Listing {
+/// A game asked about, by the game engine it's made with.
+pub const MadeWith = struct {
+    /// Its id, which the mods for its engine are listed under. Null for one Wraith has no id for.
+    game: ?[]const u8 = null,
+    /// Its `game_engine` and `game_engine_variant`.
+    here: core.manifest.Here,
+};
+
+/// Our picks, ones for any game, ones for `games`, by any id Wraith knows them by, and ones for the
+/// game engines in `made_with`, plus what's installed. `wraith` is the running Wraith's version.
+pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []const u8, wraith: []const u8, games: []const []const u8, made_with: []const MadeWith) !Listing {
     var gather: Gather = .{ .arena = arena, .wraith = wraith };
 
     const picks = try registry.featured(arena, io, source);
@@ -100,6 +111,19 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []co
         if (known.find(g) == null) continue;
         const for_game = (registry.forGame(arena, io, source, g) catch continue) orelse continue;
         for (for_game.packages) |e| try gather.add(e, g);
+    }
+
+    // Each engine's list once, then just the kinds of it each game is
+    var engine_lists: std.StringHashMapUnmanaged(?registry.List) = .empty;
+    for (made_with) |m| {
+        const engine = m.here.game_engine orelse continue;
+        const got = try engine_lists.getOrPut(arena, engine);
+        if (!got.found_existing) got.value_ptr.* = registry.forGameEngine(arena, io, source, engine) catch null;
+        const for_engine = got.value_ptr.* orelse continue;
+        for (for_engine.packages) |e| {
+            if (e.gameEngine) |target| if (!target.matches(m.here)) continue;
+            try gather.add(e, m.game);
+        }
     }
 
     // Installed ones that aren't in any of those
@@ -117,6 +141,7 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []co
                 .version = if (newest) |v| v.version else have.version,
                 .wraith = if (newest) |v| v.wraith else null,
                 .games = if (newest) |v| if (v.game) |g| g.ids else &.{} else &.{},
+                .gameEngine = if (newest) |v| v.gameEngine else null,
             }, null);
         }
         const l = gather.find(have.id) orelse continue;

@@ -609,7 +609,11 @@ fn relist(self: *ModsPage, io: std.Io, loader: *PluginLoader) void {
         };
         const game = a.dupe(u8, loader.game_id.get()) catch break :blk null;
         const games: []const []const u8 = if (game.len > 0) &.{game} else &.{};
-        break :blk registry.mods.list(a, io, where.source, where.mods_dir, where.wraith, games) catch |err| {
+        const here = loader.here();
+        const engine: ?[]const u8 = if (here.game_engine) |e| a.dupe(u8, e) catch break :blk null else null;
+        const variant: ?[]const u8 = if (here.game_engine_variant) |v| a.dupe(u8, v) catch break :blk null else null;
+        const made_with: []const registry.mods.MadeWith = &.{.{ .game = if (game.len > 0) game else null, .here = .{ .game_engine = engine, .game_engine_variant = variant } }};
+        break :blk registry.mods.list(a, io, where.source, where.mods_dir, where.wraith, games, made_with) catch |err| {
             log.warn("Couldn't get mods from the hub: {t}", .{err});
             problem.print("Couldn't get mods from the hub: {t}", .{err});
             break :blk null;

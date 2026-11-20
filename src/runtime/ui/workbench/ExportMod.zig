@@ -10,6 +10,8 @@ const ui = @import("wraith_ui");
 const tuft_window = @import("tuft_window");
 const Message = @import("tuft_text").Message;
 
+const game_engine = @import("wraith_game").game_engine;
+
 const Workbench = @import("Workbench.zig");
 const GameInfo = @import("../../GameInfo.zig");
 const ProjectManifest = @import("../../ProjectManifest.zig");
@@ -26,12 +28,19 @@ description: [4096:0]u8 = @splat(0),
 license: [65:0]u8 = @splat(0),
 homepage: [257:0]u8 = @splat(0),
 wraith: [17:0]u8 = @splat(0),
+/// Who it's for: one game by `ids` and `exes`, every game made with `engine`, or any game.
+target: Target = .game,
 /// Comma-separated.
 ids: [513:0]u8 = @splat(0),
 exes: [513:0]u8 = @splat(0),
+engine: game_engine.GameEngine = .unity,
+/// Comma-separated, like IL2CPP.
+variants: [129:0]u8 = @splat(0),
 depends: [513:0]u8 = @splat(0),
 problem: Message(200) = .{},
 open_popup: bool = false,
+
+pub const Target = enum { game, game_engine, any };
 
 /// What the running game would be in `wraith.json`.
 pub fn thisGame() ProjectManifest.Game {
@@ -68,6 +77,9 @@ pub fn start(self: *ExportMod, wb: *Workbench) void {
     set(&self.wraith, d.wraith);
     setList(&self.ids, d.ids);
     setList(&self.exes, d.exes);
+    setList(&self.variants, d.game_engine_variants);
+    self.engine = std.meta.stringToEnum(game_engine.GameEngine, d.game_engine) orelse GameInfo.global.game_engine orelse .unity;
+    self.target = if (d.game_engine.len > 0) .game_engine else if (d.ids.len > 0 or d.exes.len > 0) .game else .any;
     setList(&self.depends, d.depends);
     self.open_popup = true;
 }
@@ -119,8 +131,10 @@ pub fn details(self: *const ExportMod, a: std.mem.Allocator) !ProjectManifest.De
         .license = text(&self.license),
         .homepage = text(&self.homepage),
         .wraith = text(&self.wraith),
-        .ids = try list(a, &self.ids),
-        .exes = try list(a, &self.exes),
+        .ids = if (self.target == .game) try list(a, &self.ids) else &.{},
+        .exes = if (self.target == .game) try list(a, &self.exes) else &.{},
+        .game_engine = if (self.target == .game_engine) @tagName(self.engine) else "",
+        .game_engine_variants = if (self.target == .game_engine) try list(a, &self.variants) else &.{},
         .depends = try list(a, &self.depends),
     };
 }
@@ -142,15 +156,7 @@ pub fn draw(self: *ExportMod, wb: *Workbench) void {
     field("Summary", &self.summary, "One line, shown in lists");
     field("Author", &self.author, "Who made it");
     field("Version", &self.version, "Like 1.2.0. The hub needs a new one for each upload");
-    field("Game ids", &self.ids, "Comma-separated, like steam-1245620. The hub needs at least one. Filled in from the game that's running");
-    ui.sameLine();
-    const game = thisGame();
-    if (ui.smallButton("This game")) {
-        if (game.id) |id| set(&self.ids, id);
-        if (game.exe) |exe| set(&self.exes, exe);
-    }
-    ui.tooltip("{s}{s}{s}", .{ game.id orelse "Wraith has no id for this copy", if (game.exe != null) ", " else "", game.exe orelse "" });
-    field("Exes", &self.exes, "Comma-separated, like kai.exe. Matches copies Wraith has no id for");
+    self.drawTarget();
     if (ui.collapsingHeader("More", false)) {
         ui.setNextItemWidth(ui.fill);
         _ = ui.inputTextMultiline("##description", &self.description, .{ ui.fill, ui.scaled(90) }, .{});
@@ -168,6 +174,58 @@ pub fn draw(self: *ExportMod, wb: *Workbench) void {
     }
     ui.sameLine();
     if (ui.button("Cancel") or ui.isKeyPressed(.escape, false)) ui.raw("ImGui_CloseCurrentPopup")();
+}
+
+const target_labels = [_][:0]const u8{ "One game", "Every game made with a game engine", "Any game" };
+
+/// Which games it's for, and what says so.
+fn drawTarget(self: *ExportMod) void {
+    ui.alignTextToFramePadding();
+    ui.text("For", .{});
+    ui.sameLineWith(ui.scaled(130), -1);
+    ui.setNextItemWidth(ui.scaled(380));
+    var which: usize = @backingInt(self.target);
+    if (ui.combo("##for", &which, &target_labels)) self.target = @fromBackingInt(@intCast(which));
+    switch (self.target) {
+        .game => {
+            field("Game ids", &self.ids, "Comma-separated, like steam-1245620. The hub needs at least one. Filled in from the game that's running");
+            ui.sameLine();
+            const game = thisGame();
+            if (ui.smallButton("This game")) {
+                if (game.id) |id| set(&self.ids, id);
+                if (game.exe) |exe| set(&self.exes, exe);
+            }
+            ui.tooltip("{s}{s}{s}", .{ game.id orelse "Wraith has no id for this copy", if (game.exe != null) ", " else "", game.exe orelse "" });
+            field("Exes", &self.exes, "Comma-separated, like kai.exe. Matches copies Wraith has no id for");
+        },
+        .game_engine => {
+            ui.alignTextToFramePadding();
+            ui.text("Game engine", .{});
+            ui.sameLineWith(ui.scaled(130), -1);
+            ui.setNextItemWidth(ui.scaled(380));
+            const labels = comptime engineLabels();
+            var engine: usize = @backingInt(self.engine);
+            if (ui.combo("##game_engine", &engine, &labels)) self.engine = @fromBackingInt(@intCast(engine));
+            ui.tooltip("Wraith works it out from the files beside each game's exe", .{});
+            field("Variants", &self.variants, "Comma-separated, like IL2CPP or Mono for Unity, or MV for RPG Maker. Empty means any");
+            ui.sameLine();
+            const g = &GameInfo.global;
+            if (g.game_engine) |e| {
+                if (ui.smallButton("This game's")) {
+                    self.engine = e;
+                    set(&self.variants, g.engineVariant());
+                }
+                ui.tooltip("{f}", .{g.gameEngine()});
+            }
+        },
+        .any => ui.textDisabled("It works in any game", .{}),
+    }
+}
+
+fn engineLabels() [std.enums.values(game_engine.GameEngine).len][:0]const u8 {
+    var out: [std.enums.values(game_engine.GameEngine).len][:0]const u8 = undefined;
+    for (std.enums.values(game_engine.GameEngine), 0..) |e, i| out[i] = std.fmt.comptimePrint("{s}", .{e.label()});
+    return out;
 }
 
 fn field(comptime label: [:0]const u8, buf: anytype, comptime help: []const u8) void {
@@ -189,7 +247,7 @@ fn exportTo(self: *ExportMod, wb: *Workbench) bool {
         self.problem.set(why);
         return false;
     }
-    if (d.ids.len == 0) {
+    if (self.target == .game and d.ids.len == 0) {
         self.problem.set("The hub needs at least one game id. \"This game\" fills it in if Wraith knows this one");
         return false;
     }

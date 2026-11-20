@@ -225,11 +225,7 @@ pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
     if (known.dir) |old| loader.allocator.free(old);
     known.dir = source_dir;
     keep_dir = true;
-    const game: core.manifest.Here = .{
-        .id = if (loader.game_id.len() != 0) loader.game_id.get() else null,
-        .exe = loader.executable.get(),
-    };
-    if (!manifest.value.isFor(game)) return .other_game;
+    if (!manifest.value.isFor(loader.here())) return .other_game;
     if (!manifest.value.builtFor(Manifest.native_arch)) return .other_arch;
     if (!manifest.value.runsOn(build_info.version)) return .newer_wraith;
     if (isRevoked(loader, source_dir)) return .revoked;
@@ -293,6 +289,28 @@ const tests = struct {
 
         try loader.start(&.{});
         try testing.expectEqual(0, loader.count());
+        try testing.expectEqual(.unloaded, install.info("fixture").?.state);
+        try (try loader.load("fixture")).wait();
+        try testing.expectEqual(1, loader.count());
+    }
+
+    test "a game engine's plugin loads in its games" {
+        const options = @import("test_options");
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "fixture", options.fixture_plugin }} });
+        defer install.deinit();
+        const loader = &install.loader;
+        loader.executable.set("game.exe");
+        loader.game_engine.set("unity");
+        loader.game_engine_variant.set("Mono");
+        try install.pluginManifest("fixture", "\"gameEngine\": { \"id\": \"unity\", \"variants\": [\"IL2CPP\"] }");
+
+        try loader.start(&.{});
+        try testing.expectEqual(.unsupported, install.info("fixture").?.state);
+        try testing.expectEqualStrings("Unity (IL2CPP) games", install.info("fixture").?.about.games.get());
+
+        try install.pluginManifest("fixture", "\"gameEngine\": { \"id\": \"unity\" }");
+        try (try loader.rescan()).wait();
         try testing.expectEqual(.unloaded, install.info("fixture").?.state);
         try (try loader.load("fixture")).wait();
         try testing.expectEqual(1, loader.count());

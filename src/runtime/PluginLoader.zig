@@ -39,11 +39,29 @@ config_dir: []const u8,
 game_config_dir: []const u8,
 executable: Text(260) = .{},
 game_id: Text(64) = .{},
+/// Like `unity`, and its variant like `IL2CPP`. Empty if it's not one Wraith knows.
+game_engine: Text(32) = .{},
+game_engine_variant: Text(32) = .{},
 known: Known.List = .{},
 op_lock: tuft_sys.sync.RwLock = .{},
 jobs: Jobs = .{},
 /// Turned off by the user, while `start` runs. A plugin that needs one fails instead of loading it.
 skipping: []const []const u8 = &.{},
+
+/// The game, for which plugins and projects are for it.
+pub fn here(self: *const PluginLoader) core.manifest.Here {
+    const nonEmpty = struct {
+        fn of(text: []const u8) ?[]const u8 {
+            return if (text.len > 0) text else null;
+        }
+    }.of;
+    return .{
+        .id = nonEmpty(self.game_id.get()),
+        .exe = self.executable.get(),
+        .game_engine = nonEmpty(self.game_engine.get()),
+        .game_engine_variant = nonEmpty(self.game_engine_variant.get()),
+    };
+}
 
 pub const Paths = struct {
     plugins: []const u8,

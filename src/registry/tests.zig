@@ -124,6 +124,32 @@ test "lists and packages" {
     try testing.expectError(error.BadRegistry, registry.parse(registry.Package, a, "{\"format\": 1}"));
 }
 
+test "a game engine's list, just the kinds of it each game is" {
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    try hub.publish("v1/engines/unity.json",
+        \\{ "format": 1, "generated": "now", "gameEngine": { "id": "unity", "label": "Unity" },
+        \\  "packages": [{ "id": "any_unity", "kind": "plugin", "title": "Any", "version": "1.0.0", "gameEngine": { "id": "unity" } },
+        \\    { "id": "il2cpp_only", "kind": "plugin", "title": "IL2CPP", "version": "1.0.0", "gameEngine": { "id": "unity", "variants": ["IL2CPP"] } }] }
+    );
+    const mods_dir = hub.path("mods");
+    const made_with: []const registry.mods.MadeWith = &.{
+        .{ .game = "steam-1", .here = .{ .game_engine = "unity", .game_engine_variant = "Mono" } },
+        .{ .game = "steam-2", .here = .{ .game_engine = "unity", .game_engine_variant = "IL2CPP" } },
+    };
+    const listing = try registry.mods.list(a, io, hub.source(), mods_dir, "1.0.0", &.{}, made_with);
+    const any = listing.find("any_unity").?;
+    try testing.expect(!any.any_game);
+    try testing.expectEqualStrings("unity", any.game_engine.?.id);
+    try testing.expectEqual(2, any.games.len);
+    const il2cpp = listing.find("il2cpp_only").?;
+    try testing.expectEqual(1, il2cpp.games.len);
+    try testing.expectEqualStrings("steam-2", il2cpp.games[0]);
+    // None for one the hub has nothing for
+    try testing.expectEqual(null, try registry.forGameEngine(a, io, hub.source(), "godot"));
+}
+
 test "newest runnable version" {
     const pkg: registry.Package = .{ .format = 1, .id = "p", .versions = &.{
         .{ .version = "1.0.0", .url = "", .sha256 = "" },
