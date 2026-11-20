@@ -7,6 +7,8 @@ trait Wraith {
     // What Wraith's Timings and Signatures windows list, for native code
     Diagnostics diagnostics();
     Frame frame();
+    // Which game this is, its files and what it's made with
+    Game game();
     Schema schema();
     Hooks hooks();
     // Dear ImGui, for drawing in a frame callback

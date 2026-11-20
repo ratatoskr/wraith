@@ -15,6 +15,8 @@ const log = core.log.scoped(.wraith_runtime);
 
 pub const HashState = enum(u8) { idle, hashing, done, failed };
 
+const max_anticheat = 8;
+
 path_buf: [1024]u8 = undefined,
 path_len: usize = 0,
 id_buf: [256]u8 = undefined,
@@ -22,7 +24,19 @@ id_len: usize = 0,
 store: games.Store = .local,
 title_buf: [256]u8 = undefined,
 title_len: usize = 0,
+/// The store's build, like `steam:18234455`.
+build_buf: [64]u8 = undefined,
+build_len: usize = 0,
+/// Found beside the exe, loaded in the game, or on Wraith's list of known games.
+anticheat_found: [max_anticheat]games.anticheat.Product = undefined,
+anticheat_len: usize = 0,
 version: ?tuft_sys.version.Versions = null,
+/// Like Unity, from the files beside the exe. Null if it's not one we know.
+game_engine: ?games.game_engine.GameEngine = null,
+engine_variant_buf: [16]u8 = undefined,
+engine_variant_len: usize = 0,
+engine_version_buf: [32]u8 = undefined,
+engine_version_len: usize = 0,
 hash_state: Atomic(HashState) = .init(.idle),
 /// Valid once `hash_state` is `done`.
 digest: [64]u8 = undefined,
@@ -80,7 +94,44 @@ fn identify(self: *GameInfo, allocator: std.mem.Allocator, io: std.Io) void {
     const store_name = found.name orelse "";
     self.title_len = @min(store_name.len, self.title_buf.len);
     @memcpy(self.title_buf[0..self.title_len], store_name[0..self.title_len]);
-    log.info("Game ID: {s}{s}{s}", .{ self.id(), if (store_name.len > 0) ", " else "", self.title() });
+    const store_build = found.build orelse "";
+    if (store_build.len <= self.build_buf.len) {
+        @memcpy(self.build_buf[0..store_build.len], store_build);
+        self.build_len = store_build.len;
+    }
+    log.info("Game ID: {s}{s}{s}{s}{s}", .{ self.id(), if (store_name.len > 0) ", " else "", self.title(), if (store_build.len > 0) ", build " else "", self.build() });
+    self.detectGameEngine(a, io);
+    self.detectAntiCheat(a, io, found.anticheat);
+}
+
+/// Wraith goes in anyway, so this is only for plugins that want to hold back.
+fn detectAntiCheat(self: *GameInfo, arena: std.mem.Allocator, io: std.Io, known: ?games.anticheat.Product) void {
+    var list: games.anticheat.List = .{};
+    list.addTagged(arena, known) catch {};
+    var looking = io.concurrent(games.anticheat.ofGame, .{ arena, io, self.path(), &list }) catch |err| return log.warn("Couldn't look for anti-cheat: {t}", .{err});
+    looking.await(io) catch |err| log.warn("Couldn't look for anti-cheat: {t}", .{err});
+    games.anticheat.ofModules(arena, wraith_platform.process.currentId(), &list) catch {};
+    for (list.items.items) |f| {
+        if (self.anticheat_len == max_anticheat) break;
+        self.anticheat_found[self.anticheat_len] = f.product;
+        self.anticheat_len += 1;
+        log.info("Anti-cheat: {s}, from {s}", .{ f.product.label(), f.file });
+    }
+}
+
+fn detectGameEngine(self: *GameInfo, arena: std.mem.Allocator, io: std.Io) void {
+    var detecting = io.concurrent(games.game_engine.ofGame, .{ arena, io, self.path() }) catch |err| return log.warn("Couldn't work out the game engine: {t}", .{err});
+    const found = (detecting.await(io) catch |err| return log.warn("Couldn't work out the game engine: {t}", .{err})) orelse {
+        return log.info("Game engine: not one Wraith knows", .{});
+    };
+    self.game_engine = found.game_engine;
+    const variant = found.variant orelse "";
+    self.engine_variant_len = @min(variant.len, self.engine_variant_buf.len);
+    @memcpy(self.engine_variant_buf[0..self.engine_variant_len], variant[0..self.engine_variant_len]);
+    const version = found.version orelse "";
+    self.engine_version_len = @min(version.len, self.engine_version_buf.len);
+    @memcpy(self.engine_version_buf[0..self.engine_version_len], version[0..self.engine_version_len]);
+    log.info("Game engine: {f}, from {s}", .{ self.gameEngine(), found.file });
 }
 
 fn identifyOnWorker(arena: std.mem.Allocator, io: std.Io, exe: []const u8) !games.Game {
@@ -110,6 +161,41 @@ pub fn id(self: *const GameInfo) []const u8 {
 pub fn title(self: *const GameInfo) []const u8 {
     return self.title_buf[0..self.title_len];
 }
+
+/// Like `steam:18234455`. Empty if the store doesn't say.
+pub fn build(self: *const GameInfo) []const u8 {
+    return self.build_buf[0..self.build_len];
+}
+
+pub fn anticheat(self: *const GameInfo) []const games.anticheat.Product {
+    return self.anticheat_found[0..self.anticheat_len];
+}
+
+/// Like `IL2CPP` for Unity. Empty if there's none.
+pub fn engineVariant(self: *const GameInfo) []const u8 {
+    return self.engine_variant_buf[0..self.engine_variant_len];
+}
+
+/// Like `2021.3.16`. Empty if the files don't say.
+pub fn engineVersion(self: *const GameInfo) []const u8 {
+    return self.engine_version_buf[0..self.engine_version_len];
+}
+
+/// Prints like `Unity 2021.3.16 (IL2CPP)`, or `unknown`.
+pub fn gameEngine(self: *const GameInfo) GameEngineText {
+    return .{ .info = self };
+}
+
+pub const GameEngineText = struct {
+    info: *const GameInfo,
+
+    pub fn format(self: GameEngineText, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        const e = self.info.game_engine orelse return w.writeAll("unknown");
+        try w.writeAll(e.label());
+        if (self.info.engineVersion().len > 0) try w.print(" {s}", .{self.info.engineVersion()});
+        if (self.info.engineVariant().len > 0) try w.print(" ({s})", .{self.info.engineVariant()});
+    }
+};
 
 pub fn hash(self: *const GameInfo) ?*const [64]u8 {
     return if (self.hash_state.load(.acquire) == .done) &self.digest else null;

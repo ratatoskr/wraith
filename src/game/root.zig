@@ -8,6 +8,7 @@ pub const vdf = @import("vdf.zig");
 pub const exes = @import("exes.zig");
 pub const Exe = exes.Exe;
 pub const anticheat = @import("anticheat.zig");
+pub const game_engine = @import("game_engine.zig");
 const fs = @import("fs.zig");
 pub const KnownGame = @import("known_game.zig").KnownGame;
 const standalone = @import("local.zig");
@@ -60,6 +61,8 @@ pub const Game = struct {
     known: ?KnownGame = null,
     anticheat: ?anticheat.Product = null,
     store_id: ?[]const u8 = null,
+    /// The store's build, like `steam:18234455`, as manifests' `builds` list them.
+    build: ?[]const u8 = null,
     /// Unix seconds. Only Steam gives this, and only on `discover`.
     last_played: ?i64 = null,
     added: bool = false,
@@ -331,7 +334,7 @@ const tests = struct {
         defer tree.deinit();
         const a = tree.arena.allocator();
         try tree.put("Steam\\steamapps\\appmanifest_39210.acf",
-            \\"AppState" { "appid" "39210" "name" "FINAL FANTASY XIV Online" "installdir" "FINAL FANTASY XIV Online" }
+            \\"AppState" { "appid" "39210" "name" "FINAL FANTASY XIV Online" "installdir" "FINAL FANTASY XIV Online" "buildid" "18234455" }
         );
         try tree.put("Steam\\steamapps\\common\\FINAL FANTASY XIV Online\\game\\ffxiv_dx11.exe", "");
 
@@ -340,6 +343,7 @@ const tests = struct {
         try testing.expectEqual(.steam, found.store);
         try testing.expectEqual(.ffxiv, found.known.?);
         try testing.expectEqualStrings("steam-39210", found.store_id.?);
+        try testing.expectEqualStrings("steam:18234455", found.build.?);
         try testing.expectEqualStrings("steam://rungameid/39210", found.launch.start.store);
         try testing.expectEqualStrings(tree.path("Steam\\steamapps\\common\\FINAL FANTASY XIV Online\\game\\ffxiv_dx11.exe"), found.launch.game_exe.?);
 
@@ -609,5 +613,6 @@ test {
     _ = @import("launch.zig");
     _ = added;
     _ = anticheat;
+    _ = game_engine;
     _ = tests;
 }

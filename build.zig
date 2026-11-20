@@ -176,20 +176,6 @@ pub const Plugin = struct {
     }
 };
 
-/// Every `.sal` in `src/api/schemas`, so a check reruns when one changes.
-fn schemaFiles(b: *std.Build) []const []const u8 {
-    b.dependOnDirectoryMetadata(b.path("src/api/schemas"));
-    const io = b.graph.io;
-    var dir = b.root.openDir(io, "src/api/schemas", .{ .iterate = true }) catch return &.{};
-    defer dir.close(io);
-    var list: std.ArrayList([]const u8) = .empty;
-    var it = dir.iterate();
-    while (it.next(io) catch null) |e| {
-        if (e.kind == .file and std.mem.endsWith(u8, e.name, ".sal")) list.append(b.allocator, b.dupe(e.name)) catch @panic("OOM");
-    }
-    return list.items;
-}
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -231,28 +217,6 @@ pub fn build(b: *std.Build) void {
         run_gen.setCwd(b.path("."));
         run_gen.addArg("src/api/schemas/imgui.sal");
         b.step("imgui-sal", "Write src/api/schemas/imgui.sal from dear_bindings' dcimgui.json").dependOn(&run_gen.step);
-    }
-
-    // wraith.sal as Zig with real methods, one file per pointer size. Kept in the repo so editors see
-    // them, and checked by the tests.
-    {
-        const gen = b.dependency("salamander", .{}).artifact("salamander-gen");
-        const update = b.step("api-zig", "Write src/api/wraith/x64.zig and x86.zig again from src/api/schemas");
-        for ([_][2][]const u8{ .{ "x64", "8" }, .{ "x86", "4" } }) |arch| {
-            const out = b.fmt("src/api/wraith/{s}.zig", .{arch[0]});
-            const write = b.addRunArtifact(gen);
-            write.addArgs(&.{ "zig", out, "src/api/schemas", "--pointer-size", arch[1] });
-            write.setCwd(b.path("."));
-            update.dependOn(&write.step);
-
-            const check = b.addRunArtifact(gen);
-            check.addArgs(&.{ "zig", out, "src/api/schemas", "--pointer-size", arch[1], "--check" });
-            check.setCwd(b.path("."));
-            check.addFileInput(b.path(out));
-            for (schemaFiles(b)) |f| check.addFileInput(b.path(b.fmt("src/api/schemas/{s}", .{f})));
-            test_step.dependOn(&check.step);
-            build_test_step.dependOn(&check.step);
-        }
     }
 
     const test_options = b.addOptions();
@@ -441,6 +405,8 @@ const Modules = struct {
 
         // Wraith's API, every file in `src/api/schemas` as one schema
         api.addAnonymousImport("wraith.sal", .{ .root_source_file = @import("salamander").bundle(salamander_dep, b.path("src/api/schemas")) });
+        // And as Zig with real methods, made for the target's pointer size each build
+        api.addImport("wraith_api_zig", @import("salamander").zigModule(salamander_dep, .{ .folder = b.path("src/api/schemas"), .target = target }));
 
         const sdk = f.module("sdk", "src/sdk/root.zig", &.{
             .{ .name = "salamander_runtime", .module = salamander },

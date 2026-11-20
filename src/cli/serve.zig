@@ -13,6 +13,7 @@ const ops = @import("ops.zig");
 const mods = @import("mods.zig");
 const processes = @import("processes.zig");
 const anticheat = games.anticheat;
+const game_engine = games.game_engine;
 
 const log = core.log.scoped(.wraith_cli);
 
@@ -187,7 +188,8 @@ const Call = struct {
                 const installed: ?[]const u8 = if (found.installed()) |proxy| proxy.name else null;
                 const game = try ops.identify(ctx, self.arena.allocator(), p.exe);
                 try ac.addTagged(self.arena.allocator(), game.anticheat);
-                self.reply(.{ .arch = found.arch, .installed = installed, .taken = taken.items, .anticheat = ac.items.items, .game = game });
+                const made_with = try game_engine.ofGame(self.arena.allocator(), ctx.io, p.exe);
+                self.reply(.{ .arch = found.arch, .installed = installed, .taken = taken.items, .anticheat = ac.items.items, .game_engine = made_with, .game = game });
             },
             .identify => {
                 const p = try self.params(struct { exe: []const u8 });
@@ -205,6 +207,7 @@ const Call = struct {
                     last_played: ?i64,
                     added: bool,
                     anticheat: []const anticheat.Found,
+                    game_engine: ?game_engine.Found,
                 };
                 const found = try ops.discover(ctx, arena);
                 const listed = try arena.alloc(Listed, found.len);
@@ -212,7 +215,7 @@ const Call = struct {
                     var ac: anticheat.List = .{};
                     try anticheat.ofInstall(arena, ctx.io, g.dir, &ac);
                     try ac.addTagged(arena, g.anticheat);
-                    l.* = .{ .id = g.id, .store = g.store, .name = g.name, .dir = g.dir, .launch = g.launch, .known = g.known, .last_played = g.last_played, .added = g.added, .anticheat = ac.items.items };
+                    l.* = .{ .id = g.id, .store = g.store, .name = g.name, .dir = g.dir, .launch = g.launch, .known = g.known, .last_played = g.last_played, .added = g.added, .anticheat = ac.items.items, .game_engine = try game_engine.ofInstall(arena, ctx.io, g.dir) };
                 }
                 self.reply(listed);
             },

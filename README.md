@@ -35,8 +35,6 @@ zig build test
 
 `zig build build-test` builds the test programs into `zig-out/bin` without running them. Run those from this folder, not from `zig-out/bin`, since some read fixtures by path.
 
-The Zig API in `src/api/wraith` is generated from the schemas in `src/api/schemas`. After changing a schema, run `zig build api-zig`.
-
 Want to help? See [CONTRIBUTING.md](https://github.com/ratatoskr/.github/blob/main/CONTRIBUTING.md). Found a security problem? See [SECURITY.md](https://github.com/ratatoskr/.github/blob/main/SECURITY.md).
 
 ## License

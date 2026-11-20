@@ -8,6 +8,7 @@ const proxy_info = @import("wraith_proxy_info");
 const ops = @import("ops.zig");
 const processes = @import("processes.zig");
 const anticheat = @import("wraith_game").anticheat;
+const game_engine = @import("wraith_game").game_engine;
 const serve = @import("serve.zig");
 const mods = @import("mods.zig");
 const sdk = @import("sdk.zig");
@@ -103,6 +104,7 @@ pub fn main(init: std.process.Init) !void {
                 log.print("{s: >5} {d: >7}  {s: <4} {s: <32}", .{ score, p.pid, if (p.arch) |a| @tagName(a) else "?", p.name });
                 for (p.hints, 0..) |hint, i| log.print("{s}{t}", .{ if (i == 0) " " else ", ", hint });
                 if (p.wraith) log.print("  [wraith]", .{});
+                if (p.game_engine) |e| log.print("  [{s}{s}{s}]", .{ e.game_engine.label(), if (e.variant != null) " " else "", e.variant orelse "" });
                 for (p.anticheat) |ac| log.print("  [anti-cheat: {s}]", .{ac.product.label()});
                 if (p.windowed and !p.inspected) log.print("  (can't look inside: elevated?)", .{});
                 log.print("\n", .{});
@@ -141,14 +143,19 @@ pub fn main(init: std.process.Init) !void {
                 log.err("Couldn't list the games: {t}", .{err});
                 std.process.exit(2);
             };
-            log.printLn("{s: <5} {s: <40} {s: <32} {s}", .{ "store", "name", "id", "starts with" });
+            log.printLn("{s: <5} {s: <40} {s: <24} {s: <32} {s}", .{ "store", "name", "game engine", "id", "starts with" });
             for (found) |g| {
+                var engine_buf: [64]u8 = undefined;
+                const made_with: []const u8 = if (game_engine.ofInstall(arena.allocator(), ctx.io, g.dir) catch null) |e|
+                    std.fmt.bufPrint(&engine_buf, "{s}{s}{s}", .{ e.game_engine.label(), if (e.variant != null) " " else "", e.variant orelse "" }) catch e.game_engine.label()
+                else
+                    "?";
                 const starts: []const u8 = switch (g.launch.start) {
                     .store => |link| link,
                     .exe => |exe| exe,
                     .none => "(you start it)",
                 };
-                log.printLn("{t: <5} {s: <40} {s: <32} {s}{s}", .{ g.store, g.name orelse "?", g.id, starts, if (g.added) "  (added)" else "" });
+                log.printLn("{t: <5} {s: <40} {s: <24} {s: <32} {s}{s}", .{ g.store, g.name orelse "?", made_with, g.id, starts, if (g.added) "  (added)" else "" });
             }
             log.printLn("{d} games", .{found.len});
         },

@@ -210,6 +210,20 @@ pub fn frameStats(_: *Loaded) api.FrameStats {
     return o.frames.stats();
 }
 
+/// What the game draws with, by `api.GraphicsApi` name. Null before the first frame. Any thread.
+pub fn graphicsApiName() ?[]const u8 {
+    const o = overlay orelse return null;
+    const a = o.graphicsApi() orelse return null;
+    return std.enums.tagName(@TypeOf(a), a);
+}
+
+/// The game's window handle, or 0 till it's found. Any thread.
+pub fn gameWindow() usize {
+    const o = overlay orelse return 0;
+    const handle = o.window.handle() orelse return 0;
+    return @intFromPtr(handle);
+}
+
 pub fn frameTimes(_: *Loaded, out: []f32) usize {
     const o = overlay orelse return 0;
     return o.frames.times(out).len;

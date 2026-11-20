@@ -61,6 +61,7 @@ test {
     _ = @import("memory_area.zig");
     _ = @import("code_area.zig");
     _ = @import("files_area.zig");
+    _ = @import("game_area.zig");
     _ = @import("hooks_area.zig");
     _ = @import("cpu.zig");
     _ = @import("../ui/MenuItems.zig");

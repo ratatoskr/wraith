@@ -96,10 +96,18 @@ pub fn discoverIn(arena: std.mem.Allocator, io: std.Io, steam_dir: []const u8, i
                     .name = app.string("name"),
                     .dir = dir,
                     .last_played = lastPlayed(app),
+                    .build = try buildOf(arena, app),
                 });
             }
         }
     }
+}
+
+/// Like `steam:18234455`, the way manifests list builds.
+fn buildOf(arena: std.mem.Allocator, app: vdf.Object) !?[]const u8 {
+    const id = app.string("buildid") orelse return null;
+    if (id.len == 0 or std.mem.eql(u8, id, "0")) return null;
+    return try std.fmt.allocPrint(arena, "steam:{s}", .{id});
 }
 
 /// "0" means never, so null.
@@ -130,7 +138,7 @@ fn fromManifests(arena: std.mem.Allocator, io: std.Io, steamapps: []const u8, di
         const app = manifest.object("AppState") orelse continue;
         if (!std.ascii.eqlIgnoreCase(app.string("installdir") orelse continue, installdir)) continue;
         const app_id = app.string("appid") orelse continue;
-        return .{ .id = try game.id(arena, .steam, app_id), .store = .steam, .known = KnownGame.fromSteam(app_id), .anticheat = anticheatOf(app_id), .name = app.string("name"), .dir = dir };
+        return .{ .id = try game.id(arena, .steam, app_id), .store = .steam, .known = KnownGame.fromSteam(app_id), .anticheat = anticheatOf(app_id), .name = app.string("name"), .dir = dir, .build = try buildOf(arena, app) };
     }
     return null;
 }

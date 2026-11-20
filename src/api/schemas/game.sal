@@ -1,0 +1,54 @@
+// The game Wraith's in: which one it is, its files, and what it's made with. Any thread. Kinds of
+// things are names, like `steam` or `unity`, so scripts can compare them as they are.
+
+error GameError { Failed = 1 }
+
+struct AntiCheat {
+    // Like `easy_anti_cheat`
+    string id;
+    // Like `Easy Anti-Cheat`
+    string name;
+}
+
+struct GameInfo {
+    // Wraith's id for it, like `steam-1245620`, or its own name for games it knows, like `ffxiv`.
+    // `unknown` if the exe couldn't be found.
+    string id;
+    // Where it's from: `steam`, `gog`, `epic`, `xbox`, `itch`, or `local` for one no store knows
+    string store;
+    // The store's name for it. Empty if there's none.
+    string title;
+    // The store's build, like `steam:18234455`, as a manifest's `builds` lists them. Empty if the
+    // store doesn't say. Only Steam does so far.
+    string build;
+    // The exe's full path
+    string exe;
+    // Its folder
+    string dir;
+    // From the exe's version resource, like `1.2.0.0`. Empty if it has none, which plenty lack.
+    string file_version;
+    string product_version;
+    // What it's made with, from the files beside its exe, like `unity`, `unreal`, `godot` or
+    // `rpg_maker`. Empty if it's not one Wraith knows. Not script engines or the hook engine.
+    string game_engine;
+    // Like `IL2CPP` or `Mono` for Unity, or `MV` for RPG Maker. Empty if there's none.
+    string game_engine_variant;
+    // Like `2021.3.16`. Empty if its files don't say.
+    string game_engine_version;
+    // Found beside the game or loaded in it. Wraith doesn't stop for it, but a plugin might want to.
+    []AntiCheat anticheat;
+    // What the overlay found the game drawing with, like `d3d11` or `vulkan`. Empty till its first frame.
+    string graphics_api;
+    // The game's window, an HWND on Windows. 0 till it's found.
+    usize window;
+    // Wraith's own version, like `0.4.0`.
+    string wraith_version;
+}
+
+trait Game {
+    // Cheap. Taken once, it doesn't change, apart from the graphics API and window early on.
+    GameInfo info();
+    // The exe's SHA-512 in hex, as a manifest's `hashes` lists it. Worked out in the background as
+    // the game starts, so this waits for it.
+    async string!GameError sha512();
+}

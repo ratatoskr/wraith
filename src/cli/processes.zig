@@ -6,6 +6,7 @@ const inject = @import("tuft_inject");
 
 const ops = @import("ops.zig");
 const anticheat = @import("wraith_game").anticheat;
+const game_engine = @import("wraith_game").game_engine;
 
 pub const Hint = enum {
     steam,
@@ -85,6 +86,7 @@ pub const Process = struct {
     wraith: bool,
     hints: []const Hint,
     anticheat: []const anticheat.Found,
+    game_engine: ?game_engine.Found,
     score: i32,
 };
 
@@ -116,6 +118,7 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, options: Options) ![]Process {
             .wraith = false,
             .hints = &.{},
             .anticheat = &.{},
+            .game_engine = null,
             .score = 0,
         };
         var hints: Hints = .empty;
@@ -125,7 +128,10 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, options: Options) ![]Process {
             process.arch = image.arch;
             process.path = try arena.dupe(u8, image.path);
             hints.setUnion(hintsOfPath(image.path));
-            if (has_window) try anticheat.ofGame(arena, io, image.path, &found);
+            if (has_window) {
+                try anticheat.ofGame(arena, io, image.path, &found);
+                process.game_engine = try game_engine.ofGame(arena, io, image.path);
+            }
         } else |_| {}
         if (has_window) inspect: {
             var modules = inject.Modules.init(entry.pid) catch break :inspect;

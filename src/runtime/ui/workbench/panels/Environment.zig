@@ -41,6 +41,7 @@ pub fn draw(self: *Environment) void {
         row("Path", "{s}", .{game.path()});
         row("ID", "{s}", .{game.id()});
         if (game.title().len > 0) row("From", "{t}: {s}", .{ game.store, game.title() });
+        row("Game engine", "{f}", .{game.gameEngine()});
         if (game.version) |v| {
             row("File version", "{f}", .{v.file});
             row("Product version", "{f}", .{v.product});
