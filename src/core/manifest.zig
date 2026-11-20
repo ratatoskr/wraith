@@ -78,7 +78,7 @@ pub const Manifest = struct {
     /// Null means `zig`.
     provider: ?[]const u8 = null,
     autoLoad: bool = true,
-    /// Code for other plugins, with nothing of its own to use. 
+    /// Code for other plugins, with nothing of its own to use.
     library: bool = false,
     /// Plugins it needs loaded first, as `name` or `name@minimum-version`.
     depends: []const []const u8 = &.{},
