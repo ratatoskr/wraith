@@ -10,7 +10,6 @@ const std = @import("std");
 const core = @import("wraith_core");
 const api = @import("wraith_api");
 const hosts = @import("salamander_hosts");
-const mem = @import("tuft_mem");
 
 const host = @import("../host/root.zig");
 const Libraries = @import("../Libraries.zig");
@@ -38,10 +37,7 @@ const Running = struct {
     /// Guards its pump, so stopping waits for one that's running and stops the rest.
     owner: *sal.Owner,
     pump: sal.Task = .{},
-    /// Finds what its schemas declare, for the `schema` module.
-    schema: sal.Object(host.wraith.SchemaArea) = .{},
-    /// Its schemas as the script sees them, for taking its services.
-    types: ?*const engine.Module = null,
+    exposed: Exposed = .{},
 
     fn create(language: hosts.Language, guest: host.wraith.Guest) !*Running {
         const r = try allocator.create(Running);
@@ -53,14 +49,7 @@ const Running = struct {
         r.owner = try sal.host().owner(r.name);
         errdefer r.owner.drain();
 
-        r.script = try hosts.create(language, .{
-            .gpa = allocator,
-            .resolver = .{ .ctx = r, .resolve = resolve, .read = read },
-            .report = .{ .ctx = r, .f = report },
-            .policy = .{ .how = policy },
-            .schema_options = api.sal_options,
-            .locator = .{ .ctx = r, .address = locate, .read = readMemory, .write = writeMemory },
-        });
+        r.script = try r.exposed.create(language, allocator, .{ .ctx = r, .resolve = resolve, .read = read }, .{ .ctx = r, .f = report });
         errdefer r.script.deinit();
         try r.expose(guest);
 
@@ -85,21 +74,11 @@ const Running = struct {
         return r;
     }
 
-    /// Wraith's areas, as the `wraith` module. Its schemas are in scope too, so it can type things like
-    /// `salamander.fn("Player.heal", f)` by what they declare. Each plugin it depends on is a module
-    /// too, by its name, with what it offers, like `import { Freecam } from "freecam"`.
+    /// Wraith's areas, then each plugin it depends on as a module by its name, with what it
+    /// offers, like `import { Freecam } from "freecam"`.
     fn expose(r: *Running, guest: host.wraith.Guest) !void {
-        const text = guest.schema;
-        const types = try r.script.schema(if (text.len > 0) text else api.wraith_sal);
-        r.types = types;
-        r.schema = sal.invoke(host.wraith.Wraith, "schema", guest.wraith, .{});
-        const methods = host.wraith.Wraith.salamander.methods;
-        var exports: [methods.len]engine.Export = undefined;
-        inline for (methods, 0..) |m, i| {
-            const area = sal.invoke(host.wraith.Wraith, m.name, guest.wraith, .{});
-            exports[i] = .{ .name = m.name, .schema = types, .trait = @TypeOf(area).salamander.name, .obj = .of(area) };
-        }
-        try r.script.module("wraith", &exports);
+        try r.exposed.expose(r.script, guest.wraith, guest.schema, false);
+        const types = r.exposed.types.?;
 
         // The loader lists each plugin's services together
         var services: std.ArrayList(engine.Export) = .empty;
@@ -114,21 +93,6 @@ const Running = struct {
             }
             try r.script.module(plugin, services.items);
         }
-    }
-
-    fn locate(ctx: ?*anyopaque, name: []const u8) anyerror!usize {
-        const r: *Running = @ptrCast(@alignCast(ctx.?));
-        return r.schema.address(name);
-    }
-
-    fn readMemory(_: ?*anyopaque, address: usize, out: []u8) bool {
-        mem.Memory.local.read(address, out) catch return false;
-        return true;
-    }
-
-    fn writeMemory(_: ?*anyopaque, address: usize, bytes: []const u8) bool {
-        mem.Memory.local.write(address, bytes) catch return false;
-        return true;
     }
 
     fn schedule(r: *Running) void {
@@ -199,6 +163,47 @@ const Running = struct {
     }
 };
 
+/// Wraith as a script sees it, a plugin's or a session's.
+pub const Exposed = struct {
+    /// Finds what its schemas declare, for the `schema` module.
+    schema: sal.Object(host.wraith.SchemaArea) = .{},
+    /// Its schemas as the script sees them.
+    types: ?*const engine.Module = null,
+
+    /// A script whose memory and declared names go through Wraith. `self` has to stay put.
+    pub fn create(self: *Exposed, language: hosts.Language, gpa: std.mem.Allocator, resolver: hosts.Resolver, report: hosts.Report) !hosts.Script {
+        return hosts.create(language, .{
+            .gpa = gpa,
+            .resolver = resolver,
+            .report = report,
+            .policy = .{ .how = policy },
+            .schema_options = api.sal_options,
+            .locator = @import("wraith_sdk").salamander.locator(self, locate),
+        });
+    }
+
+    /// Wraith's areas as the `wraith` module, and as globals too if `globals`. Its schemas, `schema`,
+    /// are in scope, so it can type things like `salamander.fn("Player.heal", f)` by what they declare.
+    pub fn expose(self: *Exposed, script: hosts.Script, wraith: @FieldType(host.wraith.Guest, "wraith"), schema: []const u8, globals: bool) !void {
+        const types = try script.schema(if (schema.len > 0) schema else api.wraith_sal);
+        self.types = types;
+        self.schema = sal.invoke(host.wraith.Wraith, "schema", wraith, .{});
+        const methods = host.wraith.Wraith.salamander.methods;
+        var exports: [methods.len]engine.Export = undefined;
+        inline for (methods, 0..) |m, i| {
+            const area = sal.invoke(host.wraith.Wraith, m.name, wraith, .{});
+            exports[i] = .{ .name = m.name, .schema = types, .trait = @TypeOf(area).salamander.name, .obj = .of(area) };
+            if (globals) try script.expose(m.name, exports[i]);
+        }
+        try script.module("wraith", &exports);
+    }
+
+    fn locate(ctx: ?*anyopaque, name: []const u8) anyerror!usize {
+        const self: *Exposed = @ptrCast(@alignCast(ctx.?));
+        return self.schema.address(name);
+    }
+};
+
 /// Where shared libraries resolve to. Not a path, since `relative` never starts one with `@`.
 const library_prefix = "@library/";
 
@@ -251,7 +256,7 @@ const RunningImpl = struct {
     }
 
     pub fn service(r: *Running, trait: []const u8) sal.Plain(host.wraith.Plugin, "service") {
-        const types = r.types orelse return .{};
+        const types = r.exposed.types orelse return .{};
         return r.script.take(trait, types, trait) catch {
             log.err("{s}: {s}", .{ r.name, r.script.lastError() });
             return .{};

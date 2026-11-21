@@ -1,5 +1,5 @@
-//! Installed project mods for the game Wraith's in, read for their tweaks. Not on the render
-//! thread, since it reads every one's files.
+//! Installed project mods for the game Wraith's in, read for their tweaks, schemas and address
+//! list. Not on the render thread, since it reads every one's files.
 
 const std = @import("std");
 
@@ -9,6 +9,7 @@ const discovery = @import("plugins/discovery.zig");
 const Manifest = @import("Manifest.zig");
 const Project = @import("Project.zig");
 const Tweaks = @import("Tweaks.zig");
+const schemas = @import("host/schemas.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
@@ -39,8 +40,16 @@ pub fn read(arena: std.mem.Allocator, io: std.Io, mods_dir: []const u8, here: co
             log.warn("Couldn't read {s}'s tweaks: {t}", .{ m.id, err });
             continue;
         };
-        if (files.len == 0) continue;
-        try out.append(arena, .{ .id = m.id, .title = m.title orelse m.id, .files = files });
+        const schema_files = schemaFiles(arena, io, folder) catch |err| {
+            log.warn("Couldn't read {s}'s schemas: {t}", .{ m.id, err });
+            continue;
+        };
+        const addresses = readOptional(arena, io, folder, Project.addresses_file) catch |err| {
+            log.warn("Couldn't read {s}'s address list: {t}", .{ m.id, err });
+            continue;
+        };
+        if (files.len == 0 and schema_files.len == 0 and addresses == null) continue;
+        try out.append(arena, .{ .id = m.id, .title = m.title orelse m.id, .files = files, .schemas = schema_files, .addresses = addresses });
     }
     std.mem.sort(Tweaks.ModProject, out.items, {}, struct {
         fn lessThan(_: void, a: Tweaks.ModProject, b: Tweaks.ModProject) bool {
@@ -65,6 +74,22 @@ fn tweakFiles(arena: std.mem.Allocator, io: std.Io, folder: []const u8) ![]const
         try out.append(arena, .{ .path = try std.fmt.allocPrint(arena, "tweaks/{s}", .{entry.name}), .text = text });
     }
     return out.items;
+}
+
+/// Its `schemas/*.sal`, any folder down, by path like `schemas/game.sal`, read like a plugin's.
+fn schemaFiles(arena: std.mem.Allocator, io: std.Io, folder: []const u8) ![]const schemas.File {
+    var files: std.ArrayList(schemas.File) = .empty;
+    try schemas.readFolder(arena, io, "schemas", folder, &files);
+    return files.items;
+}
+
+fn readOptional(arena: std.mem.Allocator, io: std.Io, folder: []const u8, name: []const u8) !?[]const u8 {
+    var dir = try std.Io.Dir.openDirAbsolute(io, folder, .{});
+    defer dir.close(io);
+    return dir.readFileAlloc(io, name, arena, .limited(max_file)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => err,
+    };
 }
 
 /// Reads them again and hands them to `tweaks`. `cache_dir` has the hub's last revoked list.

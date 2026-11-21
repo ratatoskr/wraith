@@ -13,6 +13,7 @@ const salamander_schema = @import("salamander_schema");
 const bind = @import("salamander_bind");
 
 const Loaded = @import("../PluginLoader.zig").Loaded;
+const Names = @import("../Names.zig");
 
 const SalSchema = salamander_schema.Schema;
 const sal = api.salamander;
@@ -175,10 +176,11 @@ fn readSlot(at: usize) Schemas.Error!usize {
 }
 
 /// Runs the `[Sig]` or `[VirtualTable]` in `annotations`, with any `[Module]` and `[Section]` next to it.
+/// Through `Names`, so an earlier scan of it is used and it's listed with the rest.
 fn locate(annotations: []const SalSchema.Annotation, which: []const u8, name: []const u8) Schemas.Error!usize {
     var steps: [sigs.max_steps]mem.Sig.Step = undefined;
     const sig = (sigs.of(annotations, "wraith", which, &steps) catch unreachable) orelse return sal.host().explain(error.NotFound, "{s} has no [{s}]", .{ name, which });
-    const found = sig.locate(name).unwrap() catch |err| return sal.host().explain(error.NotFound, "{s}'s [{s}(\"{s}\")] wasn't found: {t}", .{ name, which, sig.pattern, err });
+    const found = Names.global.symbols().scan(sig, name).unwrap() catch |err| return sal.host().explain(error.NotFound, "{s}'s [{s}(\"{s}\")] wasn't found: {t}", .{ name, which, sig.pattern, err });
     return found;
 }
 
@@ -221,20 +223,13 @@ fn checkField(s: SalSchema, f: SalSchema.Field, source: []const u8, diag: *SalSc
     if (SalSchema.findAnnotation(f.annotations, "wraith", "Choices")) |a| try checkChoices(s, a, source, diag);
 }
 
-fn nameOf(arg: SalSchema.Arg) ?[]const u8 {
-    return switch (arg) {
-        .ident, .string => |n| n,
-        else => null,
-    };
-}
-
 /// `[Choices("Type.path.to.list", id, name)]`: a type with `[Instance]`, fields down to an array of
-/// structs, and the two fields in those.
+/// structs, and the two fields in those. Just the path means `id` and `name`.
 fn checkChoices(s: SalSchema, a: *const SalSchema.Annotation, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
-    const usage = "[Choices] takes where the list is, then its id and name fields, like [Choices(\"DataTables.items\", id, name)]";
-    if (a.args.len != 3 or a.args[0] != .string) return diag.fail(source, a.at, usage, .{});
-    const id = nameOf(a.args[1]) orelse return diag.fail(source, a.at, usage, .{});
-    const name = nameOf(a.args[2]) orelse return diag.fail(source, a.at, usage, .{});
+    const usage = "[Choices] takes where the list is, then its id and name fields if not id and name, like [Choices(\"DataTables.items\", id, name)]";
+    if ((a.args.len != 1 and a.args.len != 3) or a.args[0] != .string) return diag.fail(source, a.at, usage, .{});
+    const id = if (a.args.len > 1) a.args[1].name() orelse return diag.fail(source, a.at, usage, .{}) else "id";
+    const name = if (a.args.len > 2) a.args[2].name() orelse return diag.fail(source, a.at, usage, .{}) else "name";
     const path = a.args[0].string;
     var parts = std.mem.splitScalar(u8, path, '.');
     const root = parts.first();
@@ -308,7 +303,7 @@ pub fn load(io: std.Io, name: []const u8, dir: []const u8, depends: []const *Loa
             files.appendAssumeCapacity(.{ .name = n, .text = try allocator.dupe(u8, f.text) });
         }
     }
-    try readFolder(io, name, dir, &files);
+    try readFolder(allocator, io, name, dir, &files);
     if (files.items.len == 0) return null;
     var diag: SalSchema.Diagnostic = .{};
     return fromFilesWhy(files.items, &diag) catch |err| {
@@ -372,23 +367,25 @@ pub fn addFile(loaded: *Loaded, name: []const u8, text: []const u8) SchemaError!
 
 pub const SchemaError = error{ OutOfMemory, Invalid };
 
-fn readFolder(io: std.Io, name: []const u8, dir_path: []const u8, files: *std.ArrayList(File)) !void {
-    const path = try std.fs.path.join(allocator, &.{ dir_path, "schemas" });
-    defer allocator.free(path);
+/// The `.sal` files under `dir_path/schemas`, any folder down, named like `name/game.sal` and
+/// sorted by that, onto `files`. In `gpa`.
+pub fn readFolder(gpa: std.mem.Allocator, io: std.Io, name: []const u8, dir_path: []const u8, files: *std.ArrayList(File)) !void {
+    const path = try std.fs.path.join(gpa, &.{ dir_path, "schemas" });
+    defer gpa.free(path);
     var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
     defer dir.close(io);
-    var walker = try dir.walk(allocator);
+    var walker = try dir.walk(gpa);
     defer walker.deinit(io);
     const start = files.items.len;
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".sal")) continue;
-        try files.ensureUnusedCapacity(allocator, 1);
-        const text = try dir.readFileAlloc(io, entry.path, allocator, .limited(max_file));
-        errdefer allocator.free(text);
-        const file_name = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ name, entry.path });
+        try files.ensureUnusedCapacity(gpa, 1);
+        const text = try dir.readFileAlloc(io, entry.path, gpa, .limited(max_file));
+        errdefer gpa.free(text);
+        const file_name = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ name, entry.path });
         std.mem.replaceScalar(u8, file_name, '\\', '/');
         files.appendAssumeCapacity(.{ .name = file_name, .text = text });
     }

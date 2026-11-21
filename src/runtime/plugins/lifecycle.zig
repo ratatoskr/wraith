@@ -393,11 +393,7 @@ fn teardown(loaded: *Loaded) void {
 
 fn destroy(loader: *PluginLoader, loaded: *Loaded) void {
     teardown(loaded);
-    // Its owner's drained, so nothing's in its objects
-    host.wraith.forget(loaded);
-    if (loaded.schemas) |s| s.destroy();
-    for (loaded.retired_schemas.items) |s| s.destroy();
-    loaded.retired_schemas.deinit(std.heap.page_allocator);
+    loaded.free();
     deleteCopy(loader, loaded.copy_dir);
     log.info("Unloaded plugin {s}", .{loaded.name});
 

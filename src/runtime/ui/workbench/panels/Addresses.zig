@@ -20,8 +20,6 @@ const salamander_schema = @import("salamander_schema");
 const Schema = salamander_schema.Schema;
 const Parsed = salamander_schema.Parsed;
 const sal_options = @import("wraith_api").sal_options;
-const sigs = @import("tuft_schema").sigs;
-const Sig = @import("tuft_mem").Sig;
 const Kind = @import("tuft_mem").values.Kind;
 const RwLock = @import("tuft_sys").sync.RwLock;
 const log = core.log.scoped(.wraith_ui);
@@ -41,16 +39,11 @@ split: ui.Split = .{ .ratio = 0.55 },
 project: ?*Project = null,
 /// When names were last worked out again, so listings name what moved.
 refreshed_ns: u64 = 0,
-/// The project's schemas, then the ones plugins and scripts share, for typed entries.
-project_schemas: std.ArrayList(Parsed) = .empty,
-plugin_schemas: std.ArrayList(Shared) = .empty,
-/// Both, project first so its types win. Sources are "" for the project's, else the plugin.
+/// The schemas the project, plugins and scripts share, for typed entries.
+shared: std.ArrayList(Shared) = .empty,
+/// Those, project first so its types win. Sources are "" for the project's, else the plugin.
 schemas: std.ArrayList(*const Schema) = .empty,
 sources: std.ArrayList([]const u8) = .empty,
-/// The project version and schema text they were read from, so they're only read again when
-/// that changes.
-schemas_version: u32 = 0,
-schemas_hash: u64 = 0,
 /// `SharedSchemas` as last read.
 plugins_generation: u32 = 0,
 
@@ -58,7 +51,6 @@ const refresh_ns = std.time.ns_per_s / 2;
 
 pub fn useProject(self: *Addresses, project: *Project) void {
     self.project = project;
-    self.schemas_hash = 0;
     self.readSchemas();
     self.reload();
 }
@@ -70,35 +62,20 @@ pub fn reload(self: *Addresses) void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const text = (project.read(arena.allocator(), Project.addresses_file) catch null) orelse "";
-    const saved = parse(arena.allocator(), text) catch |err| {
+    const saved = Names.parseList(arena.allocator(), text) catch |err| {
         log.warn("Couldn't read the project's address list: {t}", .{err});
         return;
     };
     self.list.load(saved.items) catch |err| log.warn("Couldn't load the address list: {t}", .{err});
-    Names.global.setUser(saved.items, self.schemas.items);
-}
-
-fn parse(arena: std.mem.Allocator, text: []const u8) !AddressList.Saved {
-    if (std.mem.trim(u8, text, " \t\r\n").len == 0) return .{};
-    const source = try arena.dupeSentinel(u8, text, 0);
-    var diagnostics: std.zon.parse.Diagnostics = undefined;
-    return std.zon.parse.fromSlice(AddressList.Saved, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diagnostics, .ignore_unknown_fields = true });
 }
 
 pub fn deinit(self: *Addresses) void {
     const gpa = self.wb.allocator;
     self.keys.deinit();
     self.list.deinit();
-    freeSchemas(&self.project_schemas, gpa);
-    freeShared(&self.plugin_schemas, gpa);
+    freeShared(&self.shared, gpa);
     self.schemas.deinit(gpa);
     self.sources.deinit(gpa);
-    Names.global.removeGroup(.schema, statics_group);
-}
-
-fn freeSchemas(parsed: *std.ArrayList(Parsed), gpa: std.mem.Allocator) void {
-    for (parsed.items) |*p| p.deinit();
-    parsed.deinit(gpa);
 }
 
 /// A schema a plugin or script shared, parsed for us.
@@ -113,26 +90,20 @@ fn freeShared(shared: *std.ArrayList(Shared), gpa: std.mem.Allocator) void {
     shared.deinit(gpa);
 }
 
-/// What the project's schema statics are named under in `Names`.
-const statics_group = "schemas";
-
-/// Reads the project's schemas and the shared ones again if either changed.
+/// Reads the shared schemas again if they changed.
 fn readSchemas(self: *Addresses) void {
     const gpa = self.wb.allocator;
-    var project = self.readProjectSchemas();
-    var plugins = self.readPluginSchemas();
-    if (project == null and plugins == null) return;
-
+    const shared = self.readShared() orelse return;
+    // The project's first, so its types win
+    std.mem.sort(Shared, shared.items, {}, struct {
+        fn before(_: void, a: Shared, b: Shared) bool {
+            return a.group.len == 0 and b.group.len != 0;
+        }
+    }.before);
     // The list lets go of the old ones before they're freed
     var schemas: std.ArrayList(*const Schema) = .empty;
     var sources: std.ArrayList([]const u8) = .empty;
-    const project_now = if (project) |*p| p else &self.project_schemas;
-    const plugins_now = if (plugins) |*p| p else &self.plugin_schemas;
-    for (project_now.items) |*p| {
-        schemas.append(gpa, &p.schema) catch {};
-        sources.append(gpa, "") catch {};
-    }
-    for (plugins_now.items) |*p| {
+    for (shared.items) |*p| {
         schemas.append(gpa, &p.parsed.schema) catch {};
         sources.append(gpa, p.group) catch {};
     }
@@ -142,73 +113,13 @@ fn readSchemas(self: *Addresses) void {
     self.sources.deinit(gpa);
     self.schemas = schemas;
     self.sources = sources;
-    if (project) |p| {
-        freeSchemas(&self.project_schemas, gpa);
-        self.project_schemas = p;
-        self.publishStatics();
-    }
-    if (plugins) |p| {
-        freeShared(&self.plugin_schemas, gpa);
-        self.plugin_schemas = p;
-    }
-    self.publish();
+    freeShared(&self.shared, gpa);
+    self.shared = shared;
 }
 
-/// The project's `schemas/*.sal` parsed again, or null if they didn't change. All together like a
-/// plugin's `schemas` folder, or one at a time if that doesn't parse, so one bad file doesn't hide
-/// the rest.
-fn readProjectSchemas(self: *Addresses) ?std.ArrayList(Parsed) {
-    const version = if (self.project) |p| p.version() else 0;
-    if (version == self.schemas_version and self.schemas_hash != 0) return null;
-    self.schemas_version = version;
-    const gpa = self.wb.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    var texts: std.ArrayList(salamander_schema.File) = .empty;
-    var hash = std.hash.Wyhash.init(0);
-    if (self.project) |project| {
-        var paths = project.list(gpa, "schemas", Project.ext.schema) catch return null;
-        defer Project.freePaths(gpa, &paths);
-        for (paths.items) |path| {
-            const text = (project.read(a, path) catch return null) orelse continue;
-            texts.append(a, .{ .name = path, .text = text }) catch return null;
-            hash.update(path);
-            hash.update(&.{0});
-            hash.update(text);
-            hash.update(&.{0});
-        }
-    }
-    // Never 0, so the first read always counts
-    const digest = hash.final() | 1;
-    if (digest == self.schemas_hash) return null;
-    self.schemas_hash = digest;
-
-    var parsed: std.ArrayList(Parsed) = .empty;
-    const combined = salamander_schema.bundle(a, texts.items) catch return parsed;
-    if (salamander_schema.parse(gpa, combined, sal_options, null)) |one| {
-        parsed.append(gpa, one) catch {
-            var gone = one;
-            gone.deinit();
-        };
-    } else |_| for (texts.items) |t| {
-        var diag: Schema.Diagnostic = .{};
-        var one = salamander_schema.parse(gpa, t.text, sal_options, &diag) catch {
-            log.debug("{s} doesn't parse: {s}", .{ t.name, diag.message() });
-            continue;
-        };
-        parsed.append(gpa, one) catch {
-            one.deinit();
-            break;
-        };
-    }
-    return parsed;
-}
-
-/// The schemas plugins and scripts share, parsed again, or null if they didn't change. Each is
-/// ours, so a plugin going just drops them next time.
-fn readPluginSchemas(self: *Addresses) ?std.ArrayList(Shared) {
+/// The schemas the project, plugins and scripts share, parsed again, or null if they didn't
+/// change. Each is ours, so a plugin going just drops them next time.
+fn readShared(self: *Addresses) ?std.ArrayList(Shared) {
     const now = SharedSchemas.global.generation();
     if (now == self.plugins_generation) return null;
     self.plugins_generation = now;
@@ -223,7 +134,7 @@ fn readPluginSchemas(self: *Addresses) ?std.ArrayList(Shared) {
             log.debug("{s} from {s} doesn't parse: {s}", .{ e.name, e.group, diag.message() });
             continue;
         };
-        const group = one.arena.allocator().dupe(u8, if (e.group.len > 0) e.group else e.name) catch "";
+        const group = one.arena.allocator().dupe(u8, e.group) catch "";
         parsed.append(gpa, .{ .parsed = one, .group = group }) catch {
             one.deinit();
             break;
@@ -232,47 +143,7 @@ fn readPluginSchemas(self: *Addresses) ?std.ArrayList(Shared) {
     return parsed;
 }
 
-/// The project's schema statics as names, like `GameStateManager.instance`. Plugins' are named
-/// by the plugin, with its name in front.
-fn publishStatics(self: *Addresses) void {
-    Names.global.removeGroup(.schema, statics_group);
-    for (self.project_schemas.items) |*p| {
-        const s = &p.schema;
-        for (s.statics) |st| nameStatic(s, st, "");
-        for (s.types) |t| switch (t.kind) {
-            .@"struct" => |st| for (st.statics) |one| nameStatic(s, one, t.name),
-            else => {},
-        };
-    }
-}
-
-fn nameStatic(s: *const Schema, st: Schema.Static, owner: []const u8) void {
-    var id_buf: [192]u8 = undefined;
-    const id = (if (owner.len > 0) std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ owner, st.name }) else st.name) catch return;
-    var steps: [sigs.max_steps]Sig.Step = undefined;
-    const sig = (sigs.of(st.annotations, "wraith", "Sig", &steps) catch return) orelse return;
-    var text_buf: [1024]u8 = undefined;
-    const text = std.fmt.bufPrint(&text_buf, "{f}", .{sig}) catch return;
-    var type_buf: [256]u8 = undefined;
-    Names.global.put(.{
-        .source = .schema,
-        .group = statics_group,
-        .name = id,
-        .where = .{ .text = .{ .text = text } },
-        .type = std.fmt.bufPrint(&type_buf, "{f}", .{st.type}) catch return,
-        .size = s.sizeOf(st.type) orelse 0,
-    }) catch |err| log.debug("Couldn't name {s}: {t}", .{ id, err });
-}
-
-/// Gives `Names` the list as it is, like when sizes change with the schemas.
-fn publish(self: *Addresses) void {
-    var arena: std.heap.ArenaAllocator = .init(self.wb.allocator);
-    defer arena.deinit();
-    const items = self.list.items(arena.allocator()) catch return;
-    Names.global.setUser(items, self.schemas.items);
-}
-
-/// Writes the list to the project and `Names`.
+/// Writes the list to the project, which names its ids from there, see `host.projects`.
 pub fn changed(self: *Addresses) void {
     var arena: std.heap.ArenaAllocator = .init(self.wb.allocator);
     defer arena.deinit();
@@ -280,7 +151,6 @@ pub fn changed(self: *Addresses) void {
         log.warn("Couldn't keep the address list: {t}", .{err});
         return;
     };
-    Names.global.setUser(items, self.schemas.items);
     const project = self.project orelse return;
     var out: std.Io.Writer.Allocating = .init(arena.allocator());
     std.zon.stringify.serialize(AddressList.Saved{ .items = items }, .{}, &out.writer) catch return;

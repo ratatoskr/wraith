@@ -72,9 +72,8 @@ fn drawSections(self: *AboutWindow) void {
     for (sections, 0..) |s, i| {
         if (i > 0) ui.sameLine();
         const picked = s.section == self.section;
-        const colour = ui.raw("ImGui_GetStyleColorVec4")(if (picked) c.ImGuiCol_ButtonActive else c.ImGuiCol_FrameBg);
-        ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_Button, colour.*);
-        defer ui.raw("ImGui_PopStyleColor")();
+        const lit = ui.withStyleColor(c.ImGuiCol_Button, if (picked) c.ImGuiCol_ButtonActive else c.ImGuiCol_FrameBg);
+        defer lit.end();
         if (ui.buttonSized(s.label, .{ width, 0 })) self.section = s.section;
     }
 }
@@ -127,11 +126,14 @@ fn drawLinks() void {
     const height = ui.raw("ImGui_GetFrameHeight")() * 1.4;
     for (links, 0..) |link, i| {
         if (i > 0) ui.sameLine();
-        ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_Button, vec4(link.colour, 0.85));
-        ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_ButtonHovered, vec4(link.colour, 1));
-        ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_ButtonActive, vec4(lighter(link.colour), 1));
-        ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_Text, .{ .x = 1, .y = 1, .z = 1, .w = 1 });
-        defer ui.raw("ImGui_PopStyleColorEx")(4);
+        const button = ui.withColor(c.ImGuiCol_Button, vec4(link.colour, 0.85));
+        defer button.end();
+        const hovered = ui.withColor(c.ImGuiCol_ButtonHovered, vec4(link.colour, 1));
+        defer hovered.end();
+        const active = ui.withColor(c.ImGuiCol_ButtonActive, vec4(lighter(link.colour), 1));
+        defer active.end();
+        const text = ui.withColor(c.ImGuiCol_Text, ui.Color{ 1, 1, 1, 1 });
+        defer text.end();
         if (ui.buttonSized(link.label, .{ width, height })) open(link.url);
         ui.tooltip("{s}", .{link.url});
     }

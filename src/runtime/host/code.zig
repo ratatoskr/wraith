@@ -12,12 +12,14 @@ const api = @import("wraith_api");
 const host = @import("root.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const GameNames = @import("../Names.zig");
+const addresses = @import("addresses.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
-/// Names asm can use besides labels: the caller's own, then the game's from `Names`, modules and
-/// their exports.
+/// Names asm can use besides labels: the caller's own, then what its owner sees through
+/// `addresses.Scope`, then the game's from `Names`, modules and their exports.
 pub const Names = struct {
+    loaded: ?*Loaded = null,
     original: ?usize = null,
     resume_at: ?usize = null,
     /// It asked for `original` and there wasn't one.
@@ -36,7 +38,8 @@ pub const Names = struct {
         }
         if (self.resume_at) |at| if (std.mem.eql(u8, name, "resume")) return at;
         if (self.pending) |p| if (p.find(name, self.stand_in)) |at| return at;
-        return api.Name.find(self.scope, name) orelse GameNames.global.symbols().resolve(name);
+        const scope: addresses.Scope = .{ .loaded = self.loaded, .names = self.scope };
+        return scope.resolve(name) orelse GameNames.global.symbols().resolve(name);
     }
 
     pub fn resolver(self: *Names) tuft_asm.Resolver {
@@ -57,7 +60,7 @@ pub fn assembleWith(gpa: std.mem.Allocator, source: []const u8, address: usize, 
 }
 
 pub fn assemble(loaded: *Loaded, source: []const u8, address: usize, out: []u8, problem: *api.AsmProblem) api.AsmError!usize {
-    var names: Names = .{};
+    var names: Names = .{ .loaded = loaded };
     return assembleWith(loaded.allocator, source, address, out, &names, problem);
 }
 
@@ -93,6 +96,7 @@ pub const Build = struct {
     gpa: std.mem.Allocator,
     source: []const u8,
     problem: *api.AsmProblem,
+    loaded: ?*Loaded = null,
     scope: []const api.Name = &.{},
     pending: ?*const Pending = null,
     /// A real problem, not just not fitting in place.
@@ -100,7 +104,7 @@ pub const Build = struct {
 
     pub fn run(context: ?*anyopaque, site: engine.Hook.InjectSite, out: []u8) anyerror!usize {
         const self: *Build = @ptrCast(@alignCast(context.?));
-        var names: Names = .{ .original = site.original, .resume_at = site.resume_at, .scope = self.scope, .pending = self.pending, .stand_in = site.code };
+        var names: Names = .{ .loaded = self.loaded, .original = site.original, .resume_at = site.resume_at, .scope = self.scope, .pending = self.pending, .stand_in = site.code };
         return assembleWith(self.gpa, self.source, site.code, out, &names, self.problem) catch |err| {
             if (site.trial) return err;
             if (site.original == null and (names.missing_original or err == error.TooLong)) return error.NeedsCave;
@@ -153,15 +157,15 @@ const PatchRecord = struct {
 var patches: host.Owned(PatchRecord) = .{};
 
 pub fn patch(loaded: *Loaded, address: usize, bytes: []const u8, options: api.PatchOptions) api.PatchError!*api.Patch {
-    var names: Names = .{ .scope = options.names };
+    var names: Names = .{ .loaded = loaded, .scope = options.names };
     const p = engine.Patch.create(address, bytes, .{ .expect = options.expect, .resolver = names.resolver() }) catch |err| return patchError(err, address);
     return keep(loaded, .{ .in_place = p });
 }
 
 pub fn patchAsm(loaded: *Loaded, address: usize, source: []const u8, options: api.AsmPatchOptions, problem: *api.AsmProblem) api.PatchError!*api.Patch {
-    var build: Build = .{ .gpa = loaded.allocator, .source = source, .problem = problem, .scope = options.names };
+    var build: Build = .{ .gpa = loaded.allocator, .source = source, .problem = problem, .loaded = loaded, .scope = options.names };
     var expect_problem: engine.Patch.ExpectProblem = .{};
-    var expect_names: Names = .{ .scope = options.names };
+    var expect_names: Names = .{ .loaded = loaded, .scope = options.names };
     var reach: [16]usize = undefined;
     const replaced = engine.Patch.replace(address, build.of(), .{
         .size = options.size,
@@ -374,8 +378,8 @@ pub fn place(loaded: *Loaded, request: api.PlaceRequest, data_out: []usize, code
     var reach: [16]usize = undefined;
     var reach_n: usize = 0;
     for (request.code, builds, expect_names, code) |c, *b, *e, *out| {
-        b.* = .{ .gpa = gpa, .source = c.source(), .problem = &problem.problem, .scope = c.names(), .pending = &pending };
-        e.* = .{ .scope = c.names() };
+        b.* = .{ .gpa = gpa, .source = c.source(), .problem = &problem.problem, .loaded = loaded, .scope = c.names(), .pending = &pending };
+        e.* = .{ .loaded = loaded, .scope = c.names() };
         out.* = .{ .address = c.address, .build = b.of() };
         if (!c.inject) out.replace = .{ .size = c.size, .expect = c.expect(), .problem = &expect_problem, .resolver = e.resolver() };
         reach_n += reachOf(c.names(), reach[reach_n..]).len;

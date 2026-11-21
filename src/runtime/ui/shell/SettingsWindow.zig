@@ -402,9 +402,8 @@ fn addDevPlugin(shell: *Shell) void {
 
 fn helpText(help: []const u8, restart: bool, scope: Registry.Scope) void {
     if (help.len == 0 and !restart and scope == .global) return;
-    const dim = ui.raw("ImGui_GetStyleColorVec4")(c.ImGuiCol_TextDisabled);
-    ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_Text, dim.*);
-    defer ui.raw("ImGui_PopStyleColor")();
+    const dim = ui.withStyleColor(c.ImGuiCol_Text, c.ImGuiCol_TextDisabled);
+    defer dim.end();
     ui.textWrapped("{s}{s}{s}", .{
         help,
         if (restart) " Takes a restart." else "",

@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 const api = @import("wraith_api");
 
 const Loaded = @import("../PluginLoader.zig").Loaded;
@@ -13,15 +14,14 @@ pub fn get(_: *Loaded, name: []const u8, language: []const u8, out: []u8) api.Li
 }
 
 pub fn add(loaded: *Loaded, name: []const u8, language: []const u8, source: []const u8) api.LibraryError!void {
-    const lease = watch.lease(&listener, &loaded.owner, .data) orelse return error.OutOfMemory;
+    const lease = cleanup.lease(&loaded.owner) orelse return error.OutOfMemory;
     defer lease.end();
     try Libraries.global.add(.{ .owner = &loaded.owner, .name = name, .language = language, .source = source });
 }
 
-var watch: Owner.Watch(*u8, .{ .released = released }) = .{};
-var listener: u8 = 0;
+var cleanup: OnGone(.released, released) = .{};
 
-fn released(_: *u8, owner: *Owner) void {
+fn released(owner: *Owner) void {
     Libraries.global.removeOwner(owner);
 }
 

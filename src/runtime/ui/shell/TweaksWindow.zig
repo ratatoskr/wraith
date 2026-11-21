@@ -11,7 +11,6 @@ const ui = @import("wraith_ui");
 const icons = @import("../fonts.zig").icons;
 const Tweaks = @import("../../Tweaks.zig");
 const TweakFields = @import("../TweakFields.zig");
-const StructEditor = @import("../StructEditor.zig");
 const struct_tweaks = @import("../../host/struct_tweaks.zig");
 const Shell = @import("Shell.zig");
 
@@ -51,13 +50,11 @@ pub fn deinit(self: *TweaksWindow, gpa: std.mem.Allocator) void {
 
 /// Where it's from, for its heading. Empty for your project.
 fn sourceId(t: *const Info) []const u8 {
-    return t.mod orelse t.plugin orelse "";
+    return t.source_id;
 }
 
 fn sourceLabel(t: *const Info) []const u8 {
-    if (t.mod_title orelse t.plugin_title) |title| return title;
-    if (t.mod orelse t.plugin) |id| return id;
-    return "Your project";
+    return t.source_title;
 }
 
 fn isAction(t: *const Info) bool {
@@ -121,21 +118,17 @@ pub fn draw(self: *TweaksWindow) void {
     ui.tooltip("Turns every tweak off", .{});
     ui.sameLine();
     const pinned = shell.registry.get(shell.own.tweaks_on_screen).toggle;
-    if (pinned) {
-        const colour = ui.raw("ImGui_GetStyleColorVec4")(ui.c.ImGuiCol_ButtonActive);
-        ui.raw("ImGui_PushStyleColorImVec4")(ui.c.ImGuiCol_Button, colour.*);
-    }
+    const lit: ui.StyleColors = if (pinned) ui.withStyleColor(ui.c.ImGuiCol_Button, ui.c.ImGuiCol_ButtonActive) else .{ .n = 0 };
     const pin = ui.iconButton(if (pinned) icons.pin ++ "##pin" else icons.pin_off ++ "##pin", if (pinned) "Pinned. Closing this leaves a small list on screen, of the ones with keys and which are on" else "Pin it, so closing this leaves a small list on screen, of the ones with keys and which are on");
-    if (pinned) ui.raw("ImGui_PopStyleColor")();
+    lit.end();
     if (pin) shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = !pinned }) catch {};
 
     const query = std.mem.trim(u8, std.mem.sliceTo(&self.search, 0), " ");
     if (ui.child("##tweaks", .{ 0, 0 }, .{})) |body| {
         defer body.end();
-        // Plugins can't close till it's done, so only while drawing
-        const structs = struct_tweaks.read();
-        defer structs.end();
-        self.drawList(shell, tweaks, list, structs.entries[0..@min(structs.entries.len, max_structs)], query);
+        // A copy, since rows call into `tweaks` and a struct's fields are only drawn under its lock
+        const structs = struct_tweaks.snapshot(arena.allocator(), query);
+        self.drawList(shell, tweaks, list, structs[0..@min(structs.len, max_structs)], query);
     }
 }
 
@@ -144,7 +137,7 @@ pub fn turnAllOff(tweaks: *Tweaks, list: []const Info) void {
     for (list) |*t| if (t.group == null and (t.on or t.partial)) tweaks.turnOff(t.name);
 }
 
-fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, list: []const Info, structs: []const struct_tweaks.Entry, query: []const u8) void {
+fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, list: []const Info, structs: []const struct_tweaks.Summary, query: []const u8) void {
     if (list.len == 0 and structs.len == 0) {
         ui.textWrapped("No tweaks for this game yet. Install a project from Mods, or write your own in the Workbench.", .{});
         return;
@@ -182,13 +175,13 @@ fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, list: []const I
     var heading: ?[]const u8 = null;
     for (structs, 0..) |*e, i| {
         if (drawn[i] or !self.showsStruct(e, query)) continue;
-        if (heading == null or !std.mem.eql(u8, heading.?, e.plugin)) {
-            heading = e.plugin;
+        if (heading == null or !std.mem.eql(u8, heading.?, e.source)) {
+            heading = e.source;
             ui.tableNextRow();
             _ = ui.tableNextColumn();
             _ = ui.tableNextColumn();
             var buf: [96]u8 = undefined;
-            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{e.plugin_title}, 0) catch "?");
+            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{e.source_title}, 0) catch "?");
         }
         self.drawStruct(shell.allocator, e);
         any = true;
@@ -202,10 +195,10 @@ fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, list: []const I
 }
 
 /// `source`'s structs, marked drawn. True if any were.
-fn drawStructs(self: *TweaksWindow, gpa: std.mem.Allocator, structs: []const struct_tweaks.Entry, drawn: []bool, source: []const u8, query: []const u8) bool {
+fn drawStructs(self: *TweaksWindow, gpa: std.mem.Allocator, structs: []const struct_tweaks.Summary, drawn: []bool, source: []const u8, query: []const u8) bool {
     var any = false;
     for (structs, 0..) |*e, i| {
-        if (drawn[i] or !std.mem.eql(u8, e.plugin, source)) continue;
+        if (drawn[i] or !std.mem.eql(u8, e.source, source)) continue;
         drawn[i] = true;
         if (!self.showsStruct(e, query)) continue;
         self.drawStruct(gpa, e);
@@ -215,12 +208,9 @@ fn drawStructs(self: *TweaksWindow, gpa: std.mem.Allocator, structs: []const str
 }
 
 /// They're never on, so "only what's on" hides them. Searching finds their fields too.
-fn showsStruct(self: *const TweaksWindow, e: *const struct_tweaks.Entry, query: []const u8) bool {
-    if (self.only_on) return false;
-    if (query.len == 0) return true;
-    return std.ascii.findIgnoreCase(e.title, query) != null or
-        std.ascii.findIgnoreCase(e.plugin_title, query) != null or
-        StructEditor.mentions(&e.schemas.parsed.schema, e.type_name, query);
+fn showsStruct(self: *const TweaksWindow, e: *const struct_tweaks.Summary, query: []const u8) bool {
+    _ = query;
+    return !self.only_on and e.matches;
 }
 
 fn openKey(name: []const u8) u64 {
@@ -239,16 +229,16 @@ pub fn setOpen(self: *TweaksWindow, gpa: std.mem.Allocator, key: u64, open: bool
     };
 }
 
-fn structKey(e: *const struct_tweaks.Entry) u64 {
+fn structKey(e: *const struct_tweaks.Summary) u64 {
     var h = std.hash.Wyhash.init(0);
-    h.update(e.plugin);
+    h.update(e.source);
     h.update("/");
     h.update(e.type_name);
     return h.final();
 }
 
 /// One row, that opens up into the game's values, edited as they're changed.
-fn drawStruct(self: *TweaksWindow, gpa: std.mem.Allocator, e: *const struct_tweaks.Entry) void {
+fn drawStruct(self: *TweaksWindow, gpa: std.mem.Allocator, e: *const struct_tweaks.Summary) void {
     const scope = ui.id(e.type_name.ptr);
     defer scope.end();
     const key = structKey(e);
@@ -266,9 +256,10 @@ fn drawStruct(self: *TweaksWindow, gpa: std.mem.Allocator, e: *const struct_twea
         } else self.opened.append(gpa, key) catch {};
     }
     if (at != null and !toggle) {
-        if (struct_tweaks.instance(e.schemas, e.type_name)) |address| {
-            _ = StructEditor.draw(&e.schemas.parsed.schema, e.type_name, address);
-        } else ui.textDisabled("Not in the game yet. It shows up once the game makes it, like after loading a save.", .{});
+        switch (struct_tweaks.drawFields(e.source, e.type_name)) {
+            .drawn, .gone => {},
+            .not_there_yet => ui.textDisabled("Not in the game yet. It shows up once the game makes it, like after loading a save.", .{}),
+        }
     }
     _ = ui.tableNextColumn();
 }

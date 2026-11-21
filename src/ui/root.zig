@@ -16,6 +16,9 @@ pub const Resolver = tuft_ui.Resolver;
 pub const bind = tuft_ui.bind;
 pub const isBound = tuft_ui.isBound;
 pub const raw = tuft_ui.raw;
+pub const withColor = tuft_ui.withColor;
+pub const withStyleColor = tuft_ui.withStyleColor;
+pub const StyleColors = tuft_ui.StyleColors;
 pub const rawOptional = tuft_ui.rawOptional;
 pub const WindowFlags = tuft_ui.WindowFlags;
 pub const Cond = tuft_ui.Cond;
@@ -196,6 +199,7 @@ pub const chordName = tuft_ui.chordName;
 pub const imguiKey = tuft_ui.imguiKey;
 pub const str = tuft_ui.str;
 pub const pascalCase = tuft_ui.pascalCase;
+pub const humanName = tuft_ui.humanName;
 pub const format = tuft_ui.format;
 
 test "has all of tuft_ui" {

@@ -178,9 +178,9 @@ test "registered symbols go in the Addresses list too" {
     try f.expectEval("1234 1234 thing true", "registerSymbol('thing', at) return join(readInteger('thing'), readInteger(getAddress('THING')), getNameFromAddress(at), tostring(getNameFromAddress(getAddress(process) + 16) == process .. '+10'))");
     try f.expectEval("thing 1", "local e = enumRegisteredSymbols() return join(e[1].symbolname, #e)");
     // So tweaks' asm can use it
-    try f.expectEval("true", "wraith.addresses:get('script.1.thing') == at");
+    try f.expectEval("true", "wraith.addresses:get('thing') == at");
     try f.expectEval("nil", "unregisterSymbol('thing') return tostring(getAddressSafe('thing'))");
-    try f.expectEval("false", "tostring((pcall(wraith.addresses.get, wraith.addresses, 'script.1.thing')))");
+    try f.expectEval("false", "tostring((pcall(wraith.addresses.get, wraith.addresses, 'thing')))");
 }
 
 /// Never runs. Its bytes are something to scan for.
@@ -256,8 +256,8 @@ test "memory records from the manifest" {
         \\  { id = 0, description = "Scripts", options = "[moActivateChildrenAsWell]" },
         \\  { id = 1, parent = 0, description = "God mode", tweak = "combat/god" },
         \\  { id = 2, parent = 0, description = "Broken", tweak = "broken" },
-        \\  { id = 3, description = "HP", address = "script.1.hp", type = "4 Bytes" },
-        \\  { id = 4, description = "Level", address = "script.1.hp", type = "Byte", hex = true,
+        \\  { id = 3, description = "HP", address = "hp", type = "4 Bytes" },
+        \\  { id = 4, description = "Level", address = "hp", type = "Byte", hex = true,
         \\    dropdown = { "0:Low", "1:High" } },
         \\}
     );
@@ -272,7 +272,7 @@ test "memory records from the manifest" {
     try f.expectEval("99", "local mr = AddressList.getMemoryRecordByDescription('HP') mr.Value = '99' return mr.Value");
     try testing.expectEqual(99, hp);
     try f.expectEval("2 High 1", "local mr = AddressList.getMemoryRecordByID(4) return join(mr.DropDownList.Count, mr.DropDownDescription[1], mr.DropDownValue[1])");
-    try f.expectEval("true", "AddressList.getMemoryRecordByID(3).CurrentAddress == getAddress('(script.1.hp)')");
+    try f.expectEval("true", "AddressList.getMemoryRecordByID(3).CurrentAddress == getAddress('(hp)')");
     // OnActivate runs before and after, and before has to say yes
     try f.expectEval("true,false|false,true", "local mr = AddressList.getMemoryRecordByID(1) mr.Active = false seen = {} mr.OnActivate = function(r, before, current) seen[#seen + 1] = tostring(before) .. ',' .. tostring(current) return true end mr.Active = true return table.concat(seen, '|')");
     try f.expectEval("false", "local mr = AddressList.getMemoryRecordByID(1) mr.Active = false mr.OnActivate = function() return false end mr.Active = true return tostring(mr.Active)");

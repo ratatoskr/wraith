@@ -4,7 +4,6 @@
 const std = @import("std");
 const Names = @import("../../Names.zig");
 
-const devtools = @import("tuft_devtools");
 const Range = @import("tuft_mem").Range;
 const ui = @import("wraith_ui");
 
@@ -129,7 +128,7 @@ pub fn newDocument(self: *Workbench, kind: Kind) !*Document {
                 .inspector = .{ .memory = self.debugger.memory(), .symbols = Names.global_symbols, .claims = .local },
             } },
             .script => .{ .script = .{ .wb = self } },
-            .schema => .{ .schema = .{ .wb = self, .view = .{ .allocator = self.allocator, .symbols = Names.global_symbols, .claims = .local, .find = devtools.StructView.scanHere } } },
+            .schema => .{ .schema = .{ .wb = self, .view = .{ .allocator = self.allocator, .symbols = Names.global_symbols, .claims = .local } } },
             .tweak => .{ .tweak = .{ .wb = self } },
         },
     };

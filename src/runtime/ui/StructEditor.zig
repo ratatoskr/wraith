@@ -15,6 +15,11 @@ const Schema = @import("salamander_schema").Schema;
 const Ref = @import("tuft_schema").Ref;
 
 const TweakFields = @import("TweakFields.zig");
+const StructRows = @import("tuft_devtools").StructRows;
+const sigs = @import("tuft_schema").sigs;
+const Sig = @import("tuft_mem").Sig;
+const Memory = @import("tuft_mem").Memory;
+const Names = @import("../Names.zig");
 
 const c = ui.c;
 
@@ -24,8 +29,6 @@ const label_width = 170;
 const max_depth = 8;
 /// Shown of a long array.
 const max_elements = 64;
-/// Ranges wider than this get a number box, not a slider.
-const max_slider = 1000;
 
 /// The fields of the struct `type_name` at `address`. False if the schema doesn't have it.
 pub fn draw(schema: *const Schema, type_name: []const u8, address: usize) bool {
@@ -98,7 +101,7 @@ fn member(schema: *const Schema, name: []const u8, notes: []const Schema.Annotat
             else => {},
         },
         .array => |a| {
-            if (isTextUnit(a.child.*)) return textRow(label, r);
+            if (StructRows.isTextUnit(a.child.*)) return textRow(label, r);
             return elements(schema, label, notes, r, a.len, depth);
         },
         .pointer, .optional => {
@@ -107,7 +110,7 @@ fn member(schema: *const Schema, name: []const u8, notes: []const Schema.Annotat
                 if (to.address.state == .err) return emptyRow(label, "None");
                 return if (flat) inline_(schema, t, to, depth) else fold(schema, label, to, t, depth);
             };
-            if (r.type == .pointer and r.type.pointer.* == .prim and isTextUnit(r.type.pointer.*)) return textRow(label, r);
+            if (r.type == .pointer and r.type.pointer.* == .prim and StructRows.isTextUnit(r.type.pointer.*)) return textRow(label, r);
         },
         .prim => |p| if (p == .cstring) return textRow(label, r),
         .slice, .result, .func => return,
@@ -209,16 +212,16 @@ fn value(schema: *const Schema, r: Ref, notes: []const Schema.Annotation, read_o
         },
         else => {},
     };
-    const range = rangeOf(notes);
+    const limits = limitsOf(notes);
     switch (v) {
         .bool => |b| {
             var on = b;
             if (ui.checkbox("##v", &on)) write(r, .{ .bool = on });
         },
-        .int => |i| if (int(i64, i, range)) |n| write(r, .{ .int = n }),
-        .uint => |u| if (int(u64, u, range)) |n| write(r, .{ .uint = n }),
-        .float => |f| if (float(f, range)) |n| write(r, .{ .float = n }),
-        .@"enum" => |e| if (choose(r, e)) |n| write(r, .{ .int = n }),
+        .int => |i| if (TweakFields.intInput(i64, "##v", i, limits)) |n| write(r, .{ .int = n }),
+        .uint => |u| if (TweakFields.intInput(u64, "##v", u, limits)) |n| write(r, .{ .uint = n }),
+        .float => |f| if (TweakFields.floatInput("##v", f, limits)) |n| write(r, .{ .float = n }),
+        .@"enum" => |e| if (TweakFields.choose("##v", enumChoices(r), @floatFromInt(e.value), false)) |n| write(r, .{ .int = std.math.lossyCast(i64, n) }),
         .pointer => |p| {
             ui.alignTextToFramePadding();
             ui.textDisabled("0x{X}", .{p});
@@ -231,63 +234,39 @@ fn write(r: Ref, v: Ref.Value) void {
     r.store(v) catch {};
 }
 
-fn int(comptime T: type, current: T, range: ?[2]f64) ?T {
-    const data_type = if (T == i64) c.ImGuiDataType_S64 else c.ImGuiDataType_U64;
-    const fmt: [:0]const u8 = if (T == i64) "%lld" else "%llu";
-    var v = current;
-    var lo: T = if (range) |r| std.math.lossyCast(T, r[0]) else std.math.minInt(T);
-    var hi: T = if (range) |r| std.math.lossyCast(T, r[1]) else std.math.maxInt(T);
-    // A slider's no good for picking one of millions, so wide ones get a box
-    if (range != null and hi -| lo <= max_slider) {
-        if (!ui.raw("ImGui_SliderScalarEx")(ui.str("##v"), data_type, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str(fmt), c.ImGuiSliderFlags_AlwaysClamp)) return null;
-        return v;
-    }
-    var step: T = 1;
-    var fast: T = 100;
-    if (!ui.raw("ImGui_InputScalarEx")(ui.str("##v"), data_type, @ptrCast(&v), @ptrCast(&step), @ptrCast(&fast), ui.str(fmt), 0)) return null;
-    return std.math.clamp(v, lo, hi);
-}
-
-fn float(current: f64, range: ?[2]f64) ?f64 {
-    var v = current;
-    const changed = if (range) |r| blk: {
-        var lo = r[0];
-        var hi = r[1];
-        break :blk ui.raw("ImGui_SliderScalarEx")(ui.str("##v"), c.ImGuiDataType_Double, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str("%.3f"), c.ImGuiSliderFlags_AlwaysClamp);
-    } else ui.raw("ImGui_InputDoubleEx")(ui.str("##v"), &v, 0, 0, ui.str("%.3f"), 0);
-    return if (changed) v else null;
-}
-
-/// The enum's names, or the number if it's none of them.
-fn choose(r: Ref, current: Ref.Value.Enum) ?i64 {
-    const t = r.named() orelse return null;
+/// An enum's names, as choices.
+fn enumChoices(r: Ref) []const TweakFields.Choice {
+    const t = r.named() orelse return &.{};
     const values = switch (t.kind) {
         .@"enum" => |e| e.values,
-        else => return null,
+        else => return &.{},
     };
-    var preview_buf: [96]u8 = undefined;
-    const preview = (if (current.name) |n| std.fmt.bufPrintSentinel(&preview_buf, "{s}", .{n}, 0) else std.fmt.bufPrintSentinel(&preview_buf, "{d}", .{current.value}, 0)) catch "?";
-    if (!ui.raw("ImGui_BeginCombo")(ui.str("##v"), ui.str(preview), c.ImGuiComboFlags_HeightLarge)) return null;
-    defer ui.raw("ImGui_EndCombo")();
-    var picked: ?i64 = null;
-    for (values, 0..) |item, i| {
-        const scope = ui.id(@as(i32, @intCast(i)));
-        defer scope.end();
-        var buf: [96]u8 = undefined;
-        const text = std.fmt.bufPrintSentinel(&buf, "{s}", .{item.name}, 0) catch continue;
-        const selected = item.value == current.value;
-        if (ui.selectable(text, selected)) picked = std.math.lossyCast(i64, item.value);
-        if (selected and ui.raw("ImGui_IsWindowAppearing")()) ui.raw("ImGui_SetItemDefaultFocus")();
-    }
-    return picked;
+    const n = @min(values.len, enum_buf.len);
+    for (values[0..n], enum_buf[0..n]) |item, *ch| ch.* = .{ .value = @floatFromInt(item.value), .label = item.name };
+    return enum_buf[0..n];
+}
+
+var enum_buf: [256]TweakFields.Choice = undefined;
+
+/// Where the game has `type_name` now, through its `[Instance]`. Null till the game makes it.
+/// The scan goes through `Names`, which keeps what it found and waits a bit before trying a miss again.
+pub fn instanceOf(schema: *const Schema, type_name: []const u8) ?usize {
+    const t = schema.findType(type_name) orelse return null;
+    const found = schema.staticOf(t, "instance") orelse return null;
+    var steps: [sigs.max_steps]Sig.Step = undefined;
+    const sig = (sigs.of(found.static.annotations, "wraith", "Sig", &steps) catch return null) orelse return null;
+    var buf: [128]u8 = undefined;
+    const label = std.fmt.bufPrint(&buf, "{s}.instance", .{t.name}) catch return null;
+    const at = Names.global.symbols().scan(sig, label).unwrap() catch return null;
+    var ptr: usize = 0;
+    Memory.local.read(at, std.mem.asBytes(&ptr)) catch return null;
+    return if (ptr == 0) null else ptr;
 }
 
 /// A list the game has, read again every so often, since it's slow for big ones.
 const Choices = struct {
     key: u64 = 0,
     read_ns: u64 = 0,
-    /// Where `[Instance]` found its root, once it has.
-    root_at: ?usize = null,
     arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
     list: []const TweakFields.Choice = &.{},
 };
@@ -296,9 +275,10 @@ var lists: [8]Choices = @splat(.{});
 var next_list: usize = 0;
 const reread_ns = 2 * std.time.ns_per_s;
 
-/// What `[Choices(path, id, name)]` lists now. Empty till the game has it.
+/// What `[Choices(path)]` lists now, by its items' `id` and `name`, or the fields named after the
+/// path. Empty till the game has it.
 pub fn choicesOf(schema: *const Schema, a: *const Schema.Annotation) []const TweakFields.Choice {
-    const path = if (a.args.len == 3 and a.args[0] == .string) a.args[0].string else return &.{};
+    const path = if (a.args.len > 0 and a.args[0] == .string) a.args[0].string else return &.{};
     const key = std.hash.Wyhash.hash(@intFromPtr(schema), path);
     const now = core.timing.now();
     const l = for (&lists) |*l| {
@@ -313,24 +293,16 @@ pub fn choicesOf(schema: *const Schema, a: *const Schema.Annotation) []const Twe
     if (l.read_ns != 0 and now -| l.read_ns < reread_ns) return l.list;
     l.read_ns = now;
     _ = l.arena.reset(.retain_capacity);
-    l.list = readChoices(schema, a, path, &l.root_at, l.arena.allocator()) catch &.{};
+    l.list = readChoices(schema, a, path, l.arena.allocator()) catch &.{};
     return l.list;
 }
 
-fn readChoices(schema: *const Schema, a: *const Schema.Annotation, path: []const u8, root_at: *?usize, arena: std.mem.Allocator) ![]const TweakFields.Choice {
-    const id_field = nameArg(a, 1) orelse return error.BadChoices;
-    const name_field = nameArg(a, 2) orelse return error.BadChoices;
+fn readChoices(schema: *const Schema, a: *const Schema.Annotation, path: []const u8, arena: std.mem.Allocator) ![]const TweakFields.Choice {
+    const id_field = if (a.args.len > 1) a.args[1].name() orelse return error.BadChoices else "id";
+    const name_field = if (a.args.len > 2) a.args[2].name() orelse return error.BadChoices else "name";
     const dot = std.mem.indexOfScalar(u8, path, '.') orelse return error.BadChoices;
     const type_name = path[0..dot];
-    // The signature's only run till it's found
-    const at = root_at.* orelse at: {
-        const found = try Ref.staticOf(schema, type_name, "instance").address.unwrap();
-        root_at.* = found;
-        break :at found;
-    };
-    var ptr: usize = 0;
-    @import("tuft_mem").Memory.local.read(at, std.mem.asBytes(&ptr)) catch return error.NotThere;
-    if (ptr == 0) return error.NotThere;
+    const ptr = instanceOf(schema, type_name) orelse return error.NotThere;
     return readList(Ref.of(schema, type_name, ptr), path[dot + 1 ..], id_field, name_field, arena);
 }
 
@@ -364,24 +336,21 @@ pub fn readList(root: Ref, rest: []const u8, id_field: []const u8, name_field: [
     return out.items;
 }
 
-fn isTextUnit(t: Schema.Ref) bool {
-    return t == .prim and (t.prim == .utf8 or t.prim == .utf16);
-}
-
 fn has(notes: []const Schema.Annotation, name: []const u8) bool {
     return Schema.findAnnotation(notes, "wraith", name) != null;
 }
 
-fn rangeOf(notes: []const Schema.Annotation) ?[2]f64 {
-    const a = Schema.findAnnotation(notes, "wraith", "Range") orelse return null;
-    if (a.args.len != 2) return null;
+/// `[Range(min, max)]`'s.
+fn limitsOf(notes: []const Schema.Annotation) TweakFields.Limits {
+    const a = Schema.findAnnotation(notes, "wraith", "Range") orelse return .{};
+    if (a.args.len != 2) return .{};
     var out: [2]f64 = undefined;
     for (a.args, &out) |arg, *o| o.* = switch (arg) {
         .int => |i| @floatFromInt(i),
         .float => |f| f,
-        else => return null,
+        else => return .{},
     };
-    return out;
+    return .{ .min = out[0], .max = out[1] };
 }
 
 /// Elements share the array's notes, but not its name.
@@ -389,47 +358,9 @@ fn withoutLabel(notes: []const Schema.Annotation) []const Schema.Annotation {
     return if (Schema.findAnnotation(notes, "wraith", "Label") != null) &.{} else notes;
 }
 
-/// An ident or a string.
-fn nameArg(a: *const Schema.Annotation, i: usize) ?[]const u8 {
-    if (i >= a.args.len) return null;
-    return switch (a.args[i]) {
-        .ident, .string => |n| n,
-        else => null,
-    };
-}
-
 /// `[Label]`'s, else the name for people, so `gourmet_points` and `gourmetPoints` are both
 /// "Gourmet points".
 pub fn labelOf(buf: []u8, name: []const u8, notes: []const Schema.Annotation) []const u8 {
     if (Schema.findAnnotation(notes, "wraith", "Label")) |a| if (a.args.len == 1 and a.args[0] == .string) return a.args[0].string;
-    return humanName(buf, name);
-}
-
-pub fn humanName(buf: []u8, name: []const u8) []const u8 {
-    var n: usize = 0;
-    for (name, 0..) |ch, i| {
-        if (n + 2 > buf.len) break;
-        if (ch == '_') {
-            if (n > 0 and buf[n - 1] != ' ') {
-                buf[n] = ' ';
-                n += 1;
-            }
-            continue;
-        }
-        if (std.ascii.isUpper(ch) and i > 0 and std.ascii.isLower(name[i - 1])) {
-            buf[n] = ' ';
-            n += 1;
-            buf[n] = std.ascii.toLower(ch);
-        } else buf[n] = if (n == 0) std.ascii.toUpper(ch) else ch;
-        n += 1;
-    }
-    return buf[0..n];
-}
-
-test "names for people" {
-    var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("Gourmet points", humanName(&buf, "gourmet_points"));
-    try std.testing.expectEqualStrings("Gourmet points", humanName(&buf, "gourmetPoints"));
-    try std.testing.expectEqualStrings("Mira", humanName(&buf, "mira"));
-    try std.testing.expectEqualStrings("Hp max", humanName(&buf, "_hp__max"));
+    return ui.humanName(buf, name);
 }

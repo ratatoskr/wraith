@@ -19,8 +19,9 @@ const std = @import("std");
 const api = @import("wraith_api");
 pub const rt = @import("salamander_runtime");
 /// Through generated structs' pointers, like `follow(manager, "items.table.data")`. Null at a
-/// null one.
+/// null one or one that can't be read, so a stale pointer doesn't crash the game.
 pub const follow = rt.follow;
+const Memory = @import("tuft_mem").Memory;
 
 pub const Error = error{SalamanderUnavailable};
 
@@ -29,12 +30,13 @@ var render_queue: ?rt.Queue = null;
 var services: []api.wraith.raw.Service = &.{};
 
 /// The runtime's host from now on, for every Salamander call this plugin makes. Code its schemas
-/// declare, like `Player.heal` in generated Zig, is found through its `Schema` area.
+/// declare, like `Player.heal` in generated Zig, is found through its `Schema` area, and memory is
+/// read like scripts read it.
 pub fn attach(h: rt.Host, o: ?*rt.Owner, queue: rt.Queue, offered: []const api.wraith.raw.Service) void {
     rt.setHost(h);
     own_owner = o;
     render_queue = if (queue.table != null) queue else null;
-    rt.declared.setLocator(.{ .address = locate });
+    rt.declared.setLocator(locator(null, locate));
     // Only good during start, so it's copied. What it points at lives as long as those plugins
     services = std.heap.page_allocator.dupe(api.wraith.raw.Service, offered) catch &.{};
 }
@@ -54,6 +56,22 @@ pub fn service(comptime T: type, plugin: []const u8) ?T {
         if (std.mem.eql(u8, s.plugin.get(), plugin) and std.mem.eql(u8, s.trait.get(), name)) return rt.host().adapt(T, s.obj);
     }
     return null;
+}
+
+/// Finds names with `address` and reads this process's memory without faulting. What plugins,
+/// scripts and sessions all find things with.
+pub fn locator(ctx: ?*anyopaque, address: *const fn (ctx: ?*anyopaque, name: []const u8) anyerror!usize) rt.declared.Locator {
+    return .{ .ctx = ctx, .address = address, .read = readMemory, .write = writeMemory };
+}
+
+fn readMemory(_: ?*anyopaque, at: usize, out: []u8) bool {
+    Memory.local.read(at, out) catch return false;
+    return true;
+}
+
+fn writeMemory(_: ?*anyopaque, at: usize, bytes: []const u8) bool {
+    Memory.local.write(at, bytes) catch return false;
+    return true;
 }
 
 fn locate(_: ?*anyopaque, name: []const u8) anyerror!usize {

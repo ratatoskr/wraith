@@ -201,7 +201,7 @@ pub const UiImpl = struct {
         const s = loaded.schemas orelse return false;
         const schema = &s.parsed.schema;
         if (schema.findType(type_name) == null) return false;
-        const at = if (address != 0) address else struct_tweaks.instance(s, type_name) orelse return false;
+        const at = if (address != 0) address else StructEditor.instanceOf(schema, type_name) orelse return false;
         return StructEditor.draw(schema, type_name, at);
     }
 

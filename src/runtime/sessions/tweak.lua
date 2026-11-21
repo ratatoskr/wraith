@@ -411,6 +411,8 @@ end
 
 -- The tweak file's saved id, like `kai`, set by the provider
 __t.file = ""
+-- Its project's schemas, which a tweak's own come after
+__t.project = ""
 
 -- An absolute saved id as `./` relative to this file if it's in it
 local function relative(name)
@@ -552,7 +554,8 @@ function __t.schema(line, text)
   local _, lines_before = cur.schema_text:gsub("\n", "")
   cur.schemas[#cur.schemas + 1] = { start = lines_before + 1, line = line }
   cur.schema_text = cur.schema_text .. "\n" .. text
-  local ok, parsed = pcall(sal.load, "tweak", cur.schema_text)
+  local project = __t.project ~= "" and (__t.project .. '\nfile "tweak.sal";\n') or ""
+  local ok, parsed = pcall(sal.load, "tweak", project .. cur.schema_text)
   if ok then
     -- So the runtime knows them too, for hooks' signatures
     schema:add("tweak.sal", cur.schema_text)
@@ -560,7 +563,7 @@ function __t.schema(line, text)
     if cur == shared then types = parsed end
     return parsed
   end
-  local message = message_of(parsed):gsub("^tweak%.sal: ", "")
+  local message = message_of(parsed):gsub("^tweak%.sal: ?", "")
   local n, rest = message:match("^(%d+):%d+: (.*)$")
   if not n then fail(line, message) end
   n = tonumber(n)

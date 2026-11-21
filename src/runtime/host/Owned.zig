@@ -32,6 +32,25 @@ pub fn stopTagged(owner: *const Owner, tag: u32) void {
     for (copy[0..n]) |l| l.stop(l.ctx, owner, tag);
 }
 
+/// For things kept by owner somewhere else, like in `Names`: `gone` cleans an owner's up once
+/// `when` happens to it. Hold a lease while adding for one, which is null once it's going.
+/// `.closing` is for calls into its code, `.released` for data that's fine to read till then.
+pub fn OnGone(comptime when: enum { closing, released }, comptime gone: fn (*Owner) void) type {
+    return struct {
+        const Self = @This();
+
+        watch: Owner.Watch(*Self, if (when == .closing) .{ .closing = on } else .{ .released = on }) = .{},
+
+        fn on(_: *Self, owner: *Owner) void {
+            gone(owner);
+        }
+
+        pub fn lease(self: *Self, owner: *Owner) ?Owner.Lease {
+            return self.watch.lease(self, owner, if (when == .closing) .calls else .data);
+        }
+    };
+}
+
 pub fn Owned(comptime Record: type) type {
     return struct {
         const Self = @This();

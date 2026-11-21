@@ -4,6 +4,7 @@ const std = @import("std");
 
 const core = @import("wraith_core");
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
@@ -11,7 +12,7 @@ const log = core.log.scoped(.wraith_runtime);
 
 /// Ignored once `plugin` is released.
 pub fn addZone(loaded: *Loaded, zone: *core.timing.Zone) void {
-    const lease = keeping(loaded) orelse return;
+    const lease = cleanup.lease(&loaded.owner) orelse return;
     defer lease.end();
     core.timing.registry.addShared(zone, &loaded.owner) catch log.warn("No memory to list a zone for {s}", .{loaded.name});
 }
@@ -21,7 +22,7 @@ pub fn removeZone(zone: usize) void {
 }
 
 pub fn addHeap(loaded: *Loaded, heap: *core.heap.Usage) void {
-    const lease = keeping(loaded) orelse return;
+    const lease = cleanup.lease(&loaded.owner) orelse return;
     defer lease.end();
     core.heap.registry.addShared(heap, &loaded.owner) catch log.warn("No memory to list a heap for {s}", .{loaded.name});
 }
@@ -30,14 +31,9 @@ pub fn removeHeap(heap: usize) void {
     core.heap.registry.removeShared(@ptrFromInt(heap));
 }
 
-fn keeping(loaded: *Loaded) ?Owner.Lease {
-    return watch.lease(&listener, &loaded.owner, .data);
-}
+var cleanup: OnGone(.released, released) = .{};
 
-var watch: Owner.Watch(*u8, .{ .released = released }) = .{};
-var listener: u8 = 0;
-
-fn released(_: *u8, owner: *Owner) void {
+fn released(owner: *Owner) void {
     core.timing.registry.removeOwner(owner);
     core.heap.registry.removeOwner(owner);
 }

@@ -1,6 +1,7 @@
 //! The workbench's script sessions, in JS or Lua on Salamander. Requests come as runtime messages,
 //! and each session is a script of its own that keeps its state between runs, with Wraith's areas
-//! as globals like `frame` and `hooks`. Tweaks run in them too, each in a session of its own.
+//! as globals like `frame` and `hooks`. Tweaks run in them too, each in a session of its own. Each
+//! is for a project, and starts with its schemas and names, see `host.projects`.
 //!
 //! Everything happens on the render thread, in a task its queue runs once a frame.
 
@@ -89,8 +90,9 @@ const Live = struct {
     loaded: Loaded,
     script: hosts.Script = undefined,
     language: Language,
-    /// Finds what its schemas declare, for the `schema` module.
-    schema: sal.Object(host.wraith.SchemaArea) = .{},
+    exposed: scripts.Exposed = .{},
+    /// Its project's schemas as one text, which a tweak's own `@schema` comes after.
+    project_text: []u8 = &.{},
 
     fn languageName(l: *const Live) []const u8 {
         return @tagName(l.language);
@@ -108,8 +110,10 @@ const Request = struct {
     /// A group's `@tweak`.
     part: []u8 = &.{},
     shared_values: []tweak.Value = &.{},
+    project: []u8 = &.{},
 
     fn free(self: Request, gpa: std.mem.Allocator) void {
+        gpa.free(self.project);
         gpa.free(self.name);
         gpa.free(self.code);
         gpa.free(self.language);
@@ -206,6 +210,7 @@ fn copyRun(self: *Sessions, request: protocol.Run) !Request {
     r.code = try self.gpa.dupe(u8, request.code);
     r.language = try self.gpa.dupe(u8, request.language);
     r.part = try self.gpa.dupe(u8, request.part);
+    r.project = try self.gpa.dupe(u8, request.project);
     r.values = try self.copyValues(request.values);
     r.shared_values = try self.copyValues(request.shared_values);
     return r;
@@ -284,7 +289,7 @@ fn run(self: *Sessions, r: Request) void {
         self.reset(session);
         session.language = language;
     }
-    const live = session.live orelse (self.makeLive(session) catch |err| {
+    const live = session.live orelse (self.makeLive(session, r.project) catch |err| {
         self.send(r.session, .thrown, "Couldn't start a script: {t}", .{err});
         return;
     });
@@ -320,12 +325,12 @@ fn runTweak(self: *Sessions, r: Request) void {
 
     if (!file.grouped) {
         if (self.find(id) != null) return self.send(id, .thrown, "A tweak gets a session of its own", .{});
-        const session = self.openTweak(id, r.name, language) orelse return;
+        const session = self.openTweak(id, r.name, language, r.project) orelse return;
         return self.reportPart(a, session, "", self.runPart(session, a, r.code, file, .whole, r.values, ""));
     }
     const target = file.resolve(part) orelse return self.sendPart(id, part, .thrown, "There's no @tweak or @group \"{s}\" in it", .{part});
     const session = self.find(id) orelse blk: {
-        const session = self.openTweak(id, r.name, language) orelse return;
+        const session = self.openTweak(id, r.name, language, r.project) orelse return;
         const shared = self.runPart(session, a, r.code, file, .{ .group = 0 }, if (part.len == 0) r.values else r.shared_values, "");
         self.reportPart(a, session, "", shared);
         if (shared == .thrown) {
@@ -347,13 +352,13 @@ fn runTweak(self: *Sessions, r: Request) void {
     self.reportPart(a, session, part, self.runPart(session, a, r.code, file, target, r.values, part));
 }
 
-fn openTweak(self: *Sessions, id: u32, name: []const u8, language: Language) ?*Session {
+fn openTweak(self: *Sessions, id: u32, name: []const u8, language: Language, project: []const u8) ?*Session {
     const session = self.open(id, name, language) catch |err| {
         self.send(id, .thrown, "Couldn't start a session: {t}", .{err});
         return null;
     };
     session.tweak = true;
-    _ = self.makeLive(session) catch |err| {
+    _ = self.makeLive(session, project) catch |err| {
         self.send(id, .thrown, "Couldn't start a script: {t}", .{err});
         return null;
     };
@@ -414,6 +419,16 @@ fn evalPart(self: *Sessions, session: *Session, a: std.mem.Allocator, source: []
         switch (try evalCopy(live, a, set_file)) {
             .thrown => |t| return .{ .thrown = t },
             .value => {},
+        }
+        if (live.project_text.len > 0) {
+            const set_project = switch (live.language) {
+                .js => try std.fmt.allocPrint(a, "__t.project = {f}", .{std.json.fmt(live.project_text, .{})}),
+                .lua => try std.fmt.allocPrint(a, "__t.project = {f}", .{tweak.luaString(live.project_text)}),
+            };
+            switch (try evalCopy(live, a, set_project)) {
+                .thrown => |t| return .{ .thrown = t },
+                .value => {},
+            }
         }
     }
     const code = try tweak.compilePart(a, source, file, part, values);
@@ -516,8 +531,9 @@ fn open(self: *Sessions, id: u32, name: []const u8, language: Language) !*Sessio
     return session;
 }
 
-/// Its script, owning what it makes like a plugin does, with Wraith's areas in scope.
-fn makeLive(self: *Sessions, session: *Session) !*Live {
+/// Its script, owning what it makes like a plugin does, with Wraith's areas and its project's
+/// schemas in scope.
+fn makeLive(self: *Sessions, session: *Session, project: []const u8) !*Live {
     const gpa = self.gpa;
     const live = try gpa.create(Live);
     errdefer gpa.destroy(live);
@@ -529,42 +545,41 @@ fn makeLive(self: *Sessions, session: *Session) !*Live {
     errdefer gpa.free(game_config_dir);
     live.* = .{ .loaded = undefined, .language = session.language };
     live.loaded.initBare(gpa, name, config_dir, game_config_dir);
+    live.loaded.session = true;
     live.loaded.echo = .{ .ctx = session, .write = echoed };
     errdefer {
         live.loaded.owner.close();
         live.loaded.owner.release();
-        host.wraith.forget(&live.loaded);
+        live.loaded.free();
     }
+    try useProject(live, gpa, project);
+    errdefer freeProject(live, gpa);
 
-    live.script = try hosts.create(session.language, .{
-        .gpa = gpa,
-        .resolver = .{ .ctx = live, .resolve = resolve, .read = read },
-        .report = .{ .ctx = session, .f = thrownLater },
-        .policy = .{ .how = scripts.policy },
-        .schema_options = api.sal_options,
-        .locator = .{ .ctx = live, .address = locate, .read = readMemory, .write = writeMemory },
-    });
+    live.script = try live.exposed.create(session.language, gpa, .{ .ctx = live, .resolve = resolve, .read = read }, .{ .ctx = session, .f = thrownLater });
     errdefer live.script.deinit();
-    try expose(live);
+    const wraith = host.wraith.root(&live.loaded).as(@FieldType(host.wraith.Guest, "wraith"));
+    if (wraith.table == null) return error.OutOfMemory;
+    try live.exposed.expose(live.script, wraith, if (live.loaded.schemas) |s| s.text else api.wraith_sal, true);
     session.live = live;
     return live;
 }
 
-/// Wraith's areas, as globals and as the `wraith` module.
-fn expose(live: *Live) !void {
-    const root = host.wraith.root(&live.loaded);
-    const wraith = root.as(@FieldType(host.wraith.Guest, "wraith"));
-    if (wraith.table == null) return error.OutOfMemory;
-    const types = try live.script.schema(api.wraith_sal);
-    live.schema = sal.invoke(host.wraith.Wraith, "schema", wraith, .{});
-    const methods = host.wraith.Wraith.salamander.methods;
-    var exports: [methods.len]engine.Export = undefined;
-    inline for (methods, 0..) |m, i| {
-        const area = sal.invoke(host.wraith.Wraith, m.name, wraith, .{});
-        exports[i] = .{ .name = m.name, .schema = types, .trait = @TypeOf(area).salamander.name, .obj = .of(area) };
-        try live.script.expose(m.name, exports[i]);
-    }
-    try live.script.module("wraith", &exports);
+/// Its project's schemas as its own, like a plugin's. Ones that don't check out are left out, since
+/// the project says why.
+fn useProject(live: *Live, gpa: std.mem.Allocator, project: []const u8) !void {
+    live.loaded.project = try gpa.dupe(u8, project);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const files = host.projects.files(project, arena.allocator());
+    if (files.len == 0) return;
+    live.loaded.schemas = host.schemas.fromFiles(files) catch null;
+    if (live.loaded.schemas == null) return;
+    live.project_text = try gpa.dupe(u8, host.projects.bundle(project, arena.allocator()));
+}
+
+fn freeProject(live: *Live, gpa: std.mem.Allocator) void {
+    if (live.loaded.project) |p| gpa.free(p);
+    gpa.free(live.project_text);
 }
 
 /// Stops what it started and forgets its variables.
@@ -579,13 +594,11 @@ fn reset(self: *Sessions, session: *Session) void {
     live.script.interrupt();
     live.script.deinit();
     live.loaded.owner.release();
-    host.wraith.forget(&live.loaded);
-    if (live.loaded.schemas) |s| s.destroy();
-    for (live.loaded.retired_schemas.items) |s| s.destroy();
-    live.loaded.retired_schemas.deinit(std.heap.page_allocator);
+    live.loaded.free();
     self.gpa.free(live.loaded.name);
     self.gpa.free(live.loaded.config_dir);
     self.gpa.free(live.loaded.game_config_dir);
+    freeProject(live, self.gpa);
     self.gpa.destroy(live);
 }
 
@@ -597,21 +610,6 @@ fn end(self: *Sessions, session: *Session) void {
 }
 
 // Its script's needs
-
-fn locate(ctx: ?*anyopaque, name: []const u8) anyerror!usize {
-    const live: *Live = @ptrCast(@alignCast(ctx.?));
-    return live.schema.address(name);
-}
-
-fn readMemory(_: ?*anyopaque, address: usize, out: []u8) bool {
-    mem.Memory.local.read(address, out) catch return false;
-    return true;
-}
-
-fn writeMemory(_: ?*anyopaque, address: usize, bytes: []const u8) bool {
-    mem.Memory.local.write(address, bytes) catch return false;
-    return true;
-}
 
 /// Only shared libraries, since a session has no folder.
 fn resolve(ctx: ?*anyopaque, buf: []u8, _: []const u8, name: []const u8) ?[]const u8 {
@@ -749,6 +747,44 @@ const tests = struct {
         rig.step();
         try testing.expectEqualStrings("42", rig.heard.line(10));
         try testing.expectEqualStrings("function", rig.heard.line(12));
+    }
+
+    test "a tweak starts with its project's schemas and names" {
+        const Names = @import("../Names.zig");
+        const SharedSchemas = @import("../SharedSchemas.zig");
+        Names.global = .init(testing.allocator);
+        defer Names.global.deinit();
+        SharedSchemas.global = .init(testing.allocator);
+        defer SharedSchemas.global.deinit();
+        var rig: Rig = undefined;
+        try rig.init();
+        defer rig.deinit();
+
+        var gold: u32 = 70;
+        var buf: [128]u8 = undefined;
+        const list = try std.fmt.bufPrint(&buf, ".{{ .items = .{{ .{{ .id = \"gold\", .address = \"0x{x}\" }} }} }}", .{@intFromPtr(&gold)});
+        _ = host.projects.set(.{ .key = "kai_tables", .title = "Kai Tables", .schemas = &.{.{ .name = "schemas/game.sal", .text = "struct Bank { u32 mira; u32 gold; }\n" }}, .addresses = list });
+        defer host.projects.keep(&.{});
+        try testing.expect(Names.global.has(.plugin, "kai_tables.gold"));
+
+        // Its project's types under its own, and its names without the mod's in front
+        try rig.send(protocol.topics.run, protocol.Run{
+            .session = 4,
+            .name = "t",
+            .code = "@schema\nstruct Wallet { Bank bank; }\n@js\nglobalThis.both = String(!!types.Wallet && !!types.Bank); globalThis.at = String(addresses.resolve(\"gold\", []));",
+            .tweak = true,
+            .project = "kai_tables",
+        });
+        rig.step();
+        try rig.expectFine();
+        try testing.expectEqualStrings("true", rig.eval(4, "both"));
+        const at = try std.fmt.bufPrint(&buf, "{d}", .{@intFromPtr(&gold)});
+        try testing.expectEqualStrings(at, rig.eval(4, "at"));
+        // A script session has them as its `schema` module
+        try rig.send(protocol.topics.run, protocol.Run{ .session = 6, .language = "lua", .code = "return tostring(require('schema').Bank ~= nil)", .project = "kai_tables" });
+        rig.step();
+        try rig.expectFine();
+        try testing.expectEqualStrings("true", rig.heard.lines.items[rig.heard.lines.items.len - 1].text);
     }
 
     noinline fn tweaked(x: u32) callconv(.c) u32 {

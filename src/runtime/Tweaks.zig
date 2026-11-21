@@ -72,14 +72,11 @@ pub const Info = struct {
     path: []const u8,
     /// Its path in its group's file, like `Combat/Max HP`. Empty for a whole file.
     part: []const u8 = "",
-    /// The plugin that added it. It has no file to edit.
-    plugin: ?[]const u8 = null,
-    /// That plugin's title.
-    plugin_title: ?[]const u8 = null,
-    /// The installed project mod it's from, by id. It has no file to edit either.
-    mod: ?[]const u8 = null,
-    /// That mod's title.
-    mod_title: ?[]const u8 = null,
+    /// Where it's from. Only your project's have a file to edit.
+    source: Tweak.Source.Kind = .project,
+    /// The mod's or plugin's id, empty for your project's.
+    source_id: []const u8 = "",
+    source_title: []const u8 = "",
     /// A group, the file's or one nested in it, with what's in it after it.
     is_group: bool = false,
     /// The name of the group it's in.
@@ -143,13 +140,17 @@ switches: switching.Switches = .{},
 /// The generation `switches` last caught up with.
 switches_seen: u32 = 0,
 
-/// An installed project mod's tweaks. Its tweak files are named `id:file`, like a plugin's
-/// `plugin:id`, so what's kept for them outlasts updates.
+/// An installed project mod. Its tweak files are named `id:file`, like a plugin's `plugin:id`, so
+/// what's kept for them outlasts updates.
 pub const ModProject = struct {
     id: []const u8,
     title: []const u8,
     /// Its `tweaks/*.rwt`, by path like `tweaks/speed.rwt`.
     files: []const ModFile,
+    /// Its `schemas/*.sal`, named like `schemas/game.sal`.
+    schemas: []const @import("host/projects.zig").File = &.{},
+    /// Its address list as saved.
+    addresses: ?[]const u8 = null,
 };
 
 pub const ModFile = struct {
@@ -164,17 +165,31 @@ pub fn setMods(self: *Tweaks, mods: []const ModProject) !void {
     errdefer arena.deinit();
     const a = arena.allocator();
     const copy = try a.alloc(ModProject, mods.len);
-    for (mods, copy) |m, *c| {
-        const files = try a.alloc(ModFile, m.files.len);
-        for (m.files, files) |f, *to| to.* = .{ .path = try a.dupe(u8, f.path), .text = try a.dupe(u8, f.text) };
-        c.* = .{ .id = try a.dupe(u8, m.id), .title = try a.dupe(u8, m.title), .files = files };
-    }
+    for (mods, copy) |m, *c| c.* = .{
+        .id = try a.dupe(u8, m.id),
+        .title = try a.dupe(u8, m.title),
+        .files = try copyFiles(a, m.files),
+        .schemas = try copySchemas(a, m.schemas),
+        .addresses = if (m.addresses) |text| try a.dupe(u8, text) else null,
+    };
     self.lock.lock();
     defer self.lock.unlock();
     if (self.mods_arena) |*old| old.deinit();
     self.mods_arena = arena;
     self.mods = copy;
     _ = self.mods_version.fetchAdd(1, .release);
+}
+
+fn copyFiles(a: std.mem.Allocator, from: []const ModFile) ![]const ModFile {
+    const out = try a.alloc(ModFile, from.len);
+    for (from, out) |f, *to| to.* = .{ .path = try a.dupe(u8, f.path), .text = try a.dupe(u8, f.text) };
+    return out;
+}
+
+fn copySchemas(a: std.mem.Allocator, from: []const @import("host/projects.zig").File) ![]const @import("host/projects.zig").File {
+    const out = try a.alloc(@import("host/projects.zig").File, from.len);
+    for (from, out) |f, *to| to.* = .{ .name = try a.dupe(u8, f.name), .text = try a.dupe(u8, f.text) };
+    return out;
 }
 
 /// Under the lock. A file's text, the project's or a mod's. The caller frees it.
@@ -185,6 +200,15 @@ pub fn readFile(self: *Tweaks, mod: ?[]const u8, path: []const u8) ?[]u8 {
         for (m.files) |f| if (std.mem.eql(u8, f.path, path)) return self.allocator.dupe(u8, f.text) catch null;
     }
     return null;
+}
+
+/// Under the lock. Where it's from, for headings.
+pub fn sourceTitle(self: *const Tweaks, t: *const Tweak) []const u8 {
+    return switch (t.source.kind) {
+        .project => "Your project",
+        .mod => self.modTitle(t.source.id) orelse t.source.id,
+        .plugin => t.source.title,
+    };
 }
 
 /// Under the lock. A mod's title, by id.
@@ -225,6 +249,7 @@ pub fn destroy(self: *Tweaks) void {
     self.list.deinit(self.allocator);
     self.calls.deinit(self.allocator);
     if (self.mods_arena) |*a| a.deinit();
+    @import("host/projects.zig").keep(&.{});
     self.switches.deinit();
     self.kept.deinit();
     self.allocator.destroy(self);
@@ -305,10 +330,9 @@ pub fn snapshot(self: *Tweaks, arena: std.mem.Allocator) ![]Info {
             .title = try arena.dupe(u8, t.title()),
             .path = try arena.dupe(u8, t.path),
             .part = try arena.dupe(u8, t.part),
-            .plugin = if (t.plugin) |p| try arena.dupe(u8, p) else null,
-            .plugin_title = if (t.plugin_title) |p| try arena.dupe(u8, p) else null,
-            .mod = if (t.mod) |m| try arena.dupe(u8, m) else null,
-            .mod_title = if (t.mod) |m| if (self.modTitle(m)) |title| try arena.dupe(u8, title) else null else null,
+            .source = t.source.kind,
+            .source_id = try arena.dupe(u8, t.source.id),
+            .source_title = try arena.dupe(u8, self.sourceTitle(t)),
             .is_group = t.is_group,
             .group = if (t.group) |g| try arena.dupe(u8, g.name) else null,
             .depth = t.depth(),
@@ -504,6 +528,79 @@ const tests = struct {
         try testing.expectEqualStrings("speed", shown[0].name);
     }
 
+    test "[Tweak] structs in tweak files' schemas list with them" {
+        const struct_tweaks = @import("host/struct_tweaks.zig");
+        var s: support.Setup = try .init(&.{
+            .{ "tweaks/money.rwt", "@tweak \"Money\"\n@schema\n[Instance(\"90 90\"), Tweak(\"Bank\")] struct Bank { u32 mira; }\n@js\n" },
+            // A group's shared part is in each of its tweaks', and shows once
+            .{ "tweaks/kai.rwt", "@group \"Kai\"\n@schema\n[Instance(\"90 90\"), Tweak(\"Party\")] struct Party { u32 size; }\n@tweak \"One\"\n@schema\n[Instance(\"90 90\"), Tweak(\"Items\")] struct Items { u32 count; }\n@js\n@tweak \"Two\"\n@js\n" },
+            .{ "tweaks/plain.rwt", "@schema\nstruct Nothing { u32 x; }\n@js\n" },
+        });
+        defer s.deinit();
+        var fake: support.Fake = .{};
+        {
+            const tweaks = try create(testing.allocator, s.project, null, .{}, fake.env());
+            defer tweaks.destroy();
+            tweaks.tick();
+            var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+            defer arena.deinit();
+            const listed = struct_tweaks.snapshot(arena.allocator(), "");
+            try testing.expectEqual(3, listed.len);
+            for (listed) |e| {
+                try testing.expectEqualStrings("", e.source);
+                try testing.expectEqualStrings("Your project", e.source_title);
+            }
+        }
+        try testing.expectEqual(0, struct_tweaks.count());
+    }
+
+    test "a project's schemas publish like a plugin's, the open one's and mods'" {
+        const struct_tweaks = @import("host/struct_tweaks.zig");
+        const Names = @import("Names.zig");
+        const SharedSchemas = @import("SharedSchemas.zig");
+        Names.global = .init(testing.allocator);
+        defer Names.global.deinit();
+        SharedSchemas.global = .init(testing.allocator);
+        defer SharedSchemas.global.deinit();
+        var s: support.Setup = try .init(&.{
+            .{ "schemas/game.sal", "[Instance(\"90 90\"), Tweak(\"Bank\")] struct Bank { u32 mira; }\n[Sig(\"90 90 90\")] static u32 ticks;\n" },
+            // Its own structs can use the project's types
+            .{ "tweaks/money.rwt", "@schema\n[Instance(\"90 90\"), Tweak(\"Wallet\")] struct Wallet { Bank* bank; }\n@js\n" },
+            .{ "addresses.rwa.zon", ".{ .items = .{ .{ .id = \"cash\", .address = \"0x20\" } } }" },
+        });
+        defer s.deinit();
+        var fake: support.Fake = .{};
+        const tweaks = try create(testing.allocator, s.project, null, .{}, fake.env());
+        defer tweaks.destroy();
+        tweaks.tick();
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena.deinit();
+        const listed = struct_tweaks.snapshot(arena.allocator(), "");
+        try testing.expectEqual(2, listed.len);
+        for (listed) |e| try testing.expectEqualStrings("", e.source);
+        try testing.expect(Names.global.has(.schema, "ticks"));
+        // Its address list's ids are yours, as you edit them
+        try testing.expectEqual(0x20, try Names.global.get("cash"));
+        try s.project.write("addresses.rwa.zon", ".{ .items = .{ .{ .id = \"cash\", .address = \"0x30\" } } }");
+        tweaks.tick();
+        try testing.expectEqual(0x30, try Names.global.get("cash"));
+        try testing.expect(Names.global.has(.user, "cash"));
+
+        // A mod's are named after it
+        try tweaks.setMods(&.{.{ .id = "kai_tables", .title = "Kai Tables", .files = &.{}, .schemas = &.{
+            .{ .name = "schemas/kai.sal", .text = "[Sig(\"90 90 90\")] static u32 level;\n" },
+        }, .addresses = ".{ .items = .{ .{ .id = \"base\", .address = \"0x10\" } } }" }});
+        tweaks.tick();
+        try testing.expect(Names.global.has(.schema, "kai_tables.level"));
+        try testing.expectEqual(0x10, try Names.global.get("kai_tables.base"));
+
+        // And go when it does
+        try tweaks.setMods(&.{});
+        tweaks.tick();
+        try testing.expect(!Names.global.has(.schema, "kai_tables.level"));
+        try testing.expect(Names.global.has(.schema, "ticks"));
+    }
+
     test "installed projects' tweaks, read-only, and kept on through an update" {
         var s: support.Setup = try .init(&.{.{ "tweaks/health.rwt", "@js\nmine" }});
         defer s.deinit();
@@ -522,10 +619,10 @@ const tests = struct {
         try testing.expectEqual(2, shown.len);
         // The project's first, then the mod's, named after it
         try testing.expectEqualStrings("health", shown[0].name);
-        try testing.expectEqual(null, shown[0].mod);
+        try testing.expectEqual(.project, shown[0].source);
         try testing.expectEqualStrings("kai_tables:speed", shown[1].name);
-        try testing.expectEqualStrings("kai_tables", shown[1].mod.?);
-        try testing.expectEqualStrings("Kai Tables", shown[1].mod_title.?);
+        try testing.expectEqualStrings("kai_tables", shown[1].source_id);
+        try testing.expectEqualStrings("Kai Tables", shown[1].source_title);
         try testing.expectEqualStrings("Speed", shown[1].title);
 
         tweaks.setOn("kai_tables:speed", true);

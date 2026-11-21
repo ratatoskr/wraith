@@ -1,4 +1,4 @@
-//! One tweak, from a project file or a plugin, and where it is in its life.
+//! One tweak, from a project's file or a plugin, and where it is in its life.
 
 const Tweak = @This();
 
@@ -37,6 +37,19 @@ pub const State = enum {
     }
 };
 
+/// Where it's from. A plugin runs its own instead of a session, and only your project's have
+/// files to edit.
+pub const Source = struct {
+    kind: Kind = .project,
+    /// The mod's or plugin's id. Empty for your project's, which is also its project's key.
+    id: []const u8 = "",
+    /// A plugin's title. A mod's comes from `Tweaks.modTitle`, since an update can change it.
+    title: []const u8 = "",
+
+    /// Listed in this order.
+    pub const Kind = enum { project, mod, plugin };
+};
+
 pub const Field = struct {
     tweak: *Tweak,
     def: *const format.Field,
@@ -52,12 +65,7 @@ path: []u8,
 /// `x`, or `plugin:id` for a plugin's, or `x/Title` for one of group `x`'s tweaks, and
 /// `x/Combat/Title` for one in a group nested in it.
 name: []u8,
-/// The plugin that added it, which runs it instead of a session.
-plugin: ?[]u8 = null,
-/// That plugin's title.
-plugin_title: ?[]u8 = null,
-/// The installed project mod its file's from, by id. Null for the project's own.
-mod: ?[]u8 = null,
+source: Source = .{},
 /// A group, the file's own or one nested in it. Its state is its shared part's.
 is_group: bool = false,
 /// The group it's in, the file's or a nested one.
@@ -98,6 +106,21 @@ fields: []Field = &.{},
 /// Where its session put its data, in `live_arena`. Empty while it's off.
 live: []const protocol.TweakState.Field = &.{},
 live_arena: std.heap.ArenaAllocator,
+
+/// A plugin runs it, not a session.
+pub fn byPlugin(self: *const Tweak) bool {
+    return self.source.kind == .plugin;
+}
+
+/// The mod its file's from, for `Tweaks.readFile`. Null for your project's.
+pub fn mod(self: *const Tweak) ?[]const u8 {
+    return if (self.source.kind == .mod) self.source.id else null;
+}
+
+/// The entry for a file, not a plugin's or something in a group's file.
+pub fn isFile(self: *const Tweak) bool {
+    return !self.byPlugin() and self.file == null;
+}
 
 pub fn liveField(self: *const Tweak, name: []const u8) ?*const protocol.TweakState.Field {
     for (self.live) |*f| if (std.mem.eql(u8, f.name, name)) return f;

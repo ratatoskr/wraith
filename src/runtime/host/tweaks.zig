@@ -8,6 +8,7 @@ const input = @import("wraith_platform").input;
 const sync = @import("tuft_sys").sync;
 const Atomic = @import("tuft_arch").atomic.Value;
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 
 const host = @import("root.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
@@ -47,8 +48,7 @@ var entries: std.ArrayList(*Entry) = .empty;
 /// Bumped when the list or a definition changes.
 var generation: Atomic(u32) = .init(1);
 
-var watch: Owner.Watch(*u8, .{ .closing = closing }) = .{};
-var listener: u8 = 0;
+var cleanup: OnGone(.closing, closing) = .{};
 
 /// Calls in flight on this thread, which removing can't wait for.
 threadlocal var calling: u32 = 0;
@@ -87,7 +87,7 @@ pub fn add(loaded: *Loaded, definition: W.TweakDefinition, handler: Handler) api
         return err;
     };
     errdefer entry.release();
-    const lease = watch.lease(&listener, &loaded.owner, .calls) orelse return error.OwnerGone;
+    const lease = cleanup.lease(&loaded.owner) orelse return error.OwnerGone;
     defer lease.end();
     try place(&loaded.owner, entry);
 }
@@ -188,7 +188,7 @@ fn finish(entry: *Entry) void {
     entry.release();
 }
 
-fn closing(_: *u8, owner: *Owner) void {
+fn closing(owner: *Owner) void {
     var gone: std.ArrayList(*Entry) = .empty;
     defer gone.deinit(allocator);
     {

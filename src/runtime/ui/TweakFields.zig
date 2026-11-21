@@ -47,34 +47,51 @@ pub fn control(f: *const Tweaks.FieldInfo, label: [:0]const u8) ?f64 {
         return if (ui.checkbox(label, &on)) @as(f64, if (on) 1 else 0) else null;
     }
     if (f.choices.len > 0) return choose(label, f.choices, f.value, f.hex);
-    if (f.type.isFloat()) return float(f, label);
-    return if (f.type.isSigned()) int(i64, f, label) else int(u64, f, label);
+    const limits: Limits = .{ .min = f.min, .max = f.max, .hex = f.hex };
+    if (f.type.isFloat()) return floatInput(label, f.value, limits);
+    if (f.type.isSigned()) return if (intInput(i64, label, std.math.lossyCast(i64, f.value), limits)) |v| @floatFromInt(v) else null;
+    return if (intInput(u64, label, std.math.lossyCast(u64, f.value), limits)) |v| @floatFromInt(v) else null;
 }
 
-fn float(f: *const Tweaks.FieldInfo, label: [:0]const u8) ?f64 {
-    var v = f.value;
-    const changed = if (f.min != null and f.max != null) blk: {
-        var lo = f.min.?;
-        var hi = f.max.?;
-        break :blk ui.raw("ImGui_SliderScalarEx")(ui.str(label), ui.c.ImGuiDataType_Double, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str("%.3f"), 0);
-    } else ui.raw("ImGui_InputDoubleEx")(ui.str(label), &v, 0, 0, ui.str("%.3f"), 0);
-    return if (changed) v else null;
-}
+/// What a number can be. Both ends make a slider, if they're near enough for one to pick from.
+pub const Limits = struct {
+    min: ?f64 = null,
+    max: ?f64 = null,
+    hex: bool = false,
+};
 
-fn int(comptime T: type, f: *const Tweaks.FieldInfo, label: [:0]const u8) ?f64 {
+/// Ranges wider than this get a number box, not a slider, since a slider's no good for picking one
+/// of millions.
+const max_slider = 1000;
+
+/// The new value if it changed, kept inside its limits. Tweak fields and the struct editor's.
+pub fn intInput(comptime T: type, label: [:0]const u8, value: T, limits: Limits) ?T {
     const data_type = if (T == i64) ui.c.ImGuiDataType_S64 else ui.c.ImGuiDataType_U64;
-    var v: T = std.math.lossyCast(T, f.value);
-    const fmt: [:0]const u8 = if (f.hex) "%llX" else if (T == i64) "%lld" else "%llu";
-    const changed = if (f.min != null and f.max != null) blk: {
-        var lo: T = std.math.lossyCast(T, f.min.?);
-        var hi: T = std.math.lossyCast(T, f.max.?);
-        break :blk ui.raw("ImGui_SliderScalarEx")(ui.str(label), data_type, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str(fmt), 0);
-    } else blk: {
-        var step: T = 1;
-        const flags: ui.c.ImGuiInputTextFlags = if (f.hex) ui.c.ImGuiInputTextFlags_CharsHexadecimal else 0;
-        break :blk ui.raw("ImGui_InputScalarEx")(ui.str(label), data_type, @ptrCast(&v), @ptrCast(&step), null, ui.str(fmt), flags);
-    };
-    return if (changed) @floatFromInt(v) else null;
+    const fmt: [:0]const u8 = if (limits.hex) "%llX" else if (T == i64) "%lld" else "%llu";
+    var v = value;
+    var lo: T = if (limits.min) |m| std.math.lossyCast(T, m) else std.math.minInt(T);
+    var hi: T = if (limits.max) |m| std.math.lossyCast(T, m) else std.math.maxInt(T);
+    if (limits.min != null and limits.max != null and hi -| lo <= max_slider) {
+        if (!ui.raw("ImGui_SliderScalarEx")(ui.str(label), data_type, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str(fmt), ui.c.ImGuiSliderFlags_AlwaysClamp)) return null;
+        return v;
+    }
+    var step: T = 1;
+    var fast: T = 100;
+    const flags: ui.c.ImGuiInputTextFlags = if (limits.hex) ui.c.ImGuiInputTextFlags_CharsHexadecimal else 0;
+    if (!ui.raw("ImGui_InputScalarEx")(ui.str(label), data_type, @ptrCast(&v), @ptrCast(&step), @ptrCast(&fast), ui.str(fmt), flags)) return null;
+    return std.math.clamp(v, lo, hi);
+}
+
+pub fn floatInput(label: [:0]const u8, value: f64, limits: Limits) ?f64 {
+    var v = value;
+    if (limits.min != null and limits.max != null) {
+        var lo = limits.min.?;
+        var hi = limits.max.?;
+        if (!ui.raw("ImGui_SliderScalarEx")(ui.str(label), ui.c.ImGuiDataType_Double, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str("%.3f"), ui.c.ImGuiSliderFlags_AlwaysClamp)) return null;
+        return v;
+    }
+    if (!ui.raw("ImGui_InputDoubleEx")(ui.str(label), &v, 0, 0, ui.str("%.3f"), 0)) return null;
+    return std.math.clamp(v, limits.min orelse -std.math.inf(f64), limits.max orelse std.math.inf(f64));
 }
 
 /// Like `Tear Balm (1)`, or the id alone if it's not a choice.

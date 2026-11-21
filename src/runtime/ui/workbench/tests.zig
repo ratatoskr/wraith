@@ -548,14 +548,19 @@ test "address list types from the project and plugins" {
     defer testing.allocator.free(dir);
     const project = try Project.create(testing.allocator, io, dir);
     defer project.destroy();
-    try project.write("schemas/game.sal",
+    const game_sal =
         \\struct GameStateManager {
         \\    [Sig("48 8B 0D ?? ?? ?? ?? 3D", Rip)] static GameStateManager* instance;
         \\    [0x10] u32 mira;
         \\}
         \\[Sig("90 90 90")] static u32 ticks;
         \\
-    );
+    ;
+    try project.write("schemas/game.sal", game_sal);
+    // Published like a plugin's, as `Tweaks` does for the open project
+    const projects = @import("../../host/projects.zig");
+    _ = projects.set(.{ .key = "", .title = "Your project", .schemas = &.{.{ .name = "schemas/game.sal", .text = game_sal }} });
+    defer projects.keep(&.{});
     const wb = try Workbench.create(testing.allocator, .{ .io = io, .project = project });
     defer wb.destroy();
     const list = &wb.panels.addresses.list;
@@ -596,7 +601,7 @@ test "address list types from the project and plugins" {
     try testing.expectEqual(1, list.targetOf(0).?.len);
 
     // The project's statics follow its schemas
-    try project.write("schemas/game.sal", "struct GameStateManager { [0x10] u32 mira; }\n");
+    _ = projects.set(.{ .key = "", .title = "Your project", .schemas = &.{.{ .name = "schemas/game.sal", .text = "struct GameStateManager { [0x10] u32 mira; }\n" }} });
     wb.tick();
     try testing.expect(!Names.global.has(.schema, "GameStateManager.instance"));
     try testing.expect(!Names.global.has(.schema, "ticks"));

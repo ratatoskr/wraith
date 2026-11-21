@@ -1176,7 +1176,7 @@ const tests = struct {
             \\    [Flatten] Inner inner;
             \\    [Flatten] Inner* next;
             \\    Inner* none;
-            \\    [Choices("Bank.items", id, name)] u32 pick;
+            \\    [Choices("Bank.items")] u32 pick;
             \\    u32 used;
             \\    Item[used] items;
             \\}
@@ -1184,11 +1184,14 @@ const tests = struct {
         });
         struct_tweaks.publish(&loaded);
         {
-            const r = struct_tweaks.read();
-            defer r.end();
-            try testing.expectEqual(1, r.entries.len);
-            try testing.expectEqualStrings("Money", r.entries[0].title);
-            try testing.expect(StructEditor.mentions(&loaded.schemas.?.parsed.schema, "Bank", "hit points"));
+            var a: std.heap.ArenaAllocator = .init(testing.allocator);
+            defer a.deinit();
+            const listed = struct_tweaks.snapshot(a.allocator(), "hit points");
+            try testing.expectEqual(1, listed.len);
+            try testing.expectEqualStrings("Money", listed[0].title);
+            try testing.expectEqualStrings("kai", listed[0].source_title);
+            // Found by a field inside
+            try testing.expect(listed[0].matches);
         }
 
         // Opened, though the game hasn't made it, then searched by a field
@@ -1235,9 +1238,7 @@ const tests = struct {
         try testing.expectEqual(20, picks[1].value);
 
         loaded.owner.close();
-        const r = struct_tweaks.read();
-        defer r.end();
-        try testing.expectEqual(0, r.entries.len);
+        try testing.expectEqual(0, struct_tweaks.count());
     }
 
     test "a theme, or whatever Windows says" {

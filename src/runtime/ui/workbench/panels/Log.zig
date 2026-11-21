@@ -127,7 +127,7 @@ fn line(_: *Log, picking: anytype, row: usize, e: *const Entry) void {
         .info => null,
         .debug => ui.getColorU32(.text_disabled),
     };
-    if (colour) |col| ui.raw("ImGui_PushStyleColor")(ui.c.ImGuiCol_Text, col);
-    defer if (colour != null) ui.raw("ImGui_PopStyleColor")();
+    const coloured = ui.withColor(ui.c.ImGuiCol_Text, colour);
+    defer coloured.end();
     _ = picking.row(row, ui.format(line_fmt ++ "##{d}", lineArgs(e) ++ .{e.seq}));
 }

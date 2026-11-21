@@ -28,6 +28,11 @@ wraith: ?*host_api.wraith.Tables = null,
 schemas: ?*host_api.schemas.Schemas = null,
 /// Also gets what it logs, like a workbench session's output.
 echo: ?Echo = null,
+/// A script session's, not a plugin's.
+session: bool = false,
+/// The project it's for, by where its tweaks list: "" for the open one, else an installed mod's id.
+/// Null for a plugin. A project's own `Loaded` has it too, and so do its tweaks' sessions.
+project: ?[]const u8 = null,
 /// What's made now is tagged with this, so `host.stopTagged` can stop it apart from the rest. 0
 /// for most things, or one of a session's tweaks while it runs.
 making: Atomic(u32) = .init(0),
@@ -54,6 +59,19 @@ pub const Runner = struct {
 pub fn displayName(self: *const Loaded) []const u8 {
     const title = self.manifest.value.title orelse return self.name;
     return if (title.len != 0) title else self.name;
+}
+
+/// `name` as one of its own in `Names`, like `kai.hp` for a plugin's `hp`. A project's are named
+/// after it, except the open one's, which have no prefix.
+pub fn ownName(self: *const Loaded, buf: []u8, name: []const u8) ?[]const u8 {
+    const p = self.prefix();
+    if (p.len == 0) return name;
+    return std.fmt.bufPrint(buf, "{s}.{s}", .{ p, name }) catch null;
+}
+
+/// What its own names start with, without the dot. Empty for the open project's.
+pub fn prefix(self: *const Loaded) []const u8 {
+    return self.project orelse self.name;
 }
 
 /// The plugin that made its kind, which has to outlive it.
@@ -85,6 +103,16 @@ pub fn initBare(self: *Loaded, allocator: std.mem.Allocator, name: []const u8, c
         .runner = .{},
         .allocator = allocator,
     };
+}
+
+/// Once its owner's released, so nothing's in its objects: forgets its `Wraith` and frees its
+/// schemas. Its strings are the caller's.
+pub fn free(self: *Loaded) void {
+    host_api.wraith.forget(self);
+    if (self.schemas) |s| s.destroy();
+    for (self.retired_schemas.items) |s| s.destroy();
+    self.retired_schemas.deinit(std.heap.page_allocator);
+    self.schemas = null;
 }
 
 pub fn deinitForTest(self: *Loaded) void {

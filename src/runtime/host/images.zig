@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 const Texture = @import("tuft_imgui").Texture;
 const tuft_image = @import("tuft_image");
 const api = @import("wraith_api");
@@ -34,7 +35,7 @@ pub fn decode(loaded: *Loaded, bytes: []const u8) api.ImageError!*api.ImageHandl
 }
 
 fn keep(loaded: *Loaded, made: *Texture) api.ImageError!*api.ImageHandle {
-    const lease = keeping(loaded) orelse {
+    const lease = cleanup.lease(&loaded.owner) orelse {
         made.destroy();
         return error.OwnerGone;
     };
@@ -60,14 +61,9 @@ fn idOf(image: *api.ImageHandle) u32 {
     return std.math.cast(u32, @intFromPtr(image)) orelse 0;
 }
 
-fn keeping(loaded: *Loaded) ?Owner.Lease {
-    return watch.lease(&listener, &loaded.owner, .data);
-}
+var cleanup: OnGone(.released, released) = .{};
 
-var watch: Owner.Watch(*u8, .{ .released = released }) = .{};
-var listener: u8 = 0;
-
-fn released(_: *u8, owner: *Owner) void {
+fn released(owner: *Owner) void {
     Images.global.removeOwner(owner);
 }
 

@@ -522,11 +522,13 @@
       cur.schemas.push({ start, line });
       cur.schemaText += text;
       try {
-        cur.types = salamander.load("tweak", cur.schemaText);
+        // After its project's, so it can use their types
+        const project = __t.project ? `${__t.project}\nfile "tweak.sal";\n` : "";
+        cur.types = salamander.load("tweak", project + cur.schemaText);
         // So the runtime knows them too, for hooks' signatures
         schema.add("tweak.sal", cur.schemaText);
       } catch (e) {
-        const message = messageOf(e).replace(/^tweak\.sal: /, "");
+        const message = messageOf(e).replace(/^tweak\.sal: ?/, "");
         const m = /^(\d+):\d+: ([\s\S]*)$/.exec(message);
         if (!m) throw at(line, message);
         const n = Number(m[1]);

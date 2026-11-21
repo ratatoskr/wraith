@@ -29,13 +29,13 @@ pub const global_symbols: Symbols = .{ .context = &global, .vtable = &full_vtabl
 
 /// Earlier ones win when names clash.
 pub const Source = enum {
-    /// The Addresses panel's.
+    /// The open project's address list, as the Addresses panel has it.
     user,
     /// A tweak's `@data` and `@sym`, while it's on.
     tweak,
-    /// What plugins and scripts add.
+    /// What plugins and scripts add, and installed projects' address lists.
     plugin,
-    /// Statics in the project's schemas. Scripts' and plugins' are `plugin`.
+    /// Statics in schemas, a project's or a plugin's.
     schema,
     /// Signature scans, named after their owner and what they're called.
     scan,
@@ -221,6 +221,25 @@ pub fn removeOwner(self: *Names, owner: *const Owner) void {
     }{ .owner = owner });
 }
 
+/// Everything `owner` has from `source`.
+pub fn removeFrom(self: *Names, source: Source, owner: ?*const Owner) void {
+    self.removeIf(struct {
+        source: Source,
+        owner: ?*const Owner,
+        fn match(m: @This(), e: *const Entry) bool {
+            return e.source == m.source and e.owner == m.owner;
+        }
+    }{ .source = source, .owner = owner });
+}
+
+/// An address list as saved, like `addresses.rwa.zon`. In `arena`.
+pub fn parseList(arena: std.mem.Allocator, text: []const u8) !devtools.AddressList.Saved {
+    if (std.mem.trim(u8, text, " \t\r\n").len == 0) return .{};
+    const source = try arena.dupeSentinel(u8, text, 0);
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSlice(devtools.AddressList.Saved, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diagnostics, .ignore_unknown_fields = true });
+}
+
 /// Like a tweak's, when it stops.
 pub fn removeGroup(self: *Names, source: Source, group: []const u8) void {
     self.removeIf(struct {
@@ -246,15 +265,13 @@ fn removeIf(self: *Names, matcher: anytype) void {
     }
 }
 
-/// The Addresses panel's list changed. Ones without an id aren't names, nor are groups without an
+/// A project's address list, the open one's from the Addresses panel or an installed one's, in place
+/// of what `owner` had from `source`. Ones without an id aren't names, nor are groups without an
 /// address. Each is published as location text with its groups and pointers folded in, so it's
-/// found without the list. `schemas` give typed ones their size.
-pub fn setUser(self: *Names, items: []const devtools.AddressList.Item, schemas: []const *const Schema) void {
-    self.removeIf(struct {
-        fn match(_: @This(), e: *const Entry) bool {
-            return e.source == .user;
-        }
-    }{});
+/// found without the list. `schemas` give typed ones their size. Each is named with `prefix` and a
+/// dot in front, if there's a prefix.
+pub fn setList(self: *Names, source: Source, owner: ?*const Owner, group: []const u8, prefix: []const u8, items: []const devtools.AddressList.Item, schemas: []const *const Schema) void {
+    self.removeFrom(source, owner);
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     for (items, 0..) |item, i| {
@@ -264,9 +281,12 @@ pub fn setUser(self: *Names, items: []const devtools.AddressList.Item, schemas: 
         // Plans copy it out, so longer ones can't be found
         if (text.len > max_text) continue;
         var type_buf: [160]u8 = undefined;
+        var name_buf: [192]u8 = undefined;
         self.put(.{
-            .source = .user,
-            .name = item.id,
+            .source = source,
+            .owner = owner,
+            .group = group,
+            .name = if (prefix.len == 0) item.id else std.fmt.bufPrint(&name_buf, "{s}.{s}", .{ prefix, item.id }) catch continue,
             .label = item.name,
             .where = .{ .text = .{ .text = text } },
             .type = devtools.AddressList.typeOfItem(item, &type_buf),
@@ -939,13 +959,13 @@ const tests = struct {
         defer names.deinit();
         var value: u32 = 5;
         var buf: [32]u8 = undefined;
-        names.setUser(&.{
+        names.setList(.user, null, "", "", &.{
             .{ .id = "player.health", .address = try std.fmt.bufPrint(&buf, "0x{x}", .{@intFromPtr(&value)}) },
             .{ .name = "no id", .address = "0x1" },
         }, &.{});
         try testing.expectEqual(@intFromPtr(&value), try names.get("player.health"));
         const before = names.generation();
-        names.setUser(&.{}, &.{});
+        names.setList(.user, null, "", "", &.{}, &.{});
         try testing.expectError(error.NotFound, names.get("player.health"));
         try testing.expectEqual(before, names.generation());
     }
@@ -969,7 +989,7 @@ const tests = struct {
             .{ .name = "Ids", .id = "player.ids", .depth = 1, .address = "+0x18", .kind = .two_bytes, .count = "4" },
             .{ .name = "Lost", .id = "lost", .address = "+4" },
         };
-        names.setUser(items, &.{});
+        names.setList(.user, null, "", "", items, &.{});
 
         var addresses: devtools.AddressList = .{ .allocator = testing.allocator, .memory = .local, .symbols = .local };
         defer addresses.deinit();

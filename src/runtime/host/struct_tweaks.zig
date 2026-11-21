@@ -1,23 +1,29 @@
-//! Structs a plugin's schemas mark `[Tweak("..")]`. The Tweaks window shows each one, its fields
-//! edited live, under its plugin. They need `[Instance]` so Wraith can find them. Kept till the
-//! plugin closes.
+//! Structs marked `[Tweak("..")]` in a plugin's or project's schemas or a tweak file's `@schema`. The Tweaks
+//! window shows each one, its fields edited live, under where it's from. They need `[Instance]` so
+//! Wraith can find them. Kept till the plugin closes or the file changes.
 
 const std = @import("std");
 
-const core = @import("wraith_core");
 const tuft_sys = @import("tuft_sys");
-const mem = @import("tuft_mem");
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 const SalSchema = @import("salamander_schema").Schema;
 
 const Loaded = @import("../PluginLoader.zig").Loaded;
-const Schemas = @import("schemas.zig").Schemas;
+const schemas_api = @import("schemas.zig");
+const Schemas = schemas_api.Schemas;
+const StructEditor = @import("../ui/StructEditor.zig");
+const addresses = @import("addresses.zig");
 
 pub const Entry = struct {
-    owner: *Owner,
-    /// Its plugin's id and name for people. Both live as long as it does.
-    plugin: []const u8,
-    plugin_title: []const u8,
+    /// A plugin's, or null for a tweak file's.
+    owner: ?*Owner,
+    /// The tweak file's, by its `key`. 0 for a plugin's.
+    file: usize = 0,
+    /// Where it's from, a plugin or a mod by id, or "" for your project, and its name for people.
+    /// Both live as long as it does.
+    source: []const u8,
+    source_title: []const u8,
     /// In `schemas`.
     title: []const u8,
     type_name: []const u8,
@@ -25,32 +31,48 @@ pub const Entry = struct {
 };
 
 const allocator = std.heap.page_allocator;
+const tweak_file = "tweak/tweak.sal";
 
 var lock: tuft_sys.sync.RwLock = .{};
 var entries: std.ArrayList(Entry) = .empty;
+/// What tweak files' entries point into.
+var files: std.ArrayList(*File) = .empty;
 
-var watch: Owner.Watch(*u8, .{ .closing = closing }) = .{};
-var listener: u8 = 0;
+const File = struct {
+    key: usize,
+    arena: std.heap.ArenaAllocator,
+    schemas: std.ArrayList(*Schemas) = .empty,
 
-/// The `[Tweak]`s in the plugin's own files, in place of what it had. Not ones from plugins it
-/// depends on, which show under their own.
+    fn destroy(f: *File) void {
+        for (f.schemas.items) |s| s.destroy();
+        var arena = f.arena;
+        arena.deinit();
+        allocator.destroy(f);
+    }
+};
+
+var cleanup: OnGone(.closing, closing) = .{};
+
+/// The `[Tweak]`s in its own files, in place of what it had. Not ones from plugins it depends on,
+/// which show under their own. A project's list under it, like its tweaks.
 pub fn publish(loaded: *Loaded) void {
-    const s = loaded.schemas orelse return;
-    const lease = watch.lease(&listener, &loaded.owner, .calls) orelse return;
+    // A tweak's script session isn't a plugin, and its file lists its own
+    if (loaded.session) return;
+    const lease = cleanup.lease(&loaded.owner) orelse return;
     defer lease.end();
     lock.lock();
     defer lock.unlock();
     removeLocked(&loaded.owner);
+    const s = loaded.schemas orelse return;
     const schema = s.schema();
     for (schema.types) |*t| {
         const a = SalSchema.findAnnotation(t.annotations, "wraith", "Tweak") orelse continue;
         if (a.args.len != 1 or a.args[0] != .string) continue;
-        const file = SalSchema.fileOf(s.parsed.source, t.at);
-        if (!(file.len > loaded.name.len and std.mem.startsWith(u8, file, loaded.name) and file[loaded.name.len] == '/')) continue;
+        if (!addresses.ownFile(loaded, SalSchema.fileOf(s.parsed.source, t.at))) continue;
         entries.append(allocator, .{
             .owner = &loaded.owner,
-            .plugin = loaded.name,
-            .plugin_title = loaded.displayName(),
+            .source = loaded.project orelse loaded.name,
+            .source_title = loaded.displayName(),
             .title = a.args[0].string,
             .type_name = t.name,
             .schemas = s,
@@ -58,19 +80,104 @@ pub fn publish(loaded: *Loaded) void {
     }
 }
 
-/// Owners can't close until `end`, so keep it short. Render thread only.
-pub fn read() Reading {
-    lock.lockShared();
-    return .{ .entries = entries.items };
+/// A tweak file's `@schema` texts, each its own, in place of what `key` had. Empty takes them
+/// away. Each comes after `base`, its project's schemas, but only its own structs are listed. Ones
+/// that don't parse are left out, since turning the tweak on says why.
+pub fn publishFile(key: usize, source: []const u8, source_title: []const u8, base: []const schemas_api.File, texts: []const []const u8) void {
+    const made = allocator.create(File) catch return;
+    made.* = .{ .key = key, .arena = .init(allocator) };
+    var added: std.ArrayList(Entry) = .empty;
+    defer added.deinit(allocator);
+    const a = made.arena.allocator();
+    const owned_source = a.dupe(u8, source) catch "";
+    const owned_title = a.dupe(u8, source_title) catch "";
+    var with: std.ArrayList(schemas_api.File) = .empty;
+    defer with.deinit(allocator);
+    with.appendSlice(allocator, base) catch return made.destroy();
+    for (texts) |text| {
+        with.items.len = base.len;
+        with.append(allocator, .{ .name = tweak_file, .text = text }) catch continue;
+        const s = schemas_api.fromFiles(with.items) catch continue;
+        made.schemas.append(a, s) catch {
+            s.destroy();
+            continue;
+        };
+        for (s.schema().types) |*t| {
+            const ann = SalSchema.findAnnotation(t.annotations, "wraith", "Tweak") orelse continue;
+            if (ann.args.len != 1 or ann.args[0] != .string) continue;
+            if (!std.mem.eql(u8, SalSchema.fileOf(s.parsed.source, t.at), tweak_file)) continue;
+            // The same struct from the file's shared part shows once
+            const seen = for (added.items) |e| {
+                if (std.mem.eql(u8, e.type_name, t.name)) break true;
+            } else false;
+            if (seen) continue;
+            added.append(allocator, .{ .owner = null, .file = key, .source = owned_source, .source_title = owned_title, .title = ann.args[0].string, .type_name = t.name, .schemas = s }) catch {};
+        }
+    }
+    const old = blk: {
+        lock.lock();
+        defer lock.unlock();
+        removeFileLocked(key);
+        const gone = for (files.items, 0..) |f, i| {
+            if (f.key == key) break files.swapRemove(i);
+        } else null;
+        if (added.items.len > 0) {
+            entries.appendSlice(allocator, added.items) catch {};
+            files.append(allocator, made) catch {};
+        }
+        break :blk gone;
+    };
+    // Nobody's reading them now
+    if (old) |f| f.destroy();
+    if (added.items.len == 0 or std.mem.indexOfScalar(*File, files.items, made) == null) made.destroy();
 }
 
-pub const Reading = struct {
-    entries: []const Entry,
-
-    pub fn end(_: Reading) void {
-        lock.unlockShared();
-    }
+/// What the Tweaks window lists, copied into `arena`. `query` marks which mention it.
+pub const Summary = struct {
+    source: []const u8,
+    source_title: []const u8,
+    title: []const u8,
+    type_name: []const u8,
+    matches: bool,
 };
+
+pub fn snapshot(arena: std.mem.Allocator, query: []const u8) []Summary {
+    lock.lockShared();
+    defer lock.unlockShared();
+    const out = arena.alloc(Summary, entries.items.len) catch return &.{};
+    for (entries.items, out) |e, *o| o.* = .{
+        .source = arena.dupe(u8, e.source) catch "",
+        .source_title = arena.dupe(u8, e.source_title) catch "",
+        .title = arena.dupe(u8, e.title) catch "",
+        .type_name = arena.dupe(u8, e.type_name) catch "",
+        .matches = query.len == 0 or std.ascii.findIgnoreCase(e.title, query) != null or
+            std.ascii.findIgnoreCase(e.source_title, query) != null or
+            StructEditor.mentions(&e.schemas.parsed.schema, e.type_name, query),
+    };
+    return out;
+}
+
+pub const Drawn = enum { drawn, not_there_yet, gone };
+
+/// Its fields, if it's still listed. Holds the list while drawing, so don't call into `Tweaks` from
+/// in here. Render thread.
+pub fn drawFields(source: []const u8, type_name: []const u8) Drawn {
+    lock.lockShared();
+    defer lock.unlockShared();
+    const e = for (entries.items) |*e| {
+        if (std.mem.eql(u8, e.source, source) and std.mem.eql(u8, e.type_name, type_name)) break e;
+    } else return .gone;
+    const at = StructEditor.instanceOf(&e.schemas.parsed.schema, e.type_name) orelse return .not_there_yet;
+    _ = StructEditor.draw(&e.schemas.parsed.schema, e.type_name, at);
+    return .drawn;
+}
+
+/// How many are listed, for tests.
+pub fn count() usize {
+    lock.lockShared();
+    defer lock.unlockShared();
+    return entries.items.len;
+}
 
 fn removeLocked(owner: *const Owner) void {
     var i: usize = 0;
@@ -79,32 +186,15 @@ fn removeLocked(owner: *const Owner) void {
     }
 }
 
-fn closing(_: *u8, owner: *Owner) void {
+fn removeFileLocked(key: usize) void {
+    var i: usize = 0;
+    while (i < entries.items.len) {
+        if (entries.items[i].owner == null and entries.items[i].file == key) _ = entries.orderedRemove(i) else i += 1;
+    }
+}
+
+fn closing(owner: *Owner) void {
     lock.lock();
     defer lock.unlock();
     removeLocked(owner);
 }
-
-/// Where the game has `type_name` now, through its `[Instance]`. Null till the game makes it. The
-/// signature's only looked for every few seconds while it isn't found. Render thread.
-pub fn instance(schemas: *Schemas, type_name: []const u8) ?usize {
-    var name_buf: [160]u8 = undefined;
-    const name = std.fmt.bufPrint(&name_buf, "{s}.instance", .{type_name}) catch return null;
-    const key = std.hash.Wyhash.hash(@intFromPtr(schemas), name);
-    const now = core.timing.now();
-    for (&misses) |m| if (m.key == key and now < m.until) return null;
-    const at = schemas.address(name) catch {
-        misses[next_miss] = .{ .key = key, .until = now + retry_ns };
-        next_miss = (next_miss + 1) % misses.len;
-        return null;
-    };
-    var value: usize = 0;
-    mem.Memory.local.read(at, std.mem.asBytes(&value)) catch return null;
-    return if (value == 0) null else value;
-}
-
-const retry_ns = 3 * std.time.ns_per_s;
-
-const Miss = struct { key: u64 = 0, until: u64 = 0 };
-var misses: [16]Miss = @splat(.{});
-var next_miss: usize = 0;

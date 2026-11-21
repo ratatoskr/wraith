@@ -4,6 +4,7 @@ const std = @import("std");
 
 const tuft_sys = @import("tuft_sys");
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("../host/Owned.zig").OnGone;
 
 /// Must not move until it's removed or its owner closes.
 pub const Item = struct {
@@ -23,12 +24,11 @@ const allocator = std.heap.page_allocator;
 var lock: tuft_sys.sync.RwLock = .{};
 var entries: std.ArrayList(Entry) = .empty;
 
-var watch: Owner.Watch(*u8, .{ .closing = closing }) = .{};
-var listener: u8 = 0;
+var cleanup: OnGone(.closing, closing) = .{};
 
 /// Ignored once `owner` has closed.
 pub fn add(owner: *Owner, item: *const Item) error{OutOfMemory}!void {
-    const lease = watch.lease(&listener, owner, .calls) orelse return;
+    const lease = cleanup.lease(owner) orelse return;
     defer lease.end();
     lock.lock();
     defer lock.unlock();
@@ -60,7 +60,7 @@ pub const Reading = struct {
     }
 };
 
-fn closing(_: *u8, owner: *Owner) void {
+fn closing(owner: *Owner) void {
     lock.lock();
     defer lock.unlock();
     var i: usize = 0;

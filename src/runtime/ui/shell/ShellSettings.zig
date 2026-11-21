@@ -139,7 +139,7 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
         var id_buf: [96]u8 = undefined;
         self.workbench_keys[i] = try registry.add(.{
             .id = std.fmt.bufPrint(&id_buf, "wraith.workbench.{s}", .{field}) catch unreachable,
-            .name = humanName(&name_buf, field),
+            .name = @import("wraith_ui").humanName(&name_buf, field),
             .group = Settings.group,
             // Set in the workbench's Keyboard shortcuts
             .hidden = true,
@@ -183,13 +183,6 @@ pub fn workbenchKeys(self: *const ShellSettings) WorkbenchKeys {
     return keys;
 }
 
-/// `copy_address` as "Copy address".
-pub fn humanName(buf: []u8, comptime field: []const u8) []const u8 {
-    const n = @min(field.len, buf.len);
-    for (field[0..n], buf[0..n], 0..) |ch, *out, i| out.* = if (ch == '_') ' ' else if (i == 0) std.ascii.toUpper(ch) else ch;
-    return buf[0..n];
-}
-
 fn themeChanged(ctx: *anyopaque, _: *Registry.Setting) void {
     const shell: *Shell = @ptrCast(@alignCast(ctx));
     shell.applyThemeSetting();
@@ -208,9 +201,4 @@ fn overlayGamepadChanged(ctx: *anyopaque, s: *Registry.Setting) void {
 fn workbenchKeyChanged(ctx: *anyopaque, _: *Registry.Setting) void {
     const shell: *Shell = @ptrCast(@alignCast(ctx));
     @import("../workbench/keys.zig").apply(shell.own.workbenchKeys());
-}
-
-test "human names" {
-    var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("Copy address", humanName(&buf, "copy_address"));
 }

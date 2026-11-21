@@ -1,8 +1,10 @@
-//! A plugin's schemas as `.sal` text for the address list, see `SharedSchemas`. Kept till the plugin goes.
+//! A plugin's or project's schemas, published: as `.sal` text for the address list, see
+//! `SharedSchemas`, their `[Tweak]` structs and their statics as names. Kept till it goes.
 
 const std = @import("std");
 
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 const core = @import("wraith_core");
 const salamander_schema = @import("salamander_schema");
 
@@ -14,24 +16,22 @@ const log = core.log.scoped(.wraith_runtime);
 /// Its schemas' files, its dependencies' too, in place of what it shared before. Call when they change.
 pub fn publish(loaded: *Loaded) void {
     @import("struct_tweaks.zig").publish(loaded);
-    const s = loaded.schemas orelse return;
-    const lease = keeping(loaded) orelse return;
+    @import("addresses.zig").publishStatics(loaded);
+    const lease = cleanup.lease(&loaded.owner) orelse return;
     defer lease.end();
+    SharedSchemas.global.removeOwner(&loaded.owner);
+    const s = loaded.schemas orelse return;
     const text = salamander_schema.bundle(SharedSchemas.global.allocator, s.files) catch return;
     defer SharedSchemas.global.allocator.free(text);
-    SharedSchemas.global.removeOwner(&loaded.owner);
-    SharedSchemas.global.add(.{ .owner = &loaded.owner, .group = loaded.name, .name = "schemas", .text = text }) catch |err|
+    // A project's are listed under its key, "" for the open one, like its tweaks
+    const group = if (loaded.session) loaded.name else loaded.project orelse loaded.name;
+    SharedSchemas.global.add(.{ .owner = &loaded.owner, .group = group, .name = "schemas", .text = text }) catch |err|
         log.warn("{s}'s schemas can't be used in the address list: {t}", .{ loaded.name, err });
 }
 
-fn keeping(loaded: *Loaded) ?Owner.Lease {
-    return watch.lease(&listener, &loaded.owner, .data);
-}
+var cleanup: OnGone(.released, released) = .{};
 
-var watch: Owner.Watch(*u8, .{ .released = released }) = .{};
-var listener: u8 = 0;
-
-fn released(_: *u8, owner: *Owner) void {
+fn released(owner: *Owner) void {
     SharedSchemas.global.removeOwner(owner);
 }
 

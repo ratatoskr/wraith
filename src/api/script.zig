@@ -33,6 +33,9 @@ pub const Run = struct {
     part: []const u8 = "",
     /// The file's shared part's values, for the run that brings it up.
     shared_values: []const tweak.Value = &.{},
+    /// The project it's for, whose schemas and names it starts with: empty for the open one, else
+    /// an installed mod's id. Only the run that starts its session counts.
+    project: []const u8 = "",
 };
 
 /// Where a tweak's data went, so the UI can show and change it.

@@ -100,8 +100,8 @@ fn line(picking: anytype, row: usize, l: *const Scripts.Line, with_session: bool
         .code, .debug => ui.getColorU32(.text_disabled),
         .value, .info => null,
     };
-    if (colour) |col| ui.raw("ImGui_PushStyleColor")(ui.c.ImGuiCol_Text, col);
-    defer if (colour != null) ui.raw("ImGui_PopStyleColor")();
+    const coloured = ui.withColor(ui.c.ImGuiCol_Text, colour);
+    defer coloured.end();
     const prefix = if (l.kind == .code) "> " else "";
     if (with_session) {
         _ = picking.row(row, ui.format("[{d}] {s}{s}##{d}", .{ l.session, prefix, l.text, l.seq }));

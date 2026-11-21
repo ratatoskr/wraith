@@ -143,7 +143,7 @@ pub fn createMid(loaded: *Loaded, target: usize, handler: MidHandler, options: a
 
 fn midWith(loaded: *Loaded, target: usize, handler: MidHandler, options: api.MidOptions) api.HookError!*api.Hook {
     var replace: u8 = 0;
-    var names: code.Names = .{ .scope = options.names };
+    var names: code.Names = .{ .loaded = loaded, .scope = options.names };
     if (options.replace) {
         const expect: ?[]const u8 = if (options.expect.len > 0) options.expect else null;
         var found: Patch.ExpectProblem = .{};
@@ -167,7 +167,7 @@ pub fn createInject(loaded: *Loaded, target: usize, source: []const u8, options:
     const allocator = loaded.allocator;
     const record = try allocator.create(Record);
     record.* = .{ .engine = undefined, .loaded = loaded, .user_data = 0 };
-    var build: code.Build = .{ .gpa = allocator, .source = source, .problem = problem, .scope = options.names };
+    var build: code.Build = .{ .gpa = allocator, .source = source, .problem = problem, .loaded = loaded, .scope = options.names };
     var reach: [16]usize = undefined;
     record.engine = Hook.createInjectRaw(target, build.of(), .{ .reach = code.reachOf(options.names, &reach) }) catch |err| {
         allocator.destroy(record);

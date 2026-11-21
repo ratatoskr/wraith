@@ -7,6 +7,8 @@ const std = @import("std");
 const api = @import("wraith_api");
 
 const Tweaks = @import("../Tweaks.zig");
+const struct_tweaks = @import("../host/struct_tweaks.zig");
+const projects = @import("../host/projects.zig");
 const Tweak = @import("Tweak.zig");
 const Project = @import("../Project.zig");
 const Names = @import("../Names.zig");
@@ -23,7 +25,7 @@ pub fn stale(tw: *const Tweaks) bool {
 }
 
 /// A tweak file, the project's or a mod's.
-const Source = struct {
+const FileRef = struct {
     mod: ?[]const u8,
     path: []const u8,
 };
@@ -39,12 +41,17 @@ pub fn refresh(tw: *Tweaks) void {
     tw.seen_version = tw.project.version();
     var paths = tw.project.list(tw.allocator, "tweaks", Project.ext.tweak) catch return;
     defer Project.freePaths(tw.allocator, &paths);
+    var arena: std.heap.ArenaAllocator = .init(tw.allocator);
+    defer arena.deinit();
+    const own_schemas = readSchemas(tw, arena.allocator());
+    const own_addresses = (tw.project.read(arena.allocator(), Project.addresses_file) catch null) orelse "";
     tw.lock.lock();
     defer tw.lock.unlock();
     const mods_now = tw.mods_version.load(.acquire);
     const mods_changed = mods_now != tw.mods_seen;
     tw.mods_seen = mods_now;
-    var sources: std.ArrayList(Source) = .empty;
+    const resynced = syncProjects(tw, arena.allocator(), own_schemas, own_addresses, mods_changed);
+    var sources: std.ArrayList(FileRef) = .empty;
     defer sources.deinit(tw.allocator);
     for (paths.items) |p| sources.append(tw.allocator, .{ .mod = null, .path = p }) catch return;
     for (tw.mods) |m| for (m.files) |f| {
@@ -54,8 +61,8 @@ pub fn refresh(tw: *Tweaks) void {
     var i: usize = 0;
     while (i < tw.list.items.len) {
         const t = tw.list.items[i];
-        const still = t.plugin != null or t.file != null or for (sources.items) |s| {
-            if (sameMod(s.mod, t.mod) and std.mem.eql(u8, s.path, t.path)) break true;
+        const still = !t.isFile() or for (sources.items) |s| {
+            if (sameMod(s.mod, t.mod()) and std.mem.eql(u8, s.path, t.path)) break true;
         } else false;
         if (still) {
             i += 1;
@@ -78,27 +85,23 @@ pub fn refresh(tw: *Tweaks) void {
     // Files only, since reading a group's adds and takes away its tweaks
     var files: std.ArrayList(*Tweak) = .empty;
     defer files.deinit(tw.allocator);
-    for (tw.list.items) |t| if (t.plugin == null and t.file == null) files.append(tw.allocator, t) catch {};
+    for (tw.list.items) |t| if (t.isFile()) files.append(tw.allocator, t) catch {};
     for (files.items) |t| {
         const fresh = t.source_hash == null;
         // A mod's file only changes when it's updated, and what was on stays on
-        if (t.mod != null and !mods_changed and !fresh) continue;
-        _ = reparse(tw, t, if (t.mod != null) .restart else .turn_off);
+        if (t.mod() != null and !mods_changed and !fresh) continue;
+        const reread = reparse(tw, t, if (t.mod() != null) .restart else .turn_off);
+        // Its structs are read with its project's schemas, which changed under it
+        if (!reread and inList(resynced, t.source.id)) republishStructs(tw, t);
         if (fresh) startIfWanted(tw, t);
     }
     syncPlugins(tw);
     // The project's, then mods', then plugins', each grouped by where it's from, and what's in a
     // group's file after it in the file's order
     std.mem.sort(*Tweak, tw.list.items, {}, struct {
-        fn rank(t: *const Tweak) u8 {
-            return if (t.plugin != null) 2 else if (t.mod != null) 1 else 0;
-        }
-
         fn before(_: void, a: *Tweak, b: *Tweak) bool {
-            if (rank(a) != rank(b)) return rank(a) < rank(b);
-            const ap = a.plugin orelse a.mod orelse "";
-            const bp = b.plugin orelse b.mod orelse "";
-            if (!std.mem.eql(u8, ap, bp)) return std.mem.lessThan(u8, ap, bp);
+            if (a.source.kind != b.source.kind) return @backingInt(a.source.kind) < @backingInt(b.source.kind);
+            if (!std.mem.eql(u8, a.source.id, b.source.id)) return std.mem.lessThan(u8, a.source.id, b.source.id);
             const ar = (a.file orelse a).name;
             const br = (b.file orelse b).name;
             if (!std.mem.eql(u8, ar, br)) return std.mem.lessThan(u8, ar, br);
@@ -108,6 +111,50 @@ pub fn refresh(tw: *Tweaks) void {
     }.before);
     bindings.apply(tw);
     tw.changed();
+}
+
+/// The open project's `schemas/*.sal`, in `arena`.
+fn readSchemas(tw: *Tweaks, arena: std.mem.Allocator) []const projects.File {
+    var paths = tw.project.list(arena, "schemas", Project.ext.schema) catch return &.{};
+    var out: std.ArrayList(projects.File) = .empty;
+    for (paths.items) |p| {
+        const text = (tw.project.read(arena, p) catch null) orelse continue;
+        out.append(arena, .{ .name = p, .text = text }) catch break;
+    }
+    paths.deinit(arena);
+    return out.items;
+}
+
+/// Under the lock. Each project as it is now, the open one's and the mods'. Which ones' schemas
+/// changed, by key, in `arena`.
+fn syncProjects(tw: *Tweaks, arena: std.mem.Allocator, own_schemas: []const projects.File, own_addresses: []const u8, mods_changed: bool) []const []const u8 {
+    var changed: std.ArrayList([]const u8) = .empty;
+    if (projects.set(.{ .key = "", .title = "Your project", .schemas = own_schemas, .addresses = own_addresses })) changed.append(arena, "") catch {};
+    if (!mods_changed) return changed.items;
+    var keys: std.ArrayList([]const u8) = .empty;
+    keys.append(arena, "") catch return changed.items;
+    for (tw.mods) |m| {
+        if (projects.set(.{ .key = m.id, .title = m.title, .schemas = m.schemas, .addresses = m.addresses orelse "" })) changed.append(arena, m.id) catch {};
+        keys.append(arena, m.id) catch {};
+    }
+    projects.keep(keys.items);
+    return changed.items;
+}
+
+fn inList(list: []const []const u8, key: []const u8) bool {
+    for (list) |k| if (std.mem.eql(u8, k, key)) return true;
+    return false;
+}
+
+/// Under the lock. Its `[Tweak]` structs again, as they read with its project's schemas now.
+fn republishStructs(tw: *Tweaks, t: *Tweak) void {
+    const text = tw.readFile(t.mod(), t.path) orelse return;
+    defer tw.allocator.free(text);
+    var arena: std.heap.ArenaAllocator = .init(tw.allocator);
+    defer arena.deinit();
+    var problem: format.Problem = .{};
+    const file = format.parseFile(arena.allocator(), text, &problem) catch return;
+    publishStructs(tw, t, text, file);
 }
 
 /// Under the lock. On if the settings say it was, for one that just showed up. Actions only run
@@ -160,7 +207,7 @@ fn syncPlugins(tw: *Tweaks) void {
     var i: usize = 0;
     while (i < tw.list.items.len) {
         const t = tw.list.items[i];
-        const still = t.plugin == null or for (reading.entries) |e| {
+        const still = !t.byPlugin() or for (reading.entries) |e| {
             if (std.mem.eql(u8, e.name, t.name)) break true;
         } else false;
         if (still) {
@@ -219,9 +266,9 @@ pub const Edited = enum {
 /// is for running it as it is now, which starts a group's file again if it's up. True if it
 /// changed. What's in a group's file can come and go, so look one up again after.
 pub fn reparse(tw: *Tweaks, t: *Tweak, edited: Edited) bool {
-    if (t.plugin != null) return false;
+    if (t.byPlugin()) return false;
     if (t.file) |f| return reparse(tw, f, edited);
-    const text = tw.readFile(t.mod, t.path) orelse return false;
+    const text = tw.readFile(t.mod(), t.path) orelse return false;
     defer tw.allocator.free(text);
     const hash = std.hash.Wyhash.hash(0, text);
     if (t.source_hash == hash) return false;
@@ -274,8 +321,10 @@ pub fn reparse(tw: *Tweaks, t: *Tweak, edited: Edited) bool {
     const a = t.parsed.allocator();
     const file = parseInto(t, a, text) orelse {
         if (t.is_group) ungroup(tw, t);
+        struct_tweaks.publishFile(@intFromPtr(t), "", "", &.{}, &.{});
         return true;
     };
+    publishStructs(tw, t, text, file);
     if (!file.grouped) {
         if (t.is_group) ungroup(tw, t);
         t.def = file.tweaks[0];
@@ -293,6 +342,50 @@ pub fn reparse(tw: *Tweaks, t: *Tweak, edited: Edited) bool {
     };
     if (t.is_group) syncChildren(tw, t, file, child_hashes.items);
     return true;
+}
+
+/// The file's `[Tweak]` structs, for the Tweaks window. Each of its tweaks sees its groups' shared
+/// `@schema` and its own, so each is read that way. Only ones that mention a `Tweak` are.
+fn publishStructs(tw: *Tweaks, t: *Tweak, text: []const u8, file: format.File) void {
+    var arena: std.heap.ArenaAllocator = .init(tw.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var lines: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| lines.append(a, line) catch return;
+    var texts: std.ArrayList([]const u8) = .empty;
+    const parts: []const format.Tweak = if (file.grouped) file.tweaks else file.tweaks[0..@min(file.tweaks.len, 1)];
+    for (parts) |part| {
+        var out: std.Io.Writer.Allocating = .init(a);
+        if (file.grouped) {
+            // From the file's group down to its own
+            var chain: [16]u32 = undefined;
+            var n: usize = 0;
+            var at: ?u32 = part.group;
+            while (at) |g| : (at = file.groups[g].parent) {
+                if (n == chain.len or g >= file.groups.len) break;
+                chain[n] = g;
+                n += 1;
+            }
+            while (n > 0) {
+                n -= 1;
+                schemaLines(&out.writer, lines.items, file.groups[chain[n]].shared);
+            }
+        }
+        schemaLines(&out.writer, lines.items, part);
+        const joined = out.written();
+        if (std.mem.indexOf(u8, joined, "Tweak(") == null) continue;
+        texts.append(a, joined) catch return;
+    }
+    struct_tweaks.publishFile(@intFromPtr(t), t.source.id, tw.sourceTitle(t), projects.files(t.source.id, a), texts.items);
+}
+
+fn schemaLines(w: *std.Io.Writer, lines: []const []const u8, part: format.Tweak) void {
+    for (part.sections) |sec| {
+        if (sec.kind != .schema) continue;
+        const end = @min(sec.first + sec.count, lines.len);
+        for (lines[@min(sec.first, end)..end]) |line| w.print("{s}\n", .{line}) catch return;
+    }
 }
 
 /// In `a`. Null if it's invalid, which `t.invalid` says.
@@ -440,8 +533,8 @@ fn newTweak(tw: *Tweaks, mod: ?[]const u8, path: []const u8) !*Tweak {
     const stem = base[0 .. base.len - Project.ext.tweak.len];
     const n = if (mod) |m| try std.fmt.allocPrint(tw.allocator, "{s}:{s}", .{ m, stem }) else try tw.allocator.dupe(u8, stem);
     errdefer tw.allocator.free(n);
-    const owned_mod = if (mod) |m| try tw.allocator.dupe(u8, m) else null;
-    t.* = .{ .path = p, .name = n, .mod = owned_mod, .session = running.newSession(tw), .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
+    const source: Tweak.Source = if (mod) |m| .{ .kind = .mod, .id = try tw.allocator.dupe(u8, m) } else .{};
+    t.* = .{ .path = p, .name = n, .source = source, .session = running.newSession(tw), .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
     return t;
 }
 
@@ -455,8 +548,8 @@ fn newChild(tw: *Tweaks, root: *Tweak, path: []const u8, is_group: bool) !*Tweak
     errdefer tw.allocator.free(n);
     const part = try tw.allocator.dupe(u8, path);
     errdefer tw.allocator.free(part);
-    const mod = if (root.mod) |m| try tw.allocator.dupe(u8, m) else null;
-    t.* = .{ .path = p, .name = n, .mod = mod, .group = root, .file = root, .is_group = is_group, .part = part, .session = 0, .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
+    const source: Tweak.Source = .{ .kind = root.source.kind, .id = try tw.allocator.dupe(u8, root.source.id) };
+    t.* = .{ .path = p, .name = n, .source = source, .group = root, .file = root, .is_group = is_group, .part = part, .session = 0, .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
     return t;
 }
 
@@ -468,18 +561,18 @@ fn newPluginTweak(tw: *Tweaks, entry: *const plugin_tweaks.Entry) !*Tweak {
     const plugin = try tw.allocator.dupe(u8, entry.plugin);
     errdefer tw.allocator.free(plugin);
     const plugin_title = try tw.allocator.dupe(u8, entry.plugin_title);
-    t.* = .{ .path = &.{}, .name = n, .plugin = plugin, .plugin_title = plugin_title, .session = running.newSession(tw), .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
+    t.* = .{ .path = &.{}, .name = n, .source = .{ .kind = .plugin, .id = plugin, .title = plugin_title }, .session = running.newSession(tw), .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
     return t;
 }
 
 /// Its session or plugin should be done with it by now.
 pub fn freeTweak(tw: *Tweaks, t: *Tweak) void {
+    if (t.isFile()) struct_tweaks.publishFile(@intFromPtr(t), "", "", &.{}, &.{});
     bindings.unbindAll(tw, t);
     Names.global.removeGroup(.tweak, t.name);
     if (t.problem) |p| tw.allocator.free(p);
-    if (t.plugin) |p| tw.allocator.free(p);
-    if (t.plugin_title) |p| tw.allocator.free(p);
-    if (t.mod) |m| tw.allocator.free(m);
+    tw.allocator.free(t.source.id);
+    tw.allocator.free(t.source.title);
     tw.allocator.free(t.part);
     t.parsed.deinit();
     t.live_arena.deinit();
@@ -494,7 +587,7 @@ pub fn find(tw: *Tweaks, name: []const u8) ?*Tweak {
 }
 
 fn findPath(tw: *Tweaks, mod: ?[]const u8, path: []const u8) ?*Tweak {
-    for (tw.list.items) |t| if (t.file == null and t.plugin == null and sameMod(t.mod, mod) and std.mem.eql(u8, t.path, path)) return t;
+    for (tw.list.items) |t| if (t.isFile() and sameMod(t.mod(), mod) and std.mem.eql(u8, t.path, path)) return t;
     return null;
 }
 

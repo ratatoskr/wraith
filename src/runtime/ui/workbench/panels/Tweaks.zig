@@ -108,13 +108,13 @@ pub fn draw(self: *TweaksPanel) void {
         for (list, 0..) |*t, i| {
             const scope = ui.id(@as(i32, @intCast(i)));
             defer scope.end();
-            if (t.plugin orelse t.mod) |from| if (group == null or !std.mem.eql(u8, group.?, from)) {
-                group = from;
+            if (t.source != .project and (group == null or !std.mem.eql(u8, group.?, t.source_id))) {
+                group = t.source_id;
                 ui.tableNextRow();
                 _ = ui.tableNextColumn();
                 _ = ui.tableNextColumn();
-                ui.textDisabled("From {s}", .{t.mod_title orelse from});
-            };
+                ui.textDisabled("From {s}", .{t.source_title});
+            }
             ui.tableNextRow();
             _ = ui.tableNextColumn();
             _ = picking.row(i, "##row");
@@ -143,7 +143,7 @@ pub fn draw(self: *TweaksPanel) void {
                     ui.sameLine();
                 }
                 ui.text("{s}", .{t.title});
-                if (t.plugin orelse t.mod_title orelse t.mod) |p| ui.tooltip("{s}'s, so it has no file to edit", .{p}) else if (t.group == null and !std.mem.eql(u8, t.title, t.name)) ui.tooltip("{s}", .{t.path});
+                if (t.source != .project) ui.tooltip("{s}'s, so it has no file to edit", .{t.source_title}) else if (t.group == null and !std.mem.eql(u8, t.title, t.name)) ui.tooltip("{s}", .{t.path});
             }
             if (indent > 0) ui.unindent(indent);
             _ = ui.tableNextColumn();
@@ -231,7 +231,7 @@ fn commands(self: *TweaksPanel, tweaks: *Tweaks, project: *Project, list: []cons
     defer menu.end();
     const one = self.focusedTweak(list);
     // A plugin's or an installed mod's has no file in the project
-    const file = if (one) |t| t.plugin == null and t.mod == null else false;
+    const file = if (one) |t| t.source == .project else false;
     // Renaming or deleting goes for a group's whole file
     const whole = file and one.?.group == null;
     const any = self.picked.count() > 0;

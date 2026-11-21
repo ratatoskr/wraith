@@ -187,7 +187,7 @@ fn stopGroup(tw: *Tweaks, g: *Tweak) void {
 /// groups it's in first, outermost first. The file's own comes up with what's first in its
 /// session, so it only gets a run of its own when it's on by itself.
 fn start(tw: *Tweaks, t: *Tweak) void {
-    if (t.plugin != null) {
+    if (t.byPlugin()) {
         clearProblem(tw, t);
         for (t.def.fields) |d| queueCall(tw, t, .changed, d.name, tw.kept.stored(t.name, d));
         t.state = .starting;
@@ -196,7 +196,7 @@ fn start(tw: *Tweaks, t: *Tweak) void {
         return;
     }
     const file = t.fileOf();
-    const code = tw.readFile(file.mod, file.path) orelse {
+    const code = tw.readFile(file.mod(), file.path) orelse {
         log.warn("Tweak {s}: couldn't read {s}", .{ t.name, file.path });
         return fail(tw, t, "Couldn't read its file");
     };
@@ -237,6 +237,7 @@ fn sendRun(tw: *Tweaks, a: std.mem.Allocator, code: []const u8, t: *Tweak, share
         .values = try fittedValues(tw, a, t),
         .part = t.part,
         .shared_values = shared,
+        .project = file.source.id,
     });
 }
 
@@ -259,7 +260,7 @@ fn confirm(tw: *Tweaks, t: *Tweak) void {
             return settle(tw, t.fileOf());
         }
         // A plugin's has nothing left to stop
-        if (t.plugin == null) stopSession(tw, t);
+        if (!t.byPlugin()) stopSession(tw, t);
         t.state = .off;
         return;
     }
@@ -293,7 +294,7 @@ fn fail(tw: *Tweaks, t: *Tweak, problem: []const u8) void {
         return settle(tw, t.fileOf());
     }
     // A plugin that refused has nothing to stop
-    if (t.plugin == null) stopSession(tw, t);
+    if (!t.byPlugin()) stopSession(tw, t);
     setProblem(tw, t, problem);
     t.state = .failed;
 }
@@ -319,7 +320,7 @@ fn lose(tw: *Tweaks, t: *Tweak) void {
 /// Gets a fresh session, so its output can't land on the next run.
 fn stopSession(tw: *Tweaks, t: *Tweak) void {
     if (!t.state.started()) return;
-    if (t.plugin != null) return queueCall(tw, t, .off, "", 0);
+    if (t.byPlugin()) return queueCall(tw, t, .off, "", 0);
     send(tw, protocol.topics.stop, protocol.Target{ .session = t.session });
     dropSession(tw, t);
 }
@@ -360,25 +361,25 @@ pub fn tick(tw: *Tweaks) void {
     {
         tw.lock.lock();
         defer tw.lock.unlock();
-        for (tw.list.items) |t| if (t.plugin != null and t.state == .waiting) start(tw, t);
+        for (tw.list.items) |t| if (t.byPlugin() and t.state == .waiting) start(tw, t);
     }
     runPluginCalls(tw);
 
     tw.lock.lock();
     defer tw.lock.unlock();
     var wanted: std.EnumSet(format.Script) = .empty;
-    for (tw.list.items) |t| if (t.plugin == null and (t.state == .waiting or t.state.started())) wanted.insert(t.def.script);
+    for (tw.list.items) |t| if (!t.byPlugin() and (t.state == .waiting or t.state.started())) wanted.insert(t.def.script);
     var ready: std.EnumSet(format.Script) = .empty;
     var it = wanted.iterator();
     while (it.next()) |language| if (tw.env.ready(tw.env.context, @tagName(language))) ready.insert(language);
     var lost = false;
-    for (tw.list.items) |t| if (t.plugin == null and t.file == null and !ready.contains(t.def.script) and startedIn(tw, t)) {
+    for (tw.list.items) |t| if (t.isFile() and !ready.contains(t.def.script) and startedIn(tw, t)) {
         lose(tw, t);
         lost = true;
     };
     if (lost) tw.changed();
     // What's in groups brings them up, then groups that are on by themselves
-    for (tw.list.items) |t| if (!t.is_group and t.state == .waiting and (t.plugin != null or ready.contains(t.def.script))) start(tw, t);
+    for (tw.list.items) |t| if (!t.is_group and t.state == .waiting and (t.byPlugin() or ready.contains(t.def.script))) start(tw, t);
     for (tw.list.items) |t| if (t.is_group and t.state == .waiting and ready.contains(t.def.script)) start(tw, t);
 }
 
@@ -555,7 +556,7 @@ pub const PluginCall = struct {
 
 /// Under the lock. A field changed, which a plugin's started tweak hears about.
 fn tellPlugin(tw: *Tweaks, t: *Tweak, field: []const u8, value: f64) void {
-    if (t.plugin == null or !t.state.started()) return;
+    if (!t.byPlugin() or !t.state.started()) return;
     // A drag changes it every frame, so only the newest waiting change is kept
     for (tw.calls.items) |*c| if (c.kind == .changed and std.mem.eql(u8, c.tweak(), t.name) and std.mem.eql(u8, c.field(), field)) {
         c.value = value;
@@ -734,9 +735,9 @@ const tests = struct {
         try testing.expectEqual(2, side.last);
         try testing.expectEqual(0, fake.runs);
         const info = (try tweaks.snapshot(arena.allocator()))[0];
-        try testing.expectEqualStrings("kai", info.plugin.?);
+        try testing.expectEqualStrings("kai", info.source_id);
         // Shown under its title, not its id
-        try testing.expectEqualStrings("Kai Tools", info.plugin_title.?);
+        try testing.expectEqualStrings("Kai Tools", info.source_title);
         try testing.expectEqualStrings("Fast", info.title);
         try testing.expect(info.on and info.running);
         try testing.expectEqual(.running, stateOf(tweaks, "kai:speed"));

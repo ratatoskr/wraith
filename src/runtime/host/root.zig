@@ -21,6 +21,7 @@ pub const code = @import("code.zig");
 pub const addresses = @import("addresses.zig");
 pub const tweaks = @import("tweaks.zig");
 pub const shared_schemas = @import("shared_schemas.zig");
+pub const projects = @import("projects.zig");
 pub const libraries = @import("libraries.zig");
 pub const salamander = @import("salamander.zig");
 pub const wraith = @import("wraith.zig");
@@ -31,6 +32,7 @@ pub const memory = @import("memory.zig");
 pub const watches = @import("watches.zig");
 pub const sound = @import("sound.zig");
 pub const Owned = @import("Owned.zig").Owned;
+pub const OnGone = @import("Owned.zig").OnGone;
 pub const stopTagged = @import("Owned.zig").stopTagged;
 
 test {
@@ -49,6 +51,7 @@ test {
     _ = tweaks;
     _ = settings;
     _ = shared_schemas;
+    _ = projects;
     _ = libraries;
     _ = salamander;
     _ = images;

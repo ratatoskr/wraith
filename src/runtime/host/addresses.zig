@@ -1,10 +1,15 @@
-//! The game's named addresses for plugins, see `Names`. Ids find entries.
+//! The game's named addresses for plugins and projects, see `Names`. Ids find entries. Each looks
+//! names up the same way, through `Scope`.
 
 const std = @import("std");
 
 const mem = @import("tuft_mem");
+const sigs = @import("tuft_schema").sigs;
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 const api = @import("wraith_api");
+const SalSchema = @import("salamander_schema").Schema;
+const devtools = @import("tuft_devtools");
 
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const Names = @import("../Names.zig");
@@ -16,10 +21,10 @@ pub fn get(_: *Loaded, id: []const u8) api.AddressError!usize {
 pub fn add(loaded: *Loaded, entry: api.AddressEntry) api.AddressAddError!void {
     if (entry.id.len == 0 or std.mem.indexOfAny(u8, entry.id, " \t") != null) return error.InvalidId;
     if (entry.address.len == 0) return error.InvalidAddress;
-    const lease = keeping(loaded) orelse return error.OutOfMemory;
+    const lease = cleanup.lease(&loaded.owner) orelse return error.OutOfMemory;
     defer lease.end();
     var buf: [192]u8 = undefined;
-    const full = std.fmt.bufPrint(&buf, "{s}.{s}", .{ loaded.name, entry.id }) catch return error.InvalidId;
+    const full = loaded.ownName(&buf, entry.id) orelse return error.InvalidId;
     if (Names.global.has(.plugin, full)) return error.AlreadyAdded;
     var offsets: [16]isize = undefined;
     if (entry.offsets.len > offsets.len) return error.InvalidAddress;
@@ -38,13 +43,14 @@ pub fn add(loaded: *Loaded, entry: api.AddressEntry) api.AddressAddError!void {
 
 pub fn remove(loaded: *Loaded, id: []const u8) void {
     var buf: [192]u8 = undefined;
-    const full = std.fmt.bufPrint(&buf, "{s}.{s}", .{ loaded.name, id }) catch return;
+    const full = loaded.ownName(&buf, id) orelse return;
     Names.global.remove(.plugin, &loaded.owner, full);
 }
 
-pub fn resolve(_: *Loaded, text: []const u8, names: []const api.Name, problem: *api.LocationProblem) api.AddressError!usize {
+pub fn resolve(loaded: *Loaded, text: []const u8, names: []const api.Name, problem: *api.LocationProblem) api.AddressError!usize {
     var found: mem.Location.Problem = .{};
-    return Names.global.eval(text, scopeOf(&names), &found) catch |err| {
+    const scope: Scope = .{ .loaded = loaded, .names = names };
+    return Names.global.eval(text, scope.symbols(), &found) catch |err| {
         problem.set(found.message());
         return switch (err) {
             error.Unreadable => error.Unreadable,
@@ -54,24 +60,92 @@ pub fn resolve(_: *Loaded, text: []const u8, names: []const api.Name, problem: *
     };
 }
 
-/// `names` as symbols, looked up before everything else. Only good while `names` is.
-pub fn scopeOf(names: *const []const api.Name) mem.Symbols {
-    return .{ .context = @ptrCast(@constCast(names)), .vtable = &.{ .resolve = struct {
-        fn resolve(context: ?*anyopaque, name: []const u8) ?usize {
-            const list: *const []const api.Name = @ptrCast(@alignCast(context.?));
-            return api.Name.find(list.*, name);
+/// How a plugin, a project or a tweak looks names up, before everyone's in `Names`: `names` first,
+/// then what its schemas declare, like `Player.instance`, then its own names without their
+/// prefix, like `hp` for `kai.hp`.
+pub const Scope = struct {
+    loaded: ?*Loaded = null,
+    names: []const api.Name = &.{},
+
+    pub fn resolve(self: *const Scope, name: []const u8) ?usize {
+        if (api.Name.find(self.names, name)) |at| return at;
+        const loaded = self.loaded orelse return null;
+        if (loaded.schemas) |s| {
+            const schema = s.schema();
+            if (schema.findStatic(name) != null or schema.findFunction(name) != null) return s.address(name) catch null;
         }
-    }.resolve } };
+        var buf: [192]u8 = undefined;
+        const own = loaded.ownName(&buf, name) orelse return null;
+        if (own.len == name.len) return null;
+        return Names.global.get(own) catch null;
+    }
+
+    /// Only good while `self` is.
+    pub fn symbols(self: *const Scope) mem.Symbols {
+        return .{ .context = @ptrCast(@constCast(self)), .vtable = &.{ .resolve = struct {
+            fn resolve(context: ?*anyopaque, name: []const u8) ?usize {
+                const scope: *const Scope = @ptrCast(@alignCast(context.?));
+                return scope.resolve(name);
+            }
+        }.resolve } };
+    }
+};
+
+/// The statics its own schemas declare, as names like `kai.Player.instance`, in place of what it
+/// had. Not ones from plugins it depends on, which are theirs. Sessions name nothing.
+pub fn publishStatics(loaded: *Loaded) void {
+    if (loaded.session) return;
+    const lease = cleanup.lease(&loaded.owner) orelse return;
+    defer lease.end();
+    Names.global.removeFrom(.schema, &loaded.owner);
+    const s = loaded.schemas orelse return;
+    const schema = &s.parsed.schema;
+    for (schema.statics) |st| nameStatic(loaded, schema, s.parsed.source, st, "");
+    for (schema.types) |t| switch (t.kind) {
+        .@"struct" => |st| for (st.statics) |one| nameStatic(loaded, schema, s.parsed.source, one, t.name),
+        else => {},
+    };
 }
 
-fn keeping(loaded: *Loaded) ?Owner.Lease {
-    return watch.lease(&listener, &loaded.owner, .data);
+fn nameStatic(loaded: *Loaded, schema: *const SalSchema, source: []const u8, st: SalSchema.Static, owner: []const u8) void {
+    if (!ownFile(loaded, SalSchema.fileOf(source, st.at))) return;
+    var id_buf: [192]u8 = undefined;
+    const id = (if (owner.len > 0) std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ owner, st.name }) else st.name) catch return;
+    var name_buf: [256]u8 = undefined;
+    const name = loaded.ownName(&name_buf, id) orelse return;
+    var steps: [sigs.max_steps]mem.Sig.Step = undefined;
+    const sig = (sigs.of(st.annotations, "wraith", "Sig", &steps) catch return) orelse return;
+    var text_buf: [1024]u8 = undefined;
+    var type_buf: [256]u8 = undefined;
+    Names.global.put(.{
+        .source = .schema,
+        .owner = &loaded.owner,
+        .group = loaded.displayName(),
+        .name = name,
+        .where = .{ .text = .{ .text = std.fmt.bufPrint(&text_buf, "{f}", .{sig}) catch return } },
+        .type = std.fmt.bufPrint(&type_buf, "{f}", .{st.type}) catch return,
+        .size = schema.sizeOf(st.type) orelse 0,
+    }) catch {};
 }
 
-var watch: Owner.Watch(*u8, .{ .released = released }) = .{};
-var listener: u8 = 0;
+/// One of its own files, like `kai/game.sal`, not a dependency's.
+pub fn ownFile(loaded: *const Loaded, file: []const u8) bool {
+    return file.len > loaded.name.len and std.mem.startsWith(u8, file, loaded.name) and file[loaded.name.len] == '/';
+}
 
-fn released(_: *u8, owner: *Owner) void {
+/// An address list it has, like a project's, as its own names. The open project's are the user's,
+/// which come before everyone else's.
+pub fn publishList(loaded: *Loaded, items: []const devtools.AddressList.Item) void {
+    const lease = cleanup.lease(&loaded.owner) orelse return;
+    defer lease.end();
+    const schemas: []const *const SalSchema = if (loaded.schemas) |s| &.{&s.parsed.schema} else &.{};
+    const source: Names.Source = if (loaded.prefix().len == 0) .user else .plugin;
+    Names.global.setList(source, &loaded.owner, loaded.displayName(), loaded.prefix(), items, schemas);
+}
+
+var cleanup: OnGone(.released, released) = .{};
+
+fn released(owner: *Owner) void {
     Names.global.removeOwner(owner);
 }
 
@@ -102,6 +176,8 @@ const tests = struct {
         const names = [_]api.Name{.of("mine", 0x40)};
         try testing.expectEqual(0x48, try resolve(&loaded, "mine + 8", &names, &problem));
         try testing.expectEqual(@intFromPtr(&value) + 2, try resolve(&loaded, "(kai.hp)+2", &.{}, &problem));
+        // Its own, without its name in front
+        try testing.expectEqual(@intFromPtr(&value), try resolve(&loaded, "hp", &.{}, &problem));
         try testing.expectError(error.InvalidAddress, resolve(&loaded, "nobody", &.{}, &problem));
         try testing.expectEqualStrings("there's no nobody", problem.message());
 

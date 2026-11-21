@@ -4,6 +4,7 @@ const std = @import("std");
 
 const memory = @import("tuft_mem");
 const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
 const api = @import("wraith_api");
 
 const Loaded = @import("../PluginLoader.zig").Loaded;
@@ -11,7 +12,7 @@ const Names = @import("../Names.zig");
 const OriginalCode = @import("../OriginalCode.zig");
 
 pub fn record(loaded: *Loaded, scan: api.Scan) void {
-    const lease = keeping(loaded) orelse return;
+    const lease = cleanup.lease(&loaded.owner) orelse return;
     defer lease.end();
     Names.global.recordScan(&loaded.owner, &.{
         .name = scan.name,
@@ -29,14 +30,9 @@ pub fn record(loaded: *Loaded, scan: api.Scan) void {
     }) catch {};
 }
 
-fn keeping(loaded: *Loaded) ?Owner.Lease {
-    return watch.lease(&listener, &loaded.owner, .data);
-}
+var cleanup: OnGone(.released, released) = .{};
 
-var watch: Owner.Watch(*u8, .{ .released = released }) = .{};
-var listener: u8 = 0;
-
-fn released(_: *u8, owner: *Owner) void {
+fn released(owner: *Owner) void {
     Names.global.removeOwner(owner);
 }
 
