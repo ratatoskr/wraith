@@ -557,6 +557,8 @@ const tests = struct {
             \\    [Virtual(1)] i32 second(i32 x);
             \\    [Sig("B8 0D F0 57 7E")] static i32 alsoTripled(i32 x);
             \\}
+            \\[Instance("B8 0D F0 57 7E")]
+            \\struct Spot { u32 x; }
         }});
         defer {
             fake.loaded.schemas.?.destroy();
@@ -567,6 +569,8 @@ const tests = struct {
         const at = @intFromPtr(&tripled);
         try testing.expectEqual(at, try g.address("tripled"));
         try testing.expectEqual(at, try g.address("Thing.alsoTripled"));
+        // A struct tagged as a global is found like a [Sig] static
+        try testing.expectEqual(at, try g.address("Spot.instance"));
         // Through an object's own vtable
         const table = [_]usize{ 0, at };
         const thing = [_]usize{@intFromPtr(&table)};

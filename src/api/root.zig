@@ -15,9 +15,11 @@ pub const wraith_sal = @embedFile("wraith.sal");
 /// Made from `schemas` as the build runs, with real methods like `root.frame().stats()`.
 pub const wraith = @import("wraith_api_zig");
 /// How every schema wraith reads is parsed. Plugins' write `[Sig]` and the rest without a `use`.
+/// `[Instance("..")] struct Player` is `static Player* instance` with that sig, so it's found the same.
 pub const sal_options: @import("salamander_schema").Options = .{
-    .namespaces = &.{.{ .name = "wraith", .annotations = &.{ "Sig", "Module", "Section", "VirtualTable", "Service" } }},
+    .namespaces = &.{.{ .name = "wraith", .annotations = &.{ "Sig", "Module", "Section", "VirtualTable", "Instance", "Service" } }},
     .uses = &.{"wraith"},
+    .instances = &.{.{ .namespace = "wraith", .name = "Instance", .as = "Sig" }},
 };
 
 pub const CpuContext = @import("tuft_arch").CpuContext;

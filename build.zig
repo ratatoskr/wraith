@@ -10,6 +10,9 @@ const wraith_build = @This();
 
 /// Builds a Zig plugin's DLLs against the SDK, for plugins outside this repo.
 /// Every arch its manifest's `.arches` lists, or both, side by side. With -Dtarget just that one.
+/// `[Instance("..")] struct T` gives `T.instance`, as `api.sal_options` has it.
+const instance_tag = "wraith.Instance=Sig";
+
 pub const Plugin = struct {
     name: []const u8,
     manifest: std.Build.LazyPath,
@@ -164,10 +167,10 @@ pub const Plugin = struct {
             .imports = &.{.{ .name = "wraith_sdk", .module = sdk }},
         });
         if (options.schemas orelse findSchemas(options.root_source_file)) |dir| {
-            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = dir, .target = options.target, .uses = &.{"wraith"}, .with = depends }));
+            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = dir, .target = options.target, .uses = &.{"wraith"}, .instances = &.{instance_tag}, .with = depends }));
         } else if (depends.len > 0) {
             // Nothing of its own, so the first dependency's folder stands in
-            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = depends[0].folder, .target = options.target, .uses = &.{"wraith"}, .with = depends[1..] }));
+            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = depends[0].folder, .target = options.target, .uses = &.{"wraith"}, .instances = &.{instance_tag}, .with = depends[1..] }));
         }
         const arch = if (options.target.result.cpu.arch == .x86) "x86" else "x64";
         return .{
@@ -487,7 +490,7 @@ const Modules = struct {
             .{ .name = "tuft_vfs", .module = tuft.module("tuft_vfs") },
         }, true);
         // The fixture plugin's schema as generated Zig, so loader tests can call into it
-        runtime.addImport("wraith_test_fixture", @import("salamander").zigModule(salamander_dep, .{ .source = b.path("src/runtime/testing/schemas/fixture.sal"), .target = target, .uses = &.{"wraith"} }));
+        runtime.addImport("wraith_test_fixture", @import("salamander").zigModule(salamander_dep, .{ .source = b.path("src/runtime/testing/schemas/fixture.sal"), .target = target, .uses = &.{"wraith"}, .instances = &.{instance_tag} }));
         const build_info = b.addOptions();
         build_info.addOption([]const u8, "version", zon.version);
         runtime.addOptions("build_info", build_info);
