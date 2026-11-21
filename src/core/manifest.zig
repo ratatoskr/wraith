@@ -6,6 +6,8 @@ const std = @import("std");
 const Arch = @import("arch.zig").Arch;
 
 pub const file_name = "wraith.json";
+/// What editors check it against, the hub's.
+pub const schema_url = "https://hub.wraith.io/schema/v1/wraith.json";
 
 /// The game a package is for. Any of its ids or exes will do.
 pub const Game = struct {
@@ -116,6 +118,84 @@ pub const Manifest = struct {
 
     pub fn runsOn(self: Manifest, version: []const u8) bool {
         return satisfies(version, self.wraith orelse return true);
+    }
+
+    /// As the file, with the schema first and what's empty or a default left out.
+    pub fn write(self: Manifest, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        const Out = struct {
+            @"$schema": []const u8 = schema_url,
+            id: []const u8,
+            kind: Kind,
+            version: ?[]const u8 = null,
+            title: ?[]const u8 = null,
+            summary: ?[]const u8 = null,
+            description: ?[]const u8 = null,
+            author: ?[]const u8 = null,
+            license: ?[]const u8 = null,
+            homepage: ?[]const u8 = null,
+            repo: ?[]const u8 = null,
+            tags: ?[]const []const u8 = null,
+            icon: ?[]const u8 = null,
+            images: ?[]const []const u8 = null,
+            wraith: ?[]const u8 = null,
+            game: ?struct {
+                ids: ?[]const []const u8 = null,
+                exes: ?[]const []const u8 = null,
+                builds: ?[]const []const u8 = null,
+                hashes: ?[]const []const u8 = null,
+            } = null,
+            gameEngine: ?struct {
+                id: []const u8,
+                variants: ?[]const []const u8 = null,
+            } = null,
+            arches: ?[]const Arch = null,
+            provider: ?[]const u8 = null,
+            autoLoad: ?bool = null,
+            library: ?bool = null,
+            depends: ?[]const []const u8 = null,
+        };
+        const out: Out = .{
+            .id = self.id,
+            .kind = self.kind,
+            .version = text(self.version),
+            .title = text(self.title),
+            .summary = text(self.summary),
+            .description = text(self.description),
+            .author = text(self.author),
+            .license = text(self.license),
+            .homepage = text(self.homepage),
+            .repo = text(self.repo),
+            .tags = list(self.tags),
+            .icon = text(self.icon),
+            .images = list(self.images),
+            .wraith = text(self.wraith),
+            .game = if (self.game) |g| .{ .ids = list(g.ids), .exes = list(g.exes), .builds = list(g.builds), .hashes = list(g.hashes) } else null,
+            .gameEngine = if (self.gameEngine) |e| .{ .id = e.id, .variants = list(e.variants) } else null,
+            .arches = self.arches,
+            .provider = text(self.provider),
+            .autoLoad = if (self.autoLoad) null else false,
+            .library = if (self.library) true else null,
+            .depends = list(self.depends),
+        };
+        try std.json.Stringify.value(out, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, w);
+        try w.writeByte('\n');
+    }
+
+    /// `write`, in `gpa`.
+    pub fn toJson(self: Manifest, gpa: std.mem.Allocator) error{OutOfMemory}![]u8 {
+        var out: std.Io.Writer.Allocating = .init(gpa);
+        errdefer out.deinit();
+        self.write(&out.writer) catch return error.OutOfMemory;
+        return out.toOwnedSlice();
+    }
+
+    fn text(s: ?[]const u8) ?[]const u8 {
+        const t = s orelse return null;
+        return if (t.len > 0) t else null;
+    }
+
+    fn list(l: []const []const u8) ?[]const []const u8 {
+        return if (l.len > 0) l else null;
     }
 };
 
@@ -228,6 +308,29 @@ pub fn compareVersions(a: []const u8, b: []const u8) std.math.Order {
             std.mem.order(u8, pa, pb);
         if (order != .eq) return order;
     }
+}
+
+test "written as the file, read back the same" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const made: Manifest = .{
+        .id = "kai",
+        .kind = .project,
+        .version = "0.1.0",
+        .title = "Kai",
+        .author = "",
+        .game = .{ .ids = &.{"steam-1"}, .exes = &.{"kai.exe"} },
+        .autoLoad = false,
+    };
+    const text = try made.toJson(a);
+    try std.testing.expect(std.mem.startsWith(u8, text, "{\n  \"$schema\": \"" ++ schema_url ++ "\",\n  \"id\": \"kai\",\n  \"kind\": \"project\""));
+    // Nothing empty or left as it is anyway
+    for ([_][]const u8{ "author", "builds", "library", "tags" }) |left_out| try std.testing.expect(std.mem.indexOf(u8, text, left_out) == null);
+    const back = try parse(a, text, null);
+    try std.testing.expectEqual(.project, back.kind);
+    try std.testing.expect(!back.autoLoad);
+    try std.testing.expect(back.isFor(.{ .exe = "kai.exe" }));
 }
 
 test "manifest parsing" {

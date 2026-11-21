@@ -484,7 +484,8 @@ fn presenceOf(ctx: Context, path: []const u8) !Presence {
     return if (std.mem.indexOf(u8, data, proxy_info.marker) != null) .ours else .theirs;
 }
 
-fn exeArch(io: std.Io, path: []const u8) !inject.Arch {
+/// What the exe at `path` was built for, from its PE header.
+pub fn exeArch(io: std.Io, path: []const u8) !inject.Arch {
     var buf: [4096]u8 = undefined;
     const head = std.Io.Dir.cwd().readFile(io, path, &buf) catch |err| {
         log.err("Can't read {s}: {t}", .{ path, err });

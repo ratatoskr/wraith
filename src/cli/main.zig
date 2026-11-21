@@ -14,10 +14,11 @@ const mods = @import("mods.zig");
 const sdk = @import("sdk.zig");
 const dev = @import("dev.zig");
 const import_cmd = @import("import.zig");
+const new = @import("new.zig");
 
 const log = core.log.scoped(.wraith_cli);
 
-const Command = enum { help, ps, games, exes, identify, inject, launch, play, watch, install, uninstall, mods, dev, sdk, import, serve };
+const Command = enum { help, new, ps, games, exes, identify, inject, launch, play, watch, install, uninstall, mods, dev, sdk, import, serve };
 
 const help_text =
     \\Usage: wraith [--console] <command>
@@ -25,6 +26,10 @@ const help_text =
     \\                                       start (inject, launch, watch, play without --proxy)
     \\Commands:
     \\  help
+    \\
+++ new.usage ++
+    \\
+    \\
     \\  ps [--all]                           running programs with windows, likeliest games
     \\                                       first (--all: windowless ones too)
     \\  games                                the games installed from Steam, GOG, Epic and Xbox,
@@ -283,6 +288,13 @@ pub fn main(init: std.process.Init) !void {
             };
             if (code != 0) std.process.exit(code);
         },
+        .new => {
+            const code = new.run(ctx, &args) catch |err| {
+                log.err("Failed: {t}", .{err});
+                std.process.exit(2);
+            };
+            if (code != 0) std.process.exit(code);
+        },
         .dev => {
             const code = dev.run(ctx, &args) catch |err| {
                 log.err("Failed: {t}", .{err});
@@ -320,5 +332,6 @@ test {
     _ = sdk;
     _ = dev;
     _ = import_cmd;
+    _ = new;
     _ = @import("deps.zig");
 }

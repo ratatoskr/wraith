@@ -10,7 +10,7 @@ const game_engine = @import("wraith_game").game_engine;
 const Project = @import("Project.zig");
 
 pub const file = core.manifest.file_name;
-pub const schema_url = "https://hub.wraith.io/schema/v1/wraith.json";
+pub const schema_url = core.manifest.schema_url;
 
 pub const Details = struct {
     id: []const u8 = "",
@@ -155,61 +155,28 @@ fn isNumbers(v: []const u8, max: usize) bool {
 
 /// As the file, with empty fields left out.
 pub fn toJson(arena: std.mem.Allocator, d: Details) ![]u8 {
-    const Game_ = struct {
-        ids: ?[]const []const u8 = null,
-        exes: ?[]const []const u8 = null,
-    };
-    const GameEngine_ = struct {
-        id: []const u8,
-        variants: ?[]const []const u8 = null,
-    };
-    const Out = struct {
-        @"$schema": []const u8 = schema_url,
-        id: []const u8,
-        kind: []const u8 = "project",
-        version: []const u8,
-        title: []const u8,
-        summary: []const u8,
-        description: ?[]const u8 = null,
-        author: ?[]const u8 = null,
-        license: ?[]const u8 = null,
-        homepage: ?[]const u8 = null,
-        repo: ?[]const u8 = null,
-        tags: ?[]const []const u8 = null,
-        icon: ?[]const u8 = null,
-        images: ?[]const []const u8 = null,
-        wraith: ?[]const u8 = null,
-        game: ?Game_ = null,
-        gameEngine: ?GameEngine_ = null,
-        depends: ?[]const []const u8 = null,
-    };
     const has_game = d.ids.len > 0 or d.exes.len > 0;
-    const out: Out = .{
+    const m: core.manifest.Manifest = .{
         .id = d.id,
+        .kind = .project,
         .version = d.version,
         .title = d.title,
         .summary = d.summary,
-        .description = nonEmpty(d.description),
-        .author = nonEmpty(d.author),
-        .license = nonEmpty(d.license),
-        .homepage = nonEmpty(d.homepage),
-        .repo = nonEmpty(d.repo),
-        .tags = if (d.tags.len > 0) d.tags else null,
-        .icon = nonEmpty(d.icon),
-        .images = if (d.images.len > 0) d.images else null,
-        .wraith = nonEmpty(d.wraith),
-        .game = if (has_game) .{ .ids = if (d.ids.len > 0) d.ids else null, .exes = if (d.exes.len > 0) d.exes else null } else null,
-        .gameEngine = if (d.game_engine.len > 0) .{ .id = d.game_engine, .variants = if (d.game_engine_variants.len > 0) d.game_engine_variants else null } else null,
-        .depends = if (d.depends.len > 0) d.depends else null,
+        .description = d.description,
+        .author = d.author,
+        .license = d.license,
+        .homepage = d.homepage,
+        .repo = d.repo,
+        .tags = d.tags,
+        .icon = d.icon,
+        .images = d.images,
+        .wraith = d.wraith,
+        .game = if (has_game) .{ .ids = d.ids, .exes = d.exes } else null,
+        .gameEngine = if (d.game_engine.len > 0) .{ .id = d.game_engine, .variants = d.game_engine_variants } else null,
+        .depends = d.depends,
     };
-    const text = try std.json.Stringify.valueAlloc(arena, out, .{ .whitespace = .indent_2, .emit_null_optional_fields = false });
-    return std.mem.concat(arena, u8, &.{ text, "\n" });
+    return m.toJson(arena);
 }
-
-fn nonEmpty(s: []const u8) ?[]const u8 {
-    return if (s.len > 0) s else null;
-}
-
 /// Writes it into the project. Fails with what `check` says.
 pub fn write(project: *Project, gpa: std.mem.Allocator, d: Details) !void {
     if (check(d) != null) return error.Invalid;
