@@ -210,6 +210,23 @@ test "script document" {
     frames.run(wb, 1);
     try testing.expectEqualStrings("1 + 1", std.mem.sliceTo(wb.scriptDocument(session).?.body.script.code.?, 0));
 
+    // Typed at the Console, in a Lua session of its own
+    const console = &wb.panels.console;
+    console.target = .{ .console = .lua };
+    console.enter("1 + 1");
+    messages.deliver();
+    try testing.expectEqual(2, provider.runs);
+    const lua = console.own.get(.lua).?;
+    try testing.expectEqual(lua, provider.last_session);
+    try testing.expectEqual(.lua, wb.scripts.find(lua).?.language);
+    // Or in a script's, which still opens with what it ran
+    console.target = .{ .session = session };
+    console.enter("x");
+    messages.deliver();
+    try testing.expectEqual(session, provider.last_session);
+    try testing.expectEqualStrings("1 + 1", wb.scripts.find(session).?.code);
+    frames.run(wb, 1);
+
     wb.closeScript(session);
     wb.scripts.stop(session);
     messages.deliver();

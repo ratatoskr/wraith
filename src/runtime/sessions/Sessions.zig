@@ -17,6 +17,7 @@ const sync = @import("tuft_sys").sync;
 
 const host = @import("../host/root.zig");
 const scripts = @import("../plugins/scripts.zig");
+const repl = @import("repl.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const protocol = api.script;
@@ -298,9 +299,26 @@ fn run(self: *Sessions, r: Request) void {
     defer self.gpa.free(buf);
     live.script.enter();
     defer live.script.leave();
+    if (language == .js and repl.awaits(r.code)) return self.runAwaiting(live, r.session, r.code, buf);
     switch (live.script.eval(r.code, buf)) {
         .value => |v| self.send(r.session, .value, "{s}", .{v}),
         .thrown => |t| self.send(r.session, .thrown, "{s}", .{t}),
+    }
+}
+
+/// JS with a top-level `await`, in an async function that prints what it gave once it's done.
+fn runAwaiting(self: *Sessions, live: *Live, id: u32, code: []const u8, buf: []u8) void {
+    for ([_]repl.Form{ .expression, .statements }) |form| {
+        const wrapped = repl.wrap(self.gpa, code, form) catch return self.send(id, .thrown, "Out of memory", .{});
+        defer self.gpa.free(wrapped);
+        switch (live.script.eval(wrapped, buf)) {
+            .value => return,
+            .thrown => |t| {
+                // Not an expression, like `const x = await f()`
+                if (form == .expression and std.mem.indexOf(u8, t, "SyntaxError") != null) continue;
+                return self.send(id, .thrown, "{s}", .{t});
+            },
+        }
     }
 }
 
@@ -747,6 +765,31 @@ const tests = struct {
         rig.step();
         try testing.expectEqualStrings("42", rig.heard.line(10));
         try testing.expectEqualStrings("function", rig.heard.line(12));
+    }
+
+    test "JS can await at the top, like in the Console" {
+        var rig: Rig = undefined;
+        try rig.init();
+        defer rig.deinit();
+        const Lines = struct {
+            fn has(r: *Rig, kind: protocol.Kind, text: []const u8) bool {
+                for (r.heard.lines.items, 0..) |l, i| {
+                    if (l.kind == kind and std.mem.indexOf(u8, r.heard.line(i), text) != null) return true;
+                }
+                return false;
+            }
+        };
+        // What it gave shows once it's done
+        try rig.run(5, "js", "await Promise.resolve(41 + 1)");
+        try testing.expect(Lines.has(&rig, .info, "42"));
+        // A name it makes outlasts it, like at the top
+        try rig.run(5, "js", "const hp = await Promise.resolve(7)");
+        try testing.expectEqualStrings("7", rig.eval(5, "hp"));
+        // Its error's logged too, which is expected here
+        const saved = core.log.mute(&.{.plugin});
+        defer core.log.setFilter(saved);
+        try rig.run(5, "js", "await Promise.reject(new Error('nope'))");
+        try testing.expect(Lines.has(&rig, .err, "nope"));
     }
 
     test "a tweak starts with its project's schemas and names" {
@@ -1310,4 +1353,5 @@ const tests = struct {
 
 test {
     _ = tests;
+    _ = repl;
 }

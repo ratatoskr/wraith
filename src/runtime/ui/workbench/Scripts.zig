@@ -163,6 +163,16 @@ pub fn run(self: *Scripts, id: u32, code: []const u8) void {
     self.sendPending();
 }
 
+/// Like typed at the Console. It runs in the session, but its document still opens with what it
+/// ran before. Once scripts are ready.
+pub fn eval(self: *Scripts, id: u32, code: []const u8) void {
+    const s = self.find(id) orelse return;
+    if (s.pending) |p| self.allocator.free(p);
+    s.pending = self.allocator.dupe(u8, code) catch null;
+    self.listen();
+    self.sendPending();
+}
+
 /// Stops what it started and forgets its variables. It stays listed.
 pub fn reset(self: *Scripts, id: u32) void {
     self.send(protocol.topics.reset, protocol.Target{ .session = id });

@@ -136,6 +136,7 @@ pub const Commands = tuft_ui.Commands;
 pub const commands = tuft_ui.commands;
 pub const Reorder = tuft_ui.Reorder;
 pub const Outline = tuft_ui.Outline;
+pub const Prompt = tuft_ui.Prompt;
 pub const isItemClicked = tuft_ui.isItemClicked;
 pub const dummy = tuft_ui.dummy;
 pub const newLine = tuft_ui.newLine;
