@@ -17,13 +17,10 @@ open: bool = false,
 leaving: bool = false,
 dim: Dim = .{},
 choices: Choices = .{},
-/// Shown in developer mode's description. Null if it's been cleared.
-workbench_key: ?Chord = .{ .key = .home, .mods = .{ .ctrl = true } },
 
 /// What's picked in it, from the settings to start.
 pub const Choices = struct {
     overlay_key: Chord = .{ .key = .insert },
-    developer_mode: bool = false,
 };
 
 const width = 480;
@@ -71,12 +68,6 @@ fn drawChoices(self: *Welcome) void {
     ui.setNextItemWidth(160);
     // Escape leaves it as it was, and there's always one
     if (ui.chordInput("##overlay_key", &key, .{})) self.choices.overlay_key = key.?;
-
-    ui.separatorText("Developer mode");
-    _ = ui.checkbox("I make plugins or mods", &self.choices.developer_mode);
-    if (self.workbench_key) |workbench| {
-        ui.textDisabled("Turns on the workbench ({f}) and the other developer tools.", .{workbench});
-    } else ui.textDisabled("Turns on the workbench and the other developer tools.", .{});
 }
 
 /// Fades it out and gives the game its input back.

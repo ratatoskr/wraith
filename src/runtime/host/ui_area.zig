@@ -278,7 +278,7 @@ pub const UiImpl = struct {
         return Dialog.start(.folder, loaded, options);
     }
 
-    pub fn addMenuItem(loaded: *Loaded, label: []const u8, dev: bool) sal.Object(MenuItem) {
+    pub fn addMenuItem(loaded: *Loaded, label: []const u8) sal.Object(MenuItem) {
         const t = wraith.tablesOf(loaded) orelse return .{};
         const m = gpa.create(Menu) catch return .{};
         const copy = gpa.dupe(u8, label) catch {
@@ -291,7 +291,7 @@ pub const UiImpl = struct {
             return .{};
         };
         m.* = .{ .loaded = loaded, .label = copy, .menu = menu, .item = undefined };
-        m.item = .{ .label = copy, .menu = menu, .open = &m.open, .dev = dev };
+        m.item = .{ .label = copy, .menu = menu, .open = &m.open };
         {
             t.ui.lock.lock();
             defer t.ui.lock.unlock();
@@ -323,7 +323,7 @@ pub const UiImpl = struct {
     }
 };
 
-/// A plugin's Settings button on the Mods page.
+/// A plugin's Settings button in the Mods window and under its button on the bar.
 const SettingsHandler = struct {
     loaded: *Loaded,
     open: W.OpenSettings,

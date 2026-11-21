@@ -153,6 +153,8 @@ const Store = struct {
     values: std.StringArrayHashMapUnmanaged(Value) = .empty,
     /// What `config` points at, rebuilt for each save.
     entries: []Entry = &.{},
+    /// Changed without saving, mid-drag.
+    unsaved: bool = false,
 };
 
 allocator: std.mem.Allocator,
@@ -289,7 +291,7 @@ pub fn set(self: *Registry, s: *Setting, wanted: Value) !void {
 }
 
 pub const SetOptions = struct {
-    /// Off for every frame of a drag. The next saved set writes it too.
+    /// Off for every frame of a drag. The next saved set writes it too, even one that changes nothing.
     save: bool = true,
 };
 
@@ -312,14 +314,19 @@ pub fn setWith(self: *Registry, s: *Setting, wanted: Value, options: SetOptions)
         self.lock.lock();
         defer self.lock.unlock();
         if (s.removed) return error.Removed;
-        if (s.value.eql(v)) return;
-        const owned = try self.ownValue(v);
         const store = &self.stores[@backingInt(s.def.scope)];
+        if (s.value.eql(v)) {
+            if (options.save and store.unsaved) self.save(store) catch |err| log.warn("Couldn't save {s}: {t}", .{ s.def.id, err });
+            return;
+        }
+        const owned = try self.ownValue(v);
         if (owned.eql(defaultOf(s.def.kind))) {
             if (store.values.fetchSwapRemove(s.def.id)) |gone| self.allocator.free(gone.key);
         } else try self.keep(store, s.def.id, owned);
         s.value = owned;
-        if (options.save) self.save(store) catch |err| log.warn("Couldn't save {s}: {t}", .{ s.def.id, err });
+        if (options.save) {
+            self.save(store) catch |err| log.warn("Couldn't save {s}: {t}", .{ s.def.id, err });
+        } else store.unsaved = true;
         // Counted under the lock, so `remove` sees it
         if (s.hooks.changed != null) _ = s.calls.fetchAdd(1, .acq_rel);
         break :blk s.hooks.changed;
@@ -410,6 +417,7 @@ fn save(self: *Registry, store: *Store) !void {
     const cfg = store.config orelse return;
     try self.fillEntries(store);
     try cfg.save();
+    store.unsaved = false;
 }
 
 fn fillEntries(self: *Registry, store: *Store) !void {
@@ -546,6 +554,12 @@ const tests = struct {
         // Back to the default isn't saved
         try r.reset(t);
         try testing.expectEqual(null, r.stores[0].values.get("wraith.theme"));
+
+        // A drag's last set saves it, though it changes nothing
+        try r.setWith(t, .{ .text = "Dark" }, .{ .save = false });
+        try testing.expect(r.stores[0].unsaved);
+        try r.set(t, .{ .text = "Dark" });
+        try testing.expect(!r.stores[0].unsaved);
     }
 
     test "key settings bind, follow their value and fire" {

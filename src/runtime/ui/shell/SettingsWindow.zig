@@ -1,8 +1,8 @@
-//! The overlay's settings page, from the hub. Built from the registry, so Wraith's settings,
-//! plugins' and every key bound on the game show up the same way. Changes wait for Save, like
-//! Dalamud's. Render thread.
+//! The overlay's settings window. Built from the registry, so Wraith's settings, plugins' and
+//! every key bound on the game show up the same way. Changes take effect as you make them, and
+//! drags and typing get saved once they're done. Render thread.
 
-const SettingsPage = @This();
+const SettingsWindow = @This();
 
 const std = @import("std");
 
@@ -22,27 +22,18 @@ const Workbench = @import("../workbench/Workbench.zig");
 const c = ui.c;
 const log = core.log.scoped(.wraith_ui);
 
+window: ui.Window = .{ .title = "Wraith Settings###wraith.settings", .size = .{ 720, 560 } },
+shell: *Shell = undefined,
 allocator: std.mem.Allocator = std.heap.page_allocator,
 /// What's registered, refreshed when the registry changes.
 settings: []*Setting = &.{},
 seen_changes: u32 = std.math.maxInt(u32),
-/// Edits waiting for Save.
-pending: std.ArrayList(Pending) = .empty,
 search: [128]u8 = @splat(0),
-/// Something saved only takes effect next start.
+/// Something changed only takes effect next start.
 restart_pending: bool = false,
 /// Keys on more than one thing, refreshed when the keys change.
 clashes: []Keybinds.Clash = &.{},
 seen_keys: u32 = std.math.maxInt(u32),
-
-pub const Result = enum { stay, back, welcome };
-
-const Pending = struct {
-    setting: *Setting,
-    value: Registry.Value,
-    /// Text values point here.
-    text: [256]u8 = undefined,
-};
 
 /// Wraith's settings by section, all the game's keys, or plugins'.
 const Tab = union(enum) {
@@ -51,12 +42,10 @@ const Tab = union(enum) {
     plugins,
 };
 
-const footer_height = 36;
-
-/// Starts editing what's in effect now.
-pub fn open(self: *SettingsPage, shell: *Shell) void {
+/// Fresh, each time it's opened.
+pub fn onOpen(self: *SettingsWindow) void {
+    const shell = self.shell;
     self.allocator = shell.allocator;
-    self.pending.clearRetainingCapacity();
     self.search = @splat(0);
     self.seen_changes = std.math.maxInt(u32);
     self.seen_keys = std.math.maxInt(u32);
@@ -64,14 +53,13 @@ pub fn open(self: *SettingsPage, shell: *Shell) void {
     shell.dev_plugins.refresh(shell);
 }
 
-pub fn deinit(self: *SettingsPage) void {
+pub fn deinit(self: *SettingsWindow) void {
     if (self.settings.len > 0) self.allocator.free(self.settings);
     if (self.clashes.len > 0) Keybinds.freeClashes(self.allocator, self.clashes);
-    self.pending.deinit(self.allocator);
     self.* = .{};
 }
 
-fn refresh(self: *SettingsPage, shell: *Shell) void {
+fn refresh(self: *SettingsWindow, shell: *Shell) void {
     const now = shell.registry.changes.load(.acquire);
     if (now != self.seen_changes) {
         if (shell.registry.list(self.allocator)) |list| {
@@ -79,11 +67,6 @@ fn refresh(self: *SettingsPage, shell: *Shell) void {
             self.settings = list;
             self.seen_changes = now;
         } else |_| {}
-        // Edits to ones that went away
-        var i: usize = 0;
-        while (i < self.pending.items.len) {
-            if (self.pending.items[i].setting.removed) _ = self.pending.orderedRemove(i) else i += 1;
-        }
     }
     const keys = shell.keybinds.changes.load(.acquire);
     if (keys != self.seen_keys) {
@@ -95,16 +78,16 @@ fn refresh(self: *SettingsPage, shell: *Shell) void {
     }
 }
 
-pub fn draw(self: *SettingsPage, shell: *Shell) Result {
+pub fn draw(self: *SettingsWindow) void {
+    const shell = self.shell;
     self.refresh(shell);
-    if (ui.iconButton(icons.arrow_left ++ "##back", "Back, without saving")) return .back;
-    ui.sameLine();
     ui.setNextItemWidthPixels(-1);
     _ = ui.inputTextHint("##search", icons.search ++ "  Search settings", &self.search);
     const query = std.mem.sliceTo(&self.search, 0);
 
-    var result: Result = .stay;
-    if (ui.child("##settings", .{ 0, -ui.scaled(footer_height) }, .{})) |body| {
+    var welcome = false;
+    if (self.restart_pending) ui.textColored(.{ 1, 0.8, 0.3, 1 }, "{s}  Some changes take effect next time the game starts.", .{icons.triangle_alert});
+    if (ui.child("##settings", .{ 0, 0 }, .{})) |body| {
         defer body.end();
         if (query.len > 0) {
             self.drawFound(shell, query);
@@ -120,17 +103,16 @@ pub fn draw(self: *SettingsPage, shell: *Shell) Result {
                 };
                 const item = ui.tabItem(label, .{}) orelse continue;
                 defer item.end();
-                if (self.drawTab(shell, tab)) result = .welcome;
+                if (self.drawTab(shell, tab)) welcome = true;
             }
         }
     }
-    if (self.drawFooter(shell)) result = .back;
-    return result;
+    if (welcome) shell.showWelcome();
 }
 
 /// General first, then Wraith's sections in the order they were added, then keys and plugins.
 /// `last_sections` go at the end, in that order.
-fn tabs(self: *SettingsPage, out: []Tab) []Tab {
+fn tabs(self: *SettingsWindow, out: []Tab) []Tab {
     var n: usize = 0;
     out[n] = .{ .section = "" };
     n += 1;
@@ -187,14 +169,14 @@ fn isGameKey(s: *const Setting) bool {
 }
 
 /// True if it asked for the welcome.
-fn drawTab(self: *SettingsPage, shell: *Shell, tab: Tab) bool {
+fn drawTab(self: *SettingsWindow, shell: *Shell, tab: Tab) bool {
     switch (tab) {
         .section => |section| {
             for (self.settings) |s| {
                 if (s.def.hidden or !isWraith(s) or !std.mem.eql(u8, s.def.section, section)) continue;
                 self.row(shell, s);
             }
-            if (std.mem.eql(u8, section, "Developer") and shell.developerMode()) drawDevPlugins(shell);
+            if (std.mem.eql(u8, section, "Developer")) drawDevPlugins(shell);
             if (section.len != 0) return false;
             ui.spacing();
             {
@@ -213,7 +195,7 @@ fn drawTab(self: *SettingsPage, shell: *Shell, tab: Tab) bool {
 }
 
 /// Under a heading per owner, Wraith first. Keys from everyone, or plugins' other settings.
-fn grouped(self: *SettingsPage, shell: *Shell, keys: bool) void {
+fn grouped(self: *SettingsWindow, shell: *Shell, keys: bool) void {
     var last: []const u8 = "";
     var any = false;
     for ([_]bool{ true, false }) |wraith_pass| for (self.settings) |s| {
@@ -230,7 +212,7 @@ fn grouped(self: *SettingsPage, shell: *Shell, keys: bool) void {
     if (!any) ui.textDisabled("{s}", .{if (keys) "No keys yet" else "No plugin settings yet"});
 }
 
-fn drawFound(self: *SettingsPage, shell: *Shell, query: []const u8) void {
+fn drawFound(self: *SettingsWindow, shell: *Shell, query: []const u8) void {
     var any = false;
     for (self.settings) |s| {
         if (s.def.hidden) continue;
@@ -245,42 +227,22 @@ fn drawFound(self: *SettingsPage, shell: *Shell, query: []const u8) void {
     if (!any) ui.textDisabled("Nothing matches", .{});
 }
 
-/// What it'll be on Save, so the edit if there is one.
-fn valueOf(self: *SettingsPage, shell: *Shell, s: *Setting) Registry.Value {
-    if (self.pendingFor(s)) |p| return p.value;
-    return shell.registry.get(s);
+/// Takes effect now. Saved too, unless it's mid-drag or mid-typing.
+fn apply(self: *SettingsWindow, shell: *Shell, s: *Setting, v: Registry.Value, save: bool) void {
+    const was = shell.registry.get(s);
+    shell.registry.setWith(s, v, .{ .save = save }) catch |err| return log.warn("Couldn't change {s}: {t}", .{ s.def.id, err });
+    if (s.def.restart and !was.eql(shell.registry.get(s))) self.restart_pending = true;
 }
 
-fn pendingFor(self: *SettingsPage, s: *const Setting) ?*Pending {
-    for (self.pending.items) |*p| if (p.setting == s) return p;
-    return null;
+/// Once a drag or typing's done, so it's written.
+fn finish(self: *SettingsWindow, shell: *Shell, s: *Setting) void {
+    if (ui.isItemDeactivated()) self.apply(shell, s, shell.registry.get(s), true);
 }
 
-/// An edit to save, or none if it's back to what's in effect.
-fn stage(self: *SettingsPage, shell: *Shell, s: *Setting, v: Registry.Value) void {
-    const same = v.eql(shell.registry.get(s));
-    for (self.pending.items, 0..) |*p, i| if (p.setting == s) {
-        if (same) _ = self.pending.orderedRemove(i) else p.value = self.ownText(p, v);
-        return;
-    };
-    if (same) return;
-    self.pending.append(self.allocator, .{ .setting = s, .value = v }) catch return;
-    const p = &self.pending.items[self.pending.items.len - 1];
-    p.value = self.ownText(p, v);
-}
-
-/// Text points into the edit, since what it came from goes away.
-fn ownText(_: *SettingsPage, p: *Pending, v: Registry.Value) Registry.Value {
-    if (v != .text) return v;
-    const n = @min(v.text.len, p.text.len);
-    std.mem.copyForwards(u8, p.text[0..n], v.text[0..n]);
-    return .{ .text = p.text[0..n] };
-}
-
-fn row(self: *SettingsPage, shell: *Shell, s: *Setting) void {
+fn row(self: *SettingsWindow, shell: *Shell, s: *Setting) void {
     const scope = ui.id(s);
     defer scope.end();
-    const v = self.valueOf(shell, s);
+    const v = shell.registry.get(s);
     ui.spacing();
     var name_buf: [128]u8 = undefined;
     const name = std.fmt.bufPrintSentinel(&name_buf, "{s}", .{s.def.name}, 0) catch "?";
@@ -289,7 +251,7 @@ fn row(self: *SettingsPage, shell: *Shell, s: *Setting) void {
             var on = v.toggle;
             const bold = ui.bold();
             defer bold.end();
-            if (ui.checkbox(name, &on)) self.stage(shell, s, .{ .toggle = on });
+            if (ui.checkbox(name, &on)) self.apply(shell, s, .{ .toggle = on }, true);
         },
         else => {
             const bold = ui.bold();
@@ -300,7 +262,7 @@ fn row(self: *SettingsPage, shell: *Shell, s: *Setting) void {
     }
     if (!v.eql(Registry.defaultOf(s.def.kind))) {
         ui.sameLine();
-        if (ui.iconButton(icons.rotate_ccw ++ "##reset", "Back to its default")) self.stage(shell, s, Registry.defaultOf(s.def.kind));
+        if (ui.iconButton(icons.rotate_ccw ++ "##reset", "Back to its default")) self.apply(shell, s, Registry.defaultOf(s.def.kind), true);
     }
     switch (s.def.kind) {
         .toggle => {},
@@ -308,7 +270,8 @@ fn row(self: *SettingsPage, shell: *Shell, s: *Setting) void {
             var x: f32 = @floatCast(v.number);
             ui.setNextItemWidth(240);
             const format: [:0]const u8 = if (n.step >= 1) "%.0f" else "%.2f";
-            if (ui.raw("ImGui_SliderFloatEx")(@ptrCast("##value"), &x, @floatCast(n.min), @floatCast(n.max), @ptrCast(format.ptr), 0)) self.stage(shell, s, .{ .number = x });
+            if (ui.raw("ImGui_SliderFloatEx")(@ptrCast("##value"), &x, @floatCast(n.min), @floatCast(n.max), @ptrCast(format.ptr), 0)) self.apply(shell, s, .{ .number = x }, false);
+            self.finish(shell, s);
         },
         .choice => |ch| {
             var names: [64][:0]const u8 = undefined;
@@ -320,31 +283,33 @@ fn row(self: *SettingsPage, shell: *Shell, s: *Setting) void {
                 if (std.mem.eql(u8, o, v.choice)) index = i;
             }
             ui.setNextItemWidth(240);
-            if (ui.combo("##value", &index, names[0..count])) self.stage(shell, s, .{ .choice = ch.options[index] });
+            if (ui.combo("##value", &index, names[0..count])) self.apply(shell, s, .{ .choice = ch.options[index] }, true);
         },
         .text => {
             var buf: [256]u8 = @splat(0);
             const n = @min(v.text.len, buf.len - 1);
             @memcpy(buf[0..n], v.text[0..n]);
             ui.setNextItemWidth(320);
-            if (ui.inputText("##value", &buf)) self.stage(shell, s, .{ .text = std.mem.sliceTo(&buf, 0) });
+            if (ui.inputText("##value", &buf)) self.apply(shell, s, .{ .text = std.mem.sliceTo(&buf, 0) }, false);
+            self.finish(shell, s);
         },
         .colour => {
             var colour = v.colour;
-            if (ui.raw("ImGui_ColorEdit4")(@ptrCast("##value"), @ptrCast(&colour), 0)) self.stage(shell, s, .{ .colour = colour });
+            if (ui.raw("ImGui_ColorEdit4")(@ptrCast("##value"), @ptrCast(&colour), 0)) self.apply(shell, s, .{ .colour = colour }, false);
+            self.finish(shell, s);
         },
         .key => self.keyRow(shell, s, v.key),
     }
     helpText(s.def.help, s.def.restart, s.def.scope);
 }
 
-fn keyRow(self: *SettingsPage, shell: *Shell, s: *Setting, current: ?Chord) void {
+fn keyRow(self: *SettingsWindow, shell: *Shell, s: *Setting, current: ?Chord) void {
     var picked = current;
     ui.setNextItemWidth(200);
-    if (ui.chordInput("##key", &picked, .{ .none = "No key" })) self.stage(shell, s, .{ .key = picked });
+    if (ui.chordInput("##key", &picked, .{ .none = "No key" })) self.apply(shell, s, .{ .key = picked }, true);
     if (current != null) {
         ui.sameLine();
-        if (ui.iconButton(icons.x ++ "##clear", "No key")) self.stage(shell, s, .{ .key = null });
+        if (ui.iconButton(icons.x ++ "##clear", "No key")) self.apply(shell, s, .{ .key = null }, true);
     }
     // Who else is on it, as it's bound now
     for (self.clashes) |clash| {
@@ -447,51 +412,8 @@ fn helpText(help: []const u8, restart: bool, scope: Registry.Scope) void {
     });
 }
 
-/// True to go back.
-fn drawFooter(self: *SettingsPage, shell: *Shell) bool {
-    ui.separator();
-    if (self.restart_pending) {
-        ui.textColored(.{ 1, 0.8, 0.3, 1 }, "{s}  Some changes take effect next time the game starts.", .{icons.triangle_alert});
-        ui.sameLine();
-    }
-    const style = ui.raw("ImGui_GetStyle")();
-    const pad = style.*.FramePadding.x * 2;
-    const close_w = @max(ui.frameHeight(), ui.calcTextSize(icons.x)[0] + pad);
-    const save_w = ui.calcTextSize(icons.save ++ "  Save")[0] + pad;
-    // Right-aligned, after the note if there is one
-    const free = ui.getContentRegionAvailPixels()[0] - close_w - save_w - style.*.ItemSpacing.x;
-    if (free > 0) ui.raw("ImGui_SetCursorPosX")(ui.raw("ImGui_GetCursorPosX")() + free);
-    const back = ui.iconButton(icons.x ++ "##close", "Close, without saving");
-    ui.sameLine();
-    {
-        const off = ui.disabled(self.pending.items.len == 0);
-        defer off.end();
-        if (ui.button(icons.save ++ "  Save")) self.save(shell);
-    }
-    return back;
-}
-
-/// Each change goes to the registry, which saves it and applies it.
-pub fn save(self: *SettingsPage, shell: *Shell) void {
-    // Developer mode first, since the workbench's key is only there in it
-    for ([_]bool{ true, false }) |developer_pass| for (self.pending.items) |p| {
-        const is_dev = std.mem.eql(u8, p.setting.def.id, "wraith.developer_mode");
-        if (is_dev != developer_pass) continue;
-        shell.registry.set(p.setting, p.value) catch |err| {
-            log.warn("Couldn't save {s}: {t}", .{ p.setting.def.id, err });
-            continue;
-        };
-        if (p.setting.def.restart) self.restart_pending = true;
-    };
-    self.pending.clearRetainingCapacity();
-}
-
-/// As if picked on the page, for tests.
-pub fn edit(self: *SettingsPage, shell: *Shell, id: []const u8, v: Registry.Value) !void {
+/// As if picked in the window, for tests.
+pub fn edit(self: *SettingsWindow, shell: *Shell, id: []const u8, v: Registry.Value) !void {
     const s = shell.registry.find(id) orelse return error.NoSuchSetting;
-    self.stage(shell, s, v);
-}
-
-pub fn hasEdits(self: *const SettingsPage) bool {
-    return self.pending.items.len > 0;
+    self.apply(shell, s, v, true);
 }

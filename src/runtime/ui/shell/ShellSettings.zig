@@ -1,6 +1,6 @@
-//! The shell's own settings in the registry, applied as they change. That's the theme, developer
-//! mode, frame stats, whether the overlay takes controllers, the workbench's command keys, the
-//! tweaks' on-screen list and toasts, and whether the welcome's been seen.
+//! The shell's own settings in the registry, applied as they change. That's the theme, where the
+//! overlay's bar goes, frame stats, whether the overlay takes controllers, the workbench's command
+//! keys, the pinned tweaks list and toasts, and whether the welcome's been seen.
 
 const ShellSettings = @This();
 
@@ -14,12 +14,13 @@ const FrameStats = @import("../../FrameStats.zig");
 const Shell = @import("Shell.zig");
 
 pub const match_windows = "Match Windows";
+const bar_places = [_][]const u8{ "Bottom", "Top" };
 
 const key_names = @typeInfo(WorkbenchKeys).@"struct".field_names;
 
 registry: *Registry,
 theme: *Registry.Setting,
-developer_mode: *Registry.Setting,
+bar_place: *Registry.Setting,
 welcome_seen: *Registry.Setting,
 frame_window: *Registry.Setting,
 frame_hitch: *Registry.Setting,
@@ -54,16 +55,15 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
         .kind = .{ .choice = .{ .default = match_windows, .options = names[0..n] } },
     }, .{ .changed = .{ .ctx = shell, .call = themeChanged } });
     try added.append(shell.allocator, self.theme);
-
-    self.developer_mode = try registry.add(.{
-        .id = "wraith.developer_mode",
-        .name = "Developer mode",
-        .help = "Turns on the workbench and the other tools for making plugins and digging into games.",
+    self.bar_place = try registry.add(.{
+        .id = "wraith.overlay.bar",
+        .name = "Overlay bar",
+        .help = "Which edge of the screen the overlay's bar slides in from.",
         .group = Settings.group,
-        .section = "Developer",
-        .kind = .{ .toggle = false },
-    }, .{ .changed = .{ .ctx = shell, .call = developerModeChanged } });
-    try added.append(shell.allocator, self.developer_mode);
+        .section = "Look & Feel",
+        .kind = .{ .choice = .{ .default = bar_places[0], .options = &bar_places } },
+    }, .{});
+    try added.append(shell.allocator, self.bar_place);
 
     self.welcome_seen = try registry.add(.{
         .id = "wraith.welcome_seen",
@@ -108,8 +108,8 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
 
     self.tweaks_on_screen = try registry.add(.{
         .id = "wraith.tweaks.on_screen",
-        .name = "Show tweaks on screen",
-        .help = "A small list in a corner of the game of the tweaks with keys, and which are on. Move it while the overlay's open.",
+        .name = "Pin the tweaks list",
+        .help = "A small list of the tweaks with keys, and which are on, over the game while the Tweaks window's closed. Move it while the overlay's open.",
         .group = Settings.group,
         .section = "Tweaks",
         .kind = .{ .toggle = false },
@@ -153,7 +153,7 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
 
 pub fn remove(self: *const ShellSettings) void {
     const r = self.registry;
-    inline for (.{ "theme", "developer_mode", "welcome_seen", "frame_window", "frame_hitch", "overlay_gamepad", "tweaks_on_screen", "tweaks_toasts", "export_author" }) |name| r.remove(@field(self, name));
+    inline for (.{ "theme", "bar_place", "welcome_seen", "frame_window", "frame_hitch", "overlay_gamepad", "tweaks_on_screen", "tweaks_toasts", "export_author" }) |name| r.remove(@field(self, name));
     for (self.workbench_keys) |s| r.remove(s);
 }
 
@@ -161,6 +161,10 @@ pub fn remove(self: *const ShellSettings) void {
 pub fn themeName(self: *const ShellSettings) ?[]const u8 {
     const name = self.registry.get(self.theme).choice;
     return if (std.mem.eql(u8, name, match_windows)) null else name;
+}
+
+pub fn barAtTop(self: *const ShellSettings) bool {
+    return std.mem.eql(u8, self.registry.get(self.bar_place).choice, bar_places[1]);
 }
 
 pub fn frameStats(self: *const ShellSettings) Settings.FrameStats {
@@ -189,11 +193,6 @@ pub fn humanName(buf: []u8, comptime field: []const u8) []const u8 {
 fn themeChanged(ctx: *anyopaque, _: *Registry.Setting) void {
     const shell: *Shell = @ptrCast(@alignCast(ctx));
     shell.applyThemeSetting();
-}
-
-fn developerModeChanged(ctx: *anyopaque, s: *Registry.Setting) void {
-    const shell: *Shell = @ptrCast(@alignCast(ctx));
-    shell.applyDeveloperMode(shell.registry.get(s).toggle) catch |err| std.log.scoped(.wraith_ui).warn("Couldn't change developer mode: {t}", .{err});
 }
 
 fn frameStatsChanged(ctx: *anyopaque, _: *Registry.Setting) void {

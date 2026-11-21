@@ -1,4 +1,4 @@
-//! The overlay's About page, from the hub. Render thread.
+//! The overlay's About window. Render thread.
 
 const std = @import("std");
 const build_info = @import("build_info");
@@ -15,9 +15,10 @@ const markdown = @import("../markdown.zig");
 const c = ui.c;
 const log = core.log.scoped(.wraith_ui);
 
-const AboutPage = @This();
+const AboutWindow = @This();
 
 /// Which part's showing.
+window: ui.Window = .{ .title = "About Wraith###wraith.about", .size = .{ 680, 520 } },
 section: Section = .about,
 
 pub const Section = enum { about, license, third_party };
@@ -49,10 +50,11 @@ const heart_colour: ui.Color = .{ 0.95, 0.35, 0.45, 1 };
 /// Unscaled.
 const title_size = 30;
 
-/// True to go back.
-pub fn draw(self: *AboutPage) bool {
-    const back = ui.iconButton(icons.arrow_left ++ "##back", "Back");
-    ui.sameLine();
+pub fn onOpen(self: *AboutWindow) void {
+    self.section = .about;
+}
+
+pub fn draw(self: *AboutWindow) void {
     self.drawSections();
     ui.spacing();
     switch (self.section) {
@@ -60,11 +62,10 @@ pub fn draw(self: *AboutPage) bool {
         .license => drawText("##license", license_text),
         .third_party => drawText("##notices", notices_text),
     }
-    return back;
 }
 
 /// One row of buttons sharing the width, the picked one lit.
-fn drawSections(self: *AboutPage) void {
+fn drawSections(self: *AboutWindow) void {
     const style = ui.raw("ImGui_GetStyle")();
     const n: f32 = @floatFromInt(sections.len);
     const width = (ui.getContentRegionAvailPixels()[0] - style.*.ItemSpacing.x * (n - 1)) / n;
@@ -117,7 +118,7 @@ fn drawAbout() void {
     drawCredit();
 }
 
-/// Evenly across the page, in their own colours.
+/// Evenly across the window, in their own colours.
 fn drawLinks() void {
     const style = ui.raw("ImGui_GetStyle")();
     const gap = style.*.ItemSpacing.x;

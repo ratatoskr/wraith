@@ -374,9 +374,9 @@ const tests = struct {
                 \\// Outside a frame it does nothing
                 \\if (imgui.Begin("Early", null, 0) !== false) throw new Error("drew outside a frame");
                 \\if (ui.windowDrawList() !== null) throw new Error("a draw list outside a frame");
-                \\const item = ui.addMenuItem("Stats", false);
+                \\const item = ui.addMenuItem("Stats");
                 \\item.setOpen(true);
-                \\const settings = ui.addMenuItem("Settings", true);
+                \\const settings = ui.addMenuItem("Settings");
                 \\ui.onOpenSettings(() => settings.setOpen(true));
                 \\const open = { value: true };
                 \\const speed = { value: 1.5 };
@@ -430,7 +430,7 @@ const tests = struct {
         try testing.expect(std.mem.indexOf(u8, layout, "Early") == null);
         try testing.expectEqual(1, rig.overlay.host.toasts.count());
 
-        // The Mods page's Settings button, and items under the plugin's own menu
+        // The Mods window's Settings button, and items under the plugin's own button on the bar
         const ui_area = @import("ui_area.zig");
         const MenuItems = @import("../ui/MenuItems.zig");
         try testing.expect(ui_area.hasSettings("imgui_js") and ui_area.hasSettings("imgui_lua"));
@@ -444,7 +444,6 @@ const tests = struct {
                 if (std.mem.eql(u8, e.item.label, "Settings")) break e.item;
             } else return error.TestUnexpectedResult;
             try testing.expect(found.open.*);
-            try testing.expect(found.dev);
             try testing.expectEqualStrings("imgui_js", found.menu);
         }
         try (try loader.unload("imgui_js")).wait();

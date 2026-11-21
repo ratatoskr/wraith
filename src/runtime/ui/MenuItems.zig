@@ -1,4 +1,4 @@
-//! Menu items owners add to the Wraith UI. The hub's menu bar shows them, a menu per owner.
+//! Menu items owners add to the Wraith UI. The overlay's bar shows them, a button per owner.
 
 const std = @import("std");
 
@@ -11,7 +11,6 @@ pub const Item = struct {
     /// The menu it's under, its owner's name for people.
     menu: []const u8 = "",
     open: *bool,
-    dev: bool = false,
 };
 
 pub const Entry = struct {
@@ -75,7 +74,7 @@ test "items listed until removed" {
     var b: Owner = .init("b");
     var open = false;
     const first: Item = .{ .label = "First", .open = &open };
-    const second: Item = .{ .label = "Second", .open = &open, .dev = true };
+    const second: Item = .{ .label = "Second", .open = &open };
     const third: Item = .{ .label = "Third", .open = &open };
     try add(&a, &first);
     try add(&b, &second);
@@ -86,7 +85,6 @@ test "items listed until removed" {
         try std.testing.expectEqual(3, r.entries.len);
         try std.testing.expectEqual(&second, r.entries[1].item);
         try std.testing.expectEqualStrings("Second", r.entries[1].item.label);
-        try std.testing.expect(r.entries[1].item.dev);
     }
 
     remove(&second);

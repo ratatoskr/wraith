@@ -1,5 +1,5 @@
-//! The runtime's own UI. That's the welcome, the overlay's hub and the workbench, plus the settings
-//! and keys they register.
+//! The runtime's own UI. That's the welcome, the overlay's bar and windows and the workbench, plus
+//! the settings and keys they register.
 
 const Shell = @This();
 
@@ -26,6 +26,10 @@ const PluginLoader = @import("../../PluginLoader.zig");
 const Sessions = @import("../../sessions/Sessions.zig");
 const Welcome = @import("Welcome.zig");
 const Hub = @import("Hub.zig");
+const ModsWindow = @import("ModsWindow.zig");
+const TweaksWindow = @import("TweaksWindow.zig");
+const SettingsWindow = @import("SettingsWindow.zig");
+const AboutWindow = @import("AboutWindow.zig");
 const ShellSettings = @import("ShellSettings.zig");
 pub const DevPlugins = @import("DevPlugins.zig");
 pub const Registry = @import("../../settings/Registry.zig");
@@ -56,17 +60,15 @@ welcome: Welcome = .{},
 registry: *Registry,
 owns_registry: bool,
 overlay_key: *Registry.Setting = undefined,
-/// Only in developer mode.
-workbench_key: ?*Registry.Setting = null,
-developer: bool = false,
+workbench_key: *Registry.Setting = undefined,
 /// For Settings.
 dev_plugins: DevPlugins = .{},
-/// Dev plugins the loader had last frame. More of them turns on developer mode.
-dev_seen: u32 = 0,
 /// Its settings in the registry.
 own: ShellSettings = undefined,
 /// What the overlay key brings up. Render thread.
 hub: Hub = .{},
+/// Wraith's own windows, which the bar opens. Render thread.
+windows: Windows = undefined,
 /// Says the overlay key on the first frame, once the welcome's been seen before.
 ready_toast: bool = false,
 /// No theme picked, so it follows Windows' light or dark mode. Either UI can change it.
@@ -91,6 +93,14 @@ mod_projects: std.Io.Group = .init,
 /// Either UI can change the game's state, and saving isn't safe from two threads at once.
 settings_lock: tuft_sys.sync.RwLock = .{},
 started_ns: u64 = 0,
+
+pub const Windows = struct {
+    system: ui.WindowSystem,
+    mods: ModsWindow = .{},
+    tweaks: TweaksWindow = .{},
+    settings: SettingsWindow = .{},
+    about: AboutWindow = .{},
+};
 
 pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybinds, options: Options) !*Shell {
     const self = try allocator.create(Shell);
@@ -127,6 +137,13 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
         .started_ns = core.timing.now(),
     };
     errdefer self.scope.deinit();
+    self.windows = .{ .system = .init(allocator) };
+    errdefer self.windows.system.deinit();
+    self.windows.system.before_each = .{ .ctx = self, .func = startCentred };
+    self.windows.mods.shell = self;
+    self.windows.tweaks.shell = self;
+    self.windows.settings.shell = self;
+    inline for (.{ "mods", "tweaks", "settings", "about" }) |name| try self.windows.system.add(&@field(self.windows, name));
     self.own = try ShellSettings.add(self, registry);
     errdefer self.own.remove();
     self.applyFrameSettings(self.own.frameStats());
@@ -156,9 +173,16 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
         .kind = .{ .key = .{ .default = overlay_key_default, .while_typing = true } },
     }, .{ .key = .{ .ctx = self, .call = overlayKeyPressed } });
     errdefer registry.remove(self.overlay_key);
-    try self.applyDeveloperMode(registry.get(self.own.developer_mode).toggle);
-    self.welcome.choices = .{ .overlay_key = self.overlayKey() orelse overlay_key_default, .developer_mode = self.developer };
-    self.welcome.workbench_key = self.workbenchKey();
+    self.workbench_key = try registry.add(.{
+        .id = "wraith.toggle_workbench",
+        .name = "Open or close the workbench",
+        .help = "Disassembly, memory, addresses, search and the other developer tools, in a window of their own.",
+        .group = Settings.group,
+        .section = "Developer",
+        .kind = .{ .key = .{ .default = workbench_key_default } },
+    }, .{ .key = .{ .ctx = self, .call = workbenchKeyPressed } });
+    errdefer registry.remove(self.workbench_key);
+    self.welcome.choices = .{ .overlay_key = self.overlayKey() orelse overlay_key_default };
     return self;
 }
 
@@ -182,11 +206,15 @@ pub fn destroy(self: *Shell) void {
     }
     // These wait for their keys in flight
     self.registry.remove(self.overlay_key);
-    if (self.workbench_key) |k| self.registry.remove(k);
+    self.registry.remove(self.workbench_key);
     self.own.remove();
     self.clashes_told.deinit(self.allocator);
     self.welcome.deinit(self.overlay);
     self.hub.deinit(self);
+    self.windows.system.deinit();
+    self.windows.settings.deinit();
+    self.windows.mods.deinit(self.options.io);
+    self.windows.tweaks.deinit(self.allocator);
     // Waits for its thread, and saves its layout
     self.workbench.destroy();
     if (self.tweaks) |t| t.destroy();
@@ -259,52 +287,22 @@ pub fn pluginCount(self: *Shell) usize {
     return loader.count();
 }
 
-/// Saved, and applied by the setting's hook. Render thread.
-pub fn setDeveloperMode(self: *Shell, on: bool) !void {
-    try self.registry.set(self.own.developer_mode, .{ .toggle = on });
-}
-
-/// Adds the workbench's key, or takes it away. Its key's kept either way. Render thread.
-pub fn applyDeveloperMode(self: *Shell, on: bool) !void {
-    if (on == self.developer) return;
-    if (self.workbench_key) |k| {
-        self.registry.remove(k);
-        self.workbench_key = null;
-    }
-    if (on) self.workbench_key = try self.registry.add(.{
-        .id = "wraith.toggle_workbench",
-        .name = "Open or close the workbench",
-        .help = "Disassembly, memory, addresses, search and the other developer tools, in a window of their own.",
-        .group = Settings.group,
-        .section = "Developer",
-        .kind = .{ .key = .{ .default = workbench_key_default } },
-    }, .{ .key = .{ .ctx = self, .call = workbenchKeyPressed } });
-    self.developer = on;
-}
-
-pub fn developerMode(self: *const Shell) bool {
-    return self.developer;
-}
-
 /// Null if it's been cleared.
 pub fn overlayKey(self: *Shell) ?Chord {
     return self.registry.get(self.overlay_key).key;
 }
 
-/// Its default outside developer mode, where it isn't registered.
+/// Null if it's been cleared.
 pub fn workbenchKey(self: *Shell) ?Chord {
-    const k = self.workbench_key orelse return workbench_key_default;
-    return self.registry.get(k).key;
+    return self.registry.get(self.workbench_key).key;
 }
 
 pub fn setOverlayKey(self: *Shell, chord: ?Chord) !void {
     try self.registry.set(self.overlay_key, .{ .key = chord });
 }
 
-/// Only in developer mode.
 pub fn setWorkbenchKey(self: *Shell, chord: ?Chord) !void {
-    const k = self.workbench_key orelse return;
-    try self.registry.set(k, .{ .key = chord });
+    try self.registry.set(self.workbench_key, .{ .key = chord });
 }
 
 fn overlayKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
@@ -319,13 +317,10 @@ fn workbenchKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
 
 /// Brings the welcome back, with what's picked now. Render thread.
 pub fn showWelcome(self: *Shell) void {
+    self.hub.open = false;
     self.welcome.open = true;
     self.welcome.leaving = false;
-    self.welcome.choices = .{
-        .overlay_key = self.overlayKey() orelse overlay_key_default,
-        .developer_mode = self.developerMode(),
-    };
-    self.welcome.workbench_key = self.workbenchKey();
+    self.welcome.choices = .{ .overlay_key = self.overlayKey() orelse overlay_key_default };
 }
 
 /// Not while the welcome's up. Render thread.
@@ -378,9 +373,8 @@ fn draw(self: *Shell) void {
     self.workbench.tickUnopened();
     self.followOsTheme();
     self.watchClashes();
-    self.watchDevPlugins();
     self.hub.draw(self);
-    self.hub.tweaks.drawOnScreen(self, self.hub.open);
+    self.windows.system.draw();
     if (self.welcome.draw(self.overlay)) |choices| {
         self.finishWelcome(choices);
         self.openAfterWelcome();
@@ -391,10 +385,16 @@ fn draw(self: *Shell) void {
     }
 }
 
-/// Straight into the overlay, still dimmed, so the welcome leads somewhere.
+/// In the middle of the game the first time, wherever it's moved after.
+fn startCentred(_: *anyopaque) void {
+    const viewport = ui.raw("ImGui_GetMainViewport")();
+    const centre: ui.c.ImVec2 = .{ .x = viewport.*.WorkPos.x + viewport.*.WorkSize.x / 2, .y = viewport.*.WorkPos.y + viewport.*.WorkSize.y / 2 };
+    ui.raw("ImGui_SetNextWindowPosEx")(centre, ui.c.ImGuiCond_FirstUseEver, .{ .x = 0.5, .y = 0.5 });
+}
+
+/// Straight into the overlay, without letting go of the input, so the welcome leads somewhere.
 pub fn openAfterWelcome(self: *Shell) void {
     self.hub.open = true;
-    self.hub.page = .home;
     self.hub.dim.takeOver(self.overlay, &self.welcome.dim);
     self.welcome.open = false;
     self.welcome.leaving = false;
@@ -429,7 +429,6 @@ fn toastReady(self: *Shell) void {
 /// Takes effect now, and saves them with the welcome as seen. Render thread.
 pub fn finishWelcome(self: *Shell, choices: Welcome.Choices) void {
     self.setOverlayKey(choices.overlay_key) catch |err| log.warn("Couldn't use {f} for the overlay: {t}", .{ choices.overlay_key, err });
-    self.setDeveloperMode(choices.developer_mode) catch |err| log.warn("Couldn't turn developer mode {s}: {t}", .{ if (choices.developer_mode) "on" else "off", err });
     self.registry.set(self.own.welcome_seen, .{ .toggle = true }) catch |err| log.warn("Couldn't save that the welcome's been seen: {t}", .{err});
 }
 
@@ -455,21 +454,6 @@ pub fn themeFollowsOs(self: *const Shell) bool {
 fn applyTheme(self: *Shell, theme: *const Themes.Theme) void {
     self.overlay.setTheme(theme);
     self.workbench.setTheme(theme);
-}
-
-/// Dev plugins mean they're making plugins, so developer mode goes on. Only when there are more
-/// than before, so turning it off sticks. Render thread.
-fn watchDevPlugins(self: *Shell) void {
-    const found = blk: {
-        const loader = self.acquireLoader() orelse return;
-        defer self.releaseLoader();
-        break :blk loader.devCount();
-    };
-    defer self.dev_seen = found;
-    if (found <= self.dev_seen or self.developer) return;
-    log.info("Turning on developer mode, since there are dev plugins", .{});
-    self.setDeveloperMode(true) catch |err| return log.warn("Couldn't turn on developer mode: {t}", .{err});
-    self.welcome.choices.developer_mode = true;
 }
 
 /// Once a key's on more than one thing, they all fire, so it warns once about each new clash.
@@ -782,7 +766,7 @@ const tests = struct {
         rig.overlay.ui_takes_gamepad.store(false, .release);
     }
 
-    test "the overlay key brings up the hub over the dimmed game" {
+    test "the overlay key slides the bar in" {
         var rig: Rig = undefined;
         try rig.init(.{});
         defer rig.deinit();
@@ -796,8 +780,8 @@ const tests = struct {
         press(&rig, VK_INSERT);
         for (0..3) |_| rig.present();
         try testing.expect(shell.hub.open);
-        // The menu bar and the window in the middle
-        try testing.expectEqual(2, c.ImGui_GetIO().*.MetricsRenderWindows);
+        // Just the bar
+        try testing.expectEqual(1, c.ImGui_GetIO().*.MetricsRenderWindows);
         try testing.expect(c.ImGui_GetIO().*.MouseDrawCursor);
         try testing.expect(rig.overlay.taken(.keyboard));
         try testing.expectEqual(0, Rig.game.count(api.WM_KEYDOWN)); // Insert is ours
@@ -805,8 +789,25 @@ const tests = struct {
         press(&rig, VK_INSERT);
         for (0..3) |_| rig.present();
         try testing.expect(!shell.hub.open);
-        try testing.expectEqual(0, c.ImGui_GetIO().*.MetricsRenderWindows);
         try testing.expect(!rig.overlay.taken(.keyboard));
+        // Gone once it's slid away
+        for (0..3000) |_| {
+            rig.present();
+            if (shell.hub.dim.fade == 0) break;
+            tuft_sys.thread.sleepMs(1);
+        }
+        rig.present();
+        try testing.expectEqual(0, c.ImGui_GetIO().*.MetricsRenderWindows);
+
+        // Its windows stay up without the bar, and let the game have the mouse
+        shell.toggleOverlay();
+        shell.windows.about.window.show();
+        for (0..3) |_| rig.present();
+        shell.toggleOverlay();
+        for (0..3) |_| rig.present();
+        try testing.expect(!shell.hub.open and shell.windows.about.window.open);
+        try testing.expect(!rig.overlay.taken(.mouse));
+        shell.windows.about.window.close();
 
         // Escape closes it too
         press(&rig, VK_INSERT);
@@ -822,34 +823,28 @@ const tests = struct {
         try testing.expect(!shell.hub.open);
     }
 
-    test "settings page saves what's changed" {
+    test "settings take effect as they change" {
         var rig: Rig = undefined;
         try rig.init(.{});
         defer rig.deinit();
         const shell = try Shell.create(testing.allocator, rig.overlay, rig.keybinds, .{});
         defer shell.destroy();
         rig.present();
-        shell.toggleOverlay();
-        shell.hub.show(shell, .settings);
+        shell.windows.settings.window.show();
         for (0..3) |_| rig.present();
-        try testing.expectEqual(.settings, shell.hub.page);
 
         // One that only changes on a restart, like the game's own
         const scale = try shell.registry.add(.{ .id = "test.scale", .name = "Scale", .group = Settings.group, .section = "Look & Feel", .restart = true, .kind = .{ .number = .{ .default = 1, .min = 0.5, .max = 3 } } }, .{});
         defer shell.registry.remove(scale);
 
-        const page = &shell.hub.settings;
+        const page = &shell.windows.settings;
         // Searching shows matches from every tab, which draws nearly every row
         page.search[0] = 'e';
         for (0..2) |_| rig.present();
         page.search = @splat(0);
+        try testing.expect(!page.restart_pending);
         try page.edit(shell, "wraith.toggle_overlay", .{ .key = .{ .key = .f8 } });
-        try page.edit(shell, "wraith.developer_mode", .{ .toggle = true });
         try page.edit(shell, "test.scale", .{ .number = 2 });
-        // Nothing till Save
-        try testing.expectEqual(.insert, shell.overlayKey().?.key);
-        try testing.expect(page.hasEdits());
-        page.save(shell);
         var overlay_key: ?Keybinds.Binding = null;
         var workbench_bound = false;
         for (rig.keybinds.bindings.items) |b| {
@@ -858,32 +853,18 @@ const tests = struct {
         }
         try testing.expectEqual(.f8, overlay_key.?.chord.key);
         try testing.expect(workbench_bound);
-        // The scale only changes on a restart
+        // The scale only changes on a restart, which it says
         try testing.expect(page.restart_pending);
-        try testing.expect(!page.hasEdits());
         try testing.expectEqual(2, shell.registry.get(scale).number);
-        // Editing it back to what it is isn't an edit
-        try page.edit(shell, "test.scale", .{ .number = 2 });
-        try testing.expect(!page.hasEdits());
 
-        // About draws too, and both licenses
-        shell.hub.show(shell, .about);
-        for (std.enums.values(@TypeOf(shell.hub.about.section))) |section| {
-            shell.hub.about.section = section;
+        // About draws too, and both licenses, next to Settings
+        shell.windows.about.window.show();
+        rig.present();
+        for (std.enums.values(@TypeOf(shell.windows.about.section))) |section| {
+            shell.windows.about.section = section;
             for (0..2) |_| rig.present();
         }
-        try testing.expectEqual(.about, shell.hub.page);
-        shell.hub.show(shell, .settings);
-        for (0..2) |_| rig.present();
-
-        // Escape goes back to the tiles, then closes
-        press(&rig, VK_ESCAPE);
-        for (0..2) |_| rig.present();
-        try testing.expectEqual(.home, shell.hub.page);
-        try testing.expect(shell.hub.open);
-        press(&rig, VK_ESCAPE);
-        for (0..2) |_| rig.present();
-        try testing.expect(!shell.hub.open);
+        try testing.expect(shell.windows.about.window.open and shell.windows.settings.window.open);
     }
 
     test "after the welcome the overlay comes up, without letting go of the input" {
@@ -961,19 +942,13 @@ const tests = struct {
             }
         };
         try testing.expectEqual(.insert, Find.binding(rig.keybinds, "wraith.toggle_overlay").?.chord.key);
-        // Not a developer to start, so no workbench key
-        try testing.expectEqual(null, Find.binding(rig.keybinds, "wraith.toggle_workbench"));
-
-        shell.finishWelcome(.{ .overlay_key = .{ .key = .f8 }, .developer_mode = true });
-        try testing.expectEqual(.f8, Find.binding(rig.keybinds, "wraith.toggle_overlay").?.chord.key);
         try testing.expect(Find.binding(rig.keybinds, "wraith.toggle_workbench") != null);
-        try testing.expect(shell.developerMode());
 
-        try shell.setDeveloperMode(false);
-        try testing.expectEqual(null, Find.binding(rig.keybinds, "wraith.toggle_workbench"));
+        shell.finishWelcome(.{ .overlay_key = .{ .key = .f8 } });
+        try testing.expectEqual(.f8, Find.binding(rig.keybinds, "wraith.toggle_overlay").?.chord.key);
     }
 
-    test "dev plugins turn on developer mode, and Settings lists them" {
+    test "Settings lists dev plugins" {
         const io = testing.io;
         var rig: Rig = undefined;
         try rig.init(.{});
@@ -992,15 +967,6 @@ const tests = struct {
         defer shell.destroy();
         shell.setLoader(&install.loader);
         defer shell.setLoader(null);
-        try testing.expect(!shell.developerMode());
-        shell.watchDevPlugins();
-        try testing.expect(shell.developerMode());
-
-        // Turning it off sticks, until there are more
-        try shell.setDeveloperMode(false);
-        shell.watchDevPlugins();
-        try testing.expect(!shell.developerMode());
-
         shell.dev_plugins.refresh(shell);
         try shell.dev_plugins.group.await(io);
         {
@@ -1023,8 +989,6 @@ const tests = struct {
             try testing.expectEqual(2, v.entries().len);
         }
         try testing.expectEqual(2, install.loader.devCount());
-        shell.watchDevPlugins();
-        try testing.expect(shell.developerMode());
 
         shell.dev_plugins.remove(shell, other);
         try shell.dev_plugins.group.await(io);
@@ -1033,7 +997,6 @@ const tests = struct {
         try testing.expectEqual(1, v.entries().len);
     }
 
-    const ModsPage = @import("ModsPage.zig");
 
     test "the mods page lists what's installed, dev plugins and the hub's, and turns plugins on and off" {
         const io = testing.io;
@@ -1059,7 +1022,7 @@ const tests = struct {
         defer shell.setLoader(null);
 
         // The hub's answer, without asking it
-        const page = &shell.hub.mods;
+        const page = &shell.windows.mods;
         const listed = [_]registry.mods.Listed{
             .{ .id = "fixture", .kind = .plugin, .title = "Fixture", .summary = "Draws things", .author = "Us", .any_game = true, .games = &.{}, .featured = false, .why = null, .latest = "1.1.0", .needs_wraith = null, .installed = "1.0.0", .revoked = false },
             .{ .id = "other", .kind = .project, .title = "Other", .summary = "Tables", .author = "Them", .any_game = true, .games = &.{}, .featured = true, .why = null, .latest = "2.0.0", .needs_wraith = null, .installed = null, .revoked = false },
@@ -1069,7 +1032,7 @@ const tests = struct {
         defer page.work.listing = null;
 
         // An installed copy under the dev one
-        const folders = [_]ModsPage.Folder{.{ .id = "mine", .version = "0.9.0" }};
+        const folders = [_]ModsWindow.Folder{.{ .id = "mine", .version = "0.9.0" }};
         page.work.folders = &folders;
         defer page.work.folders = &.{};
 
@@ -1092,16 +1055,15 @@ const tests = struct {
 
         // Every section draws, with a row open
         rig.present();
-        shell.toggleOverlay();
-        shell.hub.show(shell, .mods);
+        shell.windows.mods.window.show();
         for ([_][]const u8{ "fixture", "mine" }) |open| {
             page.expanded.set(open);
-            for (std.enums.values(ModsPage.Section)) |section| {
+            for (std.enums.values(ModsWindow.Section)) |section| {
                 page.section = section;
                 for (0..2) |_| rig.present();
             }
         }
-        try testing.expectEqual(.mods, shell.hub.page);
+        try testing.expect(shell.windows.mods.window.open);
 
         // On and off happen on the worker
         try testing.expectEqual(.loaded, install.info("fixture").?.state);
@@ -1117,7 +1079,6 @@ const tests = struct {
         try testing.expectEqualStrings("", page.work.problem.message());
     }
 
-    const TweaksPage = @import("TweaksPage.zig");
 
     test "the tweaks page, the list on screen and toasts for keys" {
         const support = @import("../../tweaks/test_support.zig");
@@ -1136,15 +1097,14 @@ const tests = struct {
 
         // The page draws with a folded group, searching and only what's on
         rig.present();
-        shell.toggleOverlay();
-        shell.hub.show(shell, .tweaks);
+        const window = &shell.windows.tweaks;
+        window.window.show();
         for (0..2) |_| rig.present();
-        try testing.expectEqual(.tweaks, shell.hub.page);
-        shell.hub.tweaks.fold(testing.allocator, "kai");
-        shell.hub.tweaks.search[0] = 'o';
+        window.fold(testing.allocator, "kai");
+        window.search[0] = 'o';
         for (0..2) |_| rig.present();
-        shell.hub.tweaks.search = @splat(0);
-        shell.hub.tweaks.only_on = true;
+        window.search = @splat(0);
+        window.only_on = true;
         for (0..2) |_| rig.present();
 
         // All off turns a whole group's file off too
@@ -1152,11 +1112,13 @@ const tests = struct {
         tweaks.setOn("kai/One", true);
         var arena: std.heap.ArenaAllocator = .init(testing.allocator);
         defer arena.deinit();
-        TweaksPage.turnAllOff(tweaks, try tweaks.snapshot(arena.allocator()));
+        TweaksWindow.turnAllOff(tweaks, try tweaks.snapshot(arena.allocator()));
         for (try tweaks.snapshot(arena.allocator())) |t| try testing.expect(!t.on and !t.partial);
 
-        // On screen, with the overlay closed too
+        // Pinned, its small list shows with the window closed and the overlay too
         try shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = true });
+        for (0..2) |_| rig.present();
+        window.window.close();
         for (0..2) |_| rig.present();
         shell.toggleOverlay();
         for (0..2) |_| rig.present();

@@ -71,7 +71,7 @@ pub const Context = struct {
         self.owner.root.ui().onOpenSettings(.init(opened, Open.open));
     }
 
-    /// An entry under the plugin's own menu in the overlay's top bar that opens and closes something
+    /// An entry under the plugin's own button on the overlay's bar that opens and closes something
     /// of the plugin's, kept in step with `opened`, like a window's `open`. Whichever side changed
     /// since last frame wins.
     pub fn menuItem(self: *Context, label: []const u8, opened: *bool) !void {
@@ -96,7 +96,7 @@ pub const Context = struct {
                 }
             }
         };
-        const object = self.owner.root.ui().addMenuItem(label, false);
+        const object = self.owner.root.ui().addMenuItem(label);
         if (object.table == null) return error.OwnerGone;
         const item = try self.allocator.create(Item);
         item.* = .{ .object = object, .open = opened, .allocator = self.allocator };

@@ -1,8 +1,7 @@
-//! The overlay's Tweaks page, from the hub, the Tweaks menu in its top bar and the small list on
-//! screen while you play. Every tweak this game has: your project's, installed projects' and
+//! The overlay's Tweaks window, and the small list it leaves on screen when it's pinned. Every tweak this game has: your project's, installed projects' and
 //! plugins', with what's on, their values and their keys. Render thread.
 
-const TweaksPage = @This();
+const TweaksWindow = @This();
 
 const std = @import("std");
 
@@ -15,6 +14,8 @@ const Shell = @import("Shell.zig");
 
 const Info = Tweaks.Info;
 
+window: ui.Window = .{ .title = "Tweaks###wraith.tweaks", .size = .{ 820, 600 } },
+shell: *Shell = undefined,
 search: [128]u8 = @splat(0),
 only_on: bool = false,
 /// Folded groups, by their names' hashes.
@@ -31,11 +32,11 @@ const field_width = 220;
 /// On the on-screen list, at most.
 const max_on_screen = 32;
 
-pub fn open(self: *TweaksPage) void {
+pub fn onOpen(self: *TweaksWindow) void {
     self.search = @splat(0);
 }
 
-pub fn deinit(self: *TweaksPage, gpa: std.mem.Allocator) void {
+pub fn deinit(self: *TweaksWindow, gpa: std.mem.Allocator) void {
     self.folded.deinit(gpa);
 }
 
@@ -54,11 +55,11 @@ fn isAction(t: *const Info) bool {
     return !t.is_group and t.mode == .action;
 }
 
-fn isFolded(self: *const TweaksPage, name: []const u8) bool {
+fn isFolded(self: *const TweaksWindow, name: []const u8) bool {
     return std.mem.indexOfScalar(u64, self.folded.items, std.hash.Wyhash.hash(0, name)) != null;
 }
 
-pub fn fold(self: *TweaksPage, gpa: std.mem.Allocator, name: []const u8) void {
+pub fn fold(self: *TweaksWindow, gpa: std.mem.Allocator, name: []const u8) void {
     const id = std.hash.Wyhash.hash(0, name);
     if (std.mem.indexOfScalar(u64, self.folded.items, id)) |i| {
         _ = self.folded.swapRemove(i);
@@ -66,7 +67,7 @@ pub fn fold(self: *TweaksPage, gpa: std.mem.Allocator, name: []const u8) void {
 }
 
 /// In a folded group, at any depth.
-fn hidden(self: *const TweaksPage, list: []const Info, t: *const Info) bool {
+fn hidden(self: *const TweaksWindow, list: []const Info, t: *const Info) bool {
     var at = t.group;
     while (at) |name| {
         if (self.isFolded(name)) return true;
@@ -86,21 +87,19 @@ fn isActive(t: *const Info) bool {
     return t.on or t.partial or t.running;
 }
 
-/// True to go back.
-pub fn draw(self: *TweaksPage, shell: *Shell) bool {
-    if (ui.iconButton(icons.arrow_left ++ "##back", "Back")) return true;
-    ui.sameLine();
-    ui.setNextItemWidthPixels(-ui.scaled(300));
+pub fn draw(self: *TweaksWindow) void {
+    const shell = self.shell;
+    ui.setNextItemWidthPixels(-ui.scaled(240));
     _ = ui.inputTextHint("##search", icons.search ++ "  Search tweaks", &self.search);
     ui.sameLine();
     _ = ui.checkbox("Only what's on", &self.only_on);
     const tweaks = shell.tweaks orelse {
         ui.textDisabled("Tweaks need the game's folder, which Wraith doesn't have here.", .{});
-        return false;
+        return;
     };
     var arena: std.heap.ArenaAllocator = .init(shell.allocator);
     defer arena.deinit();
-    const list = tweaks.snapshot(arena.allocator()) catch return false;
+    const list = tweaks.snapshot(arena.allocator()) catch return;
     ui.sameLine();
     const any_on = for (list) |*t| {
         if (t.on or t.partial) break true;
@@ -112,16 +111,20 @@ pub fn draw(self: *TweaksPage, shell: *Shell) bool {
     }
     ui.tooltip("Turns every tweak off", .{});
     ui.sameLine();
-    var on_screen = shell.registry.get(shell.own.tweaks_on_screen).toggle;
-    if (ui.checkbox("On screen", &on_screen)) shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = on_screen }) catch {};
-    ui.tooltip("A small list in a corner of the game, of the tweaks with keys and which are on. Move it while the overlay's open", .{});
+    const pinned = shell.registry.get(shell.own.tweaks_on_screen).toggle;
+    if (pinned) {
+        const colour = ui.raw("ImGui_GetStyleColorVec4")(ui.c.ImGuiCol_ButtonActive);
+        ui.raw("ImGui_PushStyleColorImVec4")(ui.c.ImGuiCol_Button, colour.*);
+    }
+    const pin = ui.iconButton(if (pinned) icons.pin ++ "##pin" else icons.pin_off ++ "##pin", if (pinned) "Pinned. Closing this leaves a small list on screen, of the ones with keys and which are on" else "Pin it, so closing this leaves a small list on screen, of the ones with keys and which are on");
+    if (pinned) ui.raw("ImGui_PopStyleColor")();
+    if (pin) shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = !pinned }) catch {};
 
     const query = std.mem.trim(u8, std.mem.sliceTo(&self.search, 0), " ");
     if (ui.child("##tweaks", .{ 0, 0 }, .{})) |body| {
         defer body.end();
         self.drawList(shell, tweaks, list, query);
     }
-    return false;
 }
 
 pub fn turnAllOff(tweaks: *Tweaks, list: []const Info) void {
@@ -129,7 +132,7 @@ pub fn turnAllOff(tweaks: *Tweaks, list: []const Info) void {
     for (list) |*t| if (t.group == null and (t.on or t.partial)) tweaks.turnOff(t.name);
 }
 
-fn drawList(self: *TweaksPage, shell: *Shell, tweaks: *Tweaks, list: []const Info, query: []const u8) void {
+fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, list: []const Info, query: []const u8) void {
     if (list.len == 0) {
         ui.textWrapped("No tweaks for this game yet. Install a project from Mods, or write your own in the Workbench.", .{});
         return;
@@ -167,7 +170,7 @@ fn drawList(self: *TweaksPage, shell: *Shell, tweaks: *Tweaks, list: []const Inf
     }
 }
 
-fn drawRow(self: *TweaksPage, gpa: std.mem.Allocator, tweaks: *Tweaks, t: *const Info, nested: bool) void {
+fn drawRow(self: *TweaksWindow, gpa: std.mem.Allocator, tweaks: *Tweaks, t: *const Info, nested: bool) void {
     ui.tableNextRow();
     _ = ui.tableNextColumn();
     if (isAction(t)) {
@@ -215,46 +218,9 @@ fn drawRow(self: *TweaksPage, gpa: std.mem.Allocator, tweaks: *Tweaks, t: *const
     if (!ui.listeningForKeys()) ui.tooltip("{s}. Click to change it", .{if (t.key == null) "No key" else if (t.own_key) "Yours" else "The tweak's own"});
 }
 
-/// The top bar's Tweaks menu. True when Manage was picked.
-pub fn drawMenu(self: *TweaksPage, shell: *Shell) bool {
-    _ = self;
-    const manage = ui.menuItem(icons.sliders_horizontal ++ "  Manage", .{});
-    var on_screen = shell.registry.get(shell.own.tweaks_on_screen).toggle;
-    if (ui.menuItem("Show on screen", .{ .checked = &on_screen })) shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = on_screen }) catch {};
-    const tweaks = shell.tweaks orelse return manage;
-    var arena: std.heap.ArenaAllocator = .init(shell.allocator);
-    defer arena.deinit();
-    const list = tweaks.snapshot(arena.allocator()) catch return manage;
-    var source: ?[]const u8 = null;
-    for (list, 0..) |*t, i| {
-        if (t.is_group) continue;
-        if (source == null or !std.mem.eql(u8, source.?, sourceId(t))) {
-            source = sourceId(t);
-            var buf: [96]u8 = undefined;
-            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{sourceLabel(t)}, 0) catch "?");
-        }
-        const scope = ui.id(@as(i32, @intCast(i)));
-        defer scope.end();
-        var label_buf: [128]u8 = undefined;
-        const label = std.fmt.bufPrintSentinel(&label_buf, "{s}", .{t.title}, 0) catch continue;
-        var name_buf: [48]u8 = undefined;
-        var key_buf: [64]u8 = undefined;
-        const shortcut: ?[:0]const u8 = if (t.key) |k| std.fmt.bufPrintSentinel(&key_buf, "{s}", .{ui.chordName(&name_buf, k)}, 0) catch null else null;
-        if (isAction(t)) {
-            if (ui.menuItem(label, .{ .shortcut = shortcut })) tweaks.setOn(t.name, true);
-        } else {
-            var on = t.on;
-            if (ui.menuItem(label, .{ .shortcut = shortcut, .checked = &on })) tweaks.setOn(t.name, on);
-        }
-        if (t.problem) |p| ui.tooltip("{s}", .{p});
-    }
-    if (list.len == 0) ui.textDisabled("No tweaks yet", .{});
-    return manage;
-}
-
-/// The small list on screen, of tweaks with keys and ones that are on. It only takes the mouse,
+/// The pinned list on screen, of tweaks with keys and ones that are on. It only takes the mouse,
 /// to be moved, while the overlay's open.
-pub fn drawOnScreen(self: *TweaksPage, shell: *Shell, interactive: bool) void {
+pub fn drawOnScreen(self: *TweaksWindow, shell: *Shell, interactive: bool) void {
     _ = self;
     if (!shell.registry.get(shell.own.tweaks_on_screen).toggle) return;
     const tweaks = shell.tweaks orelse return;

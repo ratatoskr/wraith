@@ -156,6 +156,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, graphics: *Graphics, win
         .host = .init(allocator, .{
             .viewports = options.viewports,
             .viewport_input = .{ .ctx = self, .func = onViewportInput },
+            .viewport_icon = "WRAITH_ICON",
             .setup = .{ .ctx = self, .func = setUpContext },
             .capture_sink = .of(Overlay, self, onCaptured),
             .ime = options.ime,

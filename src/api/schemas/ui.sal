@@ -49,8 +49,8 @@ fn void ClipRow(u32 index);
 // settings window from it.
 fn void OpenSettings();
 
-// An entry in the overlay's top bar, under the plugin's own menu, which opens and closes something
-// of the plugin's.
+// An entry under the plugin's own button on the overlay's bar, which opens and closes something of
+// the plugin's.
 trait MenuItem {
     bool isOpen();
     void setOpen(bool open);
@@ -94,9 +94,8 @@ trait Ui {
     void takeInput(InputDevice device, bool take);
     bool inputTaken(InputDevice device);
 
-    // Under the plugin's own menu in the overlay's top bar, named after it. Dev ones only show in
-    // developer mode
-    MenuItem addMenuItem(string label, bool dev);
+    // Under the plugin's own button on the overlay's bar, named after it
+    MenuItem addMenuItem(string label);
     // Gives the plugin a Settings button on the Mods page. A second call replaces the first, and
     // it's gone with the plugin
     void onOpenSettings(keep OpenSettings open);

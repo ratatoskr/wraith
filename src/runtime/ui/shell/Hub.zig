@@ -1,5 +1,7 @@
-//! The Wraith overlay. The overlay key brings up a menu along the top and a window in the middle,
-//! over the dimmed game. Plugin windows still work while it's up. Render thread.
+//! The Wraith overlay's bar. The overlay key slides it in from the bottom of the screen, or the
+//! top, with buttons for Wraith's windows, plugins' and the workbench. It holds the mouse and
+//! keyboard while it's up. The windows are the shell's, in a `ui.WindowSystem`, so they stay up
+//! till they're closed and the bar just opens and closes them. Render thread.
 
 const Hub = @This();
 
@@ -11,266 +13,233 @@ const MenuItems = @import("../MenuItems.zig");
 const icons = @import("../fonts.zig").icons;
 const Dim = @import("Dim.zig");
 const Shell = @import("Shell.zig");
-const SettingsPage = @import("SettingsPage.zig");
-const AboutPage = @import("AboutPage.zig");
-const ModsPage = @import("ModsPage.zig");
-const TweaksPage = @import("TweaksPage.zig");
 const ui_area = @import("../../host/ui_area.zig");
 
 const c = ui.c;
 
 open: bool = false,
+/// The bar's slide, and holding the input while it's up. Nothing's drawn.
 dim: Dim = .{},
-page: Page = .home,
-settings: SettingsPage = .{},
-about: AboutPage = .{},
-mods: ModsPage = .{},
-tweaks: TweaksPage = .{},
+/// Last frame's, to slide it by.
+bar_height: f32 = 0,
+/// Last frame, so Escape only closes it when no window has the keys.
+bar_focused: bool = false,
 
-pub const Page = enum { home, mods, tweaks, settings, about };
-
-const tile_size = 120;
-/// Unscaled, like the tile.
-const icon_size = 44;
-
-/// Settings' page size, unscaled.
-const settings_size: ui.Vec2 = .{ 720, 560 };
-/// The same whichever part's showing, so it doesn't jump about.
-const about_size: ui.Vec2 = .{ 680, 520 };
-const mods_size: ui.Vec2 = .{ 880, 600 };
-const tweaks_size: ui.Vec2 = .{ 820, 600 };
-
-const Tile = struct {
-    label: [:0]const u8,
+const Button = struct {
+    /// In `Shell.Windows`.
+    field: []const u8,
+    label: []const u8,
     icon: []const u8,
-    /// Null till it has one.
-    page: ?Page = null,
 };
 
-const tiles = [_]Tile{
-    .{ .label = "Mods", .icon = icons.puzzle, .page = .mods },
-    .{ .label = "Tweaks", .icon = icons.sliders_horizontal, .page = .tweaks },
-    .{ .label = "Settings", .icon = icons.settings, .page = .settings },
-    .{ .label = "About", .icon = icons.info, .page = .about },
+const buttons = [_]Button{
+    .{ .field = "mods", .label = "Mods", .icon = icons.puzzle },
+    .{ .field = "tweaks", .label = "Tweaks", .icon = icons.sliders_horizontal },
+    .{ .field = "settings", .label = "Settings", .icon = icons.settings },
+    .{ .field = "about", .label = "About", .icon = icons.info },
 };
 
-/// Back to the tiles each time it opens.
+/// Unscaled. Between the bar and the edge of the screen.
+const margin = 12;
+
 pub fn toggle(self: *Hub) void {
     self.open = !self.open;
-    self.page = .home;
-}
-
-pub fn show(self: *Hub, shell: *Shell, page: Page) void {
-    if (page == .settings) self.settings.open(shell);
-    if (page == .mods) self.mods.open(shell);
-    if (page == .tweaks) self.tweaks.open();
-    if (page == .about) self.about.section = .about;
-    self.page = page;
 }
 
 pub fn draw(self: *Hub, shell: *Shell) void {
-    const fade = self.dim.update(shell.overlay, self.open, .behind, "##wraith.hub_dim");
-    if (!self.open) return;
-    // Unless it's for a menu, popup, text box or a key being picked. A page goes back to the tiles
+    const fade = self.dim.update(shell.overlay, self.open, .none, "##wraith.hub");
+    const tweaks = &shell.windows.tweaks;
+    if (!tweaks.window.open) tweaks.drawOnScreen(shell, self.open);
+    if (fade == 0) return;
+    // Unless a window, menu, popup, text box or a key being picked has it
     const io = ui.getIO();
     const in_popup = ui.raw("ImGui_IsPopupOpen")(null, c.ImGuiPopupFlags_AnyPopupId);
-    if (ui.isKeyPressed(.escape, false) and !io.WantTextInput and !in_popup and !ui.listeningForKeys()) {
-        if (self.page == .home) {
-            self.open = false;
-            return;
-        }
-        self.page = .home;
-    }
+    const window_has_it = ui.raw("ImGui_IsWindowFocused")(c.ImGuiFocusedFlags_AnyWindow) and !self.bar_focused;
+    if (self.open and ui.isKeyPressed(.escape, false) and !window_has_it and !io.WantTextInput and !in_popup and !ui.listeningForKeys()) self.open = false;
     ui.raw("ImGui_PushStyleVar")(c.ImGuiStyleVar_Alpha, fade);
     defer ui.raw("ImGui_PopStyleVar")();
-    self.drawMenuBar(shell);
-    self.drawWindow(shell);
+    // Still drawn while it slides away
+    self.drawBar(shell, fade);
 }
 
 pub fn deinit(self: *Hub, shell: *Shell) void {
     self.dim.release(shell.overlay);
-    self.settings.deinit();
-    self.mods.deinit(shell.options.io);
-    self.tweaks.deinit(shell.allocator);
 }
 
-fn drawMenuBar(self: *Hub, shell: *Shell) void {
-    const bar = ui.mainMenuBar() orelse return;
-    defer bar.end();
-    if (ui.menu("Wraith")) |menu| {
-        defer menu.end();
-        var key_buf: [64]u8 = undefined;
-        const key: ?[:0]const u8 = if (shell.overlayKey()) |k| std.fmt.bufPrintSentinel(&key_buf, "{f}", .{k}, 0) catch null else null;
-        if (ui.menuItem(icons.settings ++ "  Settings", .{})) self.show(shell, .settings);
-        ui.separator();
-        if (ui.menuItem("Close", .{ .shortcut = key })) self.open = false;
-    }
-    if (ui.menu("Plugins")) |menu| {
-        defer menu.end();
-        self.drawPluginsMenu(shell);
-    }
-    if (ui.menu("Tweaks")) |menu| {
-        defer menu.end();
-        if (self.tweaks.drawMenu(shell)) self.show(shell, .tweaks);
-    }
-    pluginMenus(shell.developerMode());
-    if (shell.developerMode()) if (ui.menu("Developer")) |menu| {
-        defer menu.end();
-        var key_buf: [64]u8 = undefined;
-        const key: ?[:0]const u8 = if (shell.workbenchKey()) |k| std.fmt.bufPrintSentinel(&key_buf, "{f}", .{k}, 0) catch null else null;
-        var workbench_open = shell.workbench.isOpen();
-        if (ui.menuItem("Workbench", .{ .shortcut = key, .checked = &workbench_open })) shell.toggleWorkbench();
-    };
-}
-
-/// Manage, then every plugin that's on. Picking one opens its settings, like its cog on the Mods page.
-fn drawPluginsMenu(self: *Hub, shell: *Shell) void {
-    if (ui.menuItem(icons.puzzle ++ "  Manage", .{})) self.show(shell, .mods);
-    ui.separator();
-    // The Mods page's copy of the list, since it's too big for the stack
-    self.mods.snapshot(shell);
-    const plugins = self.mods.plugins[0..self.mods.plugins_len];
-    var order: [ModsPage.max_plugins]usize = undefined;
-    var n: usize = 0;
-    for (plugins, 0..) |*p, i| {
-        if (p.state != .loaded) continue;
-        order[n] = i;
-        n += 1;
-    }
-    std.mem.sort(usize, order[0..n], plugins, struct {
-        fn lessThan(list: @TypeOf(plugins), a: usize, b: usize) bool {
-            return std.ascii.lessThanIgnoreCase(titleOf(&list[a]), titleOf(&list[b]));
-        }
-    }.lessThan);
-    if (n == 0) ui.textDisabled("None are on", .{});
-    for (order[0..n]) |i| {
-        const p = &plugins[i];
-        const scope = ui.id(i);
-        defer scope.end();
-        var buf: [96]u8 = undefined;
-        const label = std.fmt.bufPrintSentinel(&buf, "{s}", .{titleOf(p)}, 0) catch continue;
-        const has = ui_area.hasSettings(p.name.get());
-        if (ui.menuItem(label, .{ .enabled = has })) _ = ui_area.openSettings(p.name.get());
-        if (!has) ui.tooltip("It has no settings", .{});
-    }
-}
-
-fn titleOf(p: *const @import("../../PluginLoader.zig").Info) []const u8 {
-    return if (p.about.title.len() > 0) p.about.title.get() else p.name.get();
-}
-
-/// One window in the middle, the tiles or a page.
-fn drawWindow(self: *Hub, shell: *Shell) void {
+fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
     const viewport = ui.raw("ImGui_GetMainViewport")();
-    const centre: c.ImVec2 = .{ .x = viewport.*.WorkPos.x + viewport.*.WorkSize.x / 2, .y = viewport.*.WorkPos.y + viewport.*.WorkSize.y / 2 };
+    const top = shell.own.barAtTop();
+    const eased = 1 - std.math.pow(f32, 1 - fade, 3);
+    const gap = ui.scaled(margin);
+    const tucked = (1 - eased) * (self.bar_height + gap);
+    const x = viewport.*.WorkPos.x + viewport.*.WorkSize.x / 2;
+    const y = if (top) viewport.*.WorkPos.y + gap - tucked else viewport.*.WorkPos.y + viewport.*.WorkSize.y - gap + tucked;
     ui.raw("ImGui_SetNextWindowViewport")(viewport.*.ID);
-    ui.raw("ImGui_SetNextWindowPosEx")(centre, c.ImGuiCond_Always, .{ .x = 0.5, .y = 0.5 });
-    const home = self.page == .home;
-    const title: [:0]const u8 = switch (self.page) {
-        .home => "Wraith###wraith.hub",
-        .mods => "Wraith Mods###wraith.hub",
-        .tweaks => "Wraith Tweaks###wraith.hub",
-        .settings => "Wraith Settings###wraith.hub",
-        .about => "About Wraith###wraith.hub",
-    };
-    const win = ui.window(title, .{
-        .size = switch (self.page) {
-            .home => null,
-            .mods => mods_size,
-            .tweaks => tweaks_size,
-            .settings => settings_size,
-            .about => about_size,
-        },
-        .size_cond = .always,
-        .flags = .{
-            .no_resize = true,
-            .no_move = true,
-            .no_collapse = true,
-            .always_auto_resize = home,
-            .no_saved_settings = true,
-            .no_docking = true,
-        },
-    }) orelse return;
+    ui.raw("ImGui_SetNextWindowPosEx")(.{ .x = x, .y = y }, c.ImGuiCond_Always, .{ .x = 0.5, .y = if (top) 0 else 1 });
+    const win = ui.window("##wraith.bar", .{ .flags = .{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_scrollbar = true,
+        .no_collapse = true,
+        .always_auto_resize = true,
+        .no_saved_settings = true,
+        .no_docking = true,
+        .no_inputs = !self.open,
+    } }) orelse return;
     defer win.end();
-    switch (self.page) {
-        .home => for (tiles, 0..) |t, i| {
-            if (i > 0) ui.sameLine();
-            if (tile(t)) if (t.page) |p| self.show(shell, p);
-            if (t.page == null) ui.tooltip("Coming soon", .{});
-        },
-        .settings => switch (self.settings.draw(shell)) {
-            .stay => {},
-            .back => self.page = .home,
-            .welcome => {
-                self.open = false;
-                shell.showWelcome();
-            },
-        },
-        .mods => if (self.mods.draw(shell)) {
-            self.page = .home;
-        },
-        .tweaks => if (self.tweaks.draw(shell)) {
-            self.page = .home;
-        },
-        .about => if (self.about.draw()) {
-            self.page = .home;
-        },
+    self.bar_height = ui.raw("ImGui_GetWindowSize")().y;
+    self.bar_focused = ui.raw("ImGui_IsWindowFocused")(0);
+
+    const on = tweaksOn(shell);
+    inline for (buttons, 0..) |b, i| {
+        if (i > 0) ui.sameLine();
+        const w = &@field(shell.windows, b.field).window;
+        const count = if (comptime std.mem.eql(u8, b.field, "tweaks")) on else 0;
+        if (barButton(b.label, b.icon, w.open, count)) w.toggle();
     }
+    pluginButtons(shell);
+    divider();
+    if (barButton("Workbench", icons.square_terminal, shell.workbench.isOpen(), 0)) shell.toggleWorkbench();
+    var key_buf: [64]u8 = undefined;
+    if (shell.workbenchKey()) |k| {
+        ui.tooltip("Disassembly, memory, addresses and the other developer tools, in a window of their own. {s}", .{ui.chordName(&key_buf, k)});
+    } else ui.tooltip("Disassembly, memory, addresses and the other developer tools, in a window of their own", .{});
 }
 
-/// A big button with an icon over its label. True when clicked.
-fn tile(t: Tile) bool {
-    const size = ui.scaled(tile_size);
-    const at = ui.getCursorScreenPos();
-    const clicked = ui.invisibleButton(t.label, .{ size, size });
-    const colour: c.ImGuiCol = if (ui.isItemActive()) c.ImGuiCol_ButtonActive else if (ui.isItemHovered()) c.ImGuiCol_ButtonHovered else c.ImGuiCol_Button;
-    const list = ui.getWindowDrawList();
-    const rounding = ui.raw("ImGui_GetStyle")().*.FrameRounding * 2;
-    ui.raw("ImDrawList_AddRectFilledEx")(list.ptr, vec(at[0], at[1]), vec(at[0] + size, at[1] + size), ui.raw("ImGui_GetColorU32")(colour), rounding, 0);
-
-    const ink = ui.raw("ImGui_GetColorU32")(c.ImGuiCol_Text);
-    {
-        // Null keeps the font, just bigger
-        ui.raw("ImGui_PushFontFloat")(null, icon_size);
-        defer ui.raw("ImGui_PopFont")();
-        const box = ui.calcTextSize(t.icon);
-        list.addText(.{ at[0] + (size - box[0]) / 2, at[1] + size * 0.42 - box[1] / 2 }, ink, t.icon);
+fn tweaksOn(shell: *Shell) usize {
+    const tweaks = shell.tweaks orelse return 0;
+    var arena: std.heap.ArenaAllocator = .init(shell.allocator);
+    defer arena.deinit();
+    const list = tweaks.snapshot(arena.allocator()) catch return 0;
+    var n: usize = 0;
+    for (list) |*t| {
+        if (!t.is_group and t.on) n += 1;
     }
-    const text = ui.calcTextSize(t.label);
-    list.addText(.{ at[0] + (size - text[0]) / 2, at[1] + size * 0.78 - text[1] / 2 }, ink, t.label);
+    return n;
+}
+
+/// Lit while what it opens is open. A count in its corner if there's one.
+fn barButton(label: []const u8, icon: []const u8, lit: bool, count: usize) bool {
+    var buf: [128]u8 = undefined;
+    const text = (if (icon.len > 0) std.fmt.bufPrintSentinel(&buf, "{s}  {s}", .{ icon, label }, 0) else std.fmt.bufPrintSentinel(&buf, "{s}", .{label}, 0)) catch return false;
+    if (lit) {
+        const colour = ui.raw("ImGui_GetStyleColorVec4")(c.ImGuiCol_ButtonActive);
+        ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_Button, colour.*);
+    }
+    const clicked = ui.button(text);
+    if (lit) ui.raw("ImGui_PopStyleColor")();
+    if (count > 0) badge(count);
     return clicked;
 }
 
-fn vec(x: f32, y: f32) c.ImVec2 {
-    return .{ .x = x, .y = y };
+fn badge(count: usize) void {
+    var buf: [8]u8 = undefined;
+    const text = if (count > 99) "99+" else std.fmt.bufPrint(&buf, "{d}", .{count}) catch return;
+    const size = ui.calcTextSize(text);
+    const max = ui.raw("ImGui_GetItemRectMax")();
+    const min = ui.raw("ImGui_GetItemRectMin")();
+    const r = @max(size[0], size[1]) / 2 + ui.scaled(2);
+    const centre: ui.Vec2 = .{ max.x - r * 0.5, min.y + r * 0.5 };
+    const list = ui.getWindowDrawList();
+    list.pushClipRectFullScreen();
+    defer list.popClipRect();
+    list.addCircleFilled(centre, r, ui.rgba(214, 72, 84, 255));
+    list.addText(.{ centre[0] - size[0] / 2, centre[1] - size[1] / 2 }, ui.rgba(255, 255, 255, 255), text);
 }
 
-/// A menu per plugin, under its name, in the order they added their first item. Dev items only in
-/// developer mode. Holds `MenuItems` only while drawing them, since closing owners wait on it.
-fn pluginMenus(dev_mode: bool) void {
-    const items = MenuItems.read();
-    defer items.end();
-    const all = items.entries;
-    for (all, 0..) |e, i| {
-        if (e.item.dev and !dev_mode) continue;
-        const seen = for (all[0..i]) |before| {
-            if (before.owner == e.owner and (!before.item.dev or dev_mode)) break true;
-        } else false;
-        if (seen) continue;
-        const scope = ui.id(e.owner);
-        defer scope.end();
-        var buf: [96]u8 = undefined;
-        const name = if (e.item.menu.len > 0) e.item.menu else e.owner.name;
-        const label = std.fmt.bufPrintSentinel(&buf, "{s}", .{name}, 0) catch continue;
-        const menu = ui.menu(label) orelse continue;
-        defer menu.end();
-        for (all[i..]) |item| {
-            if (item.owner != e.owner or (item.item.dev and !dev_mode)) continue;
-            const item_scope = ui.id(item.item);
-            defer item_scope.end();
-            var item_buf: [128]u8 = undefined;
-            const item_label = std.fmt.bufPrintSentinel(&item_buf, "{s}", .{item.item.label}, 0) catch continue;
-            _ = ui.menuItem(item_label, .{ .checked = item.item.open });
+/// A thin line between groups of buttons, on the same row.
+fn divider() void {
+    ui.sameLine();
+    const at = ui.getCursorScreenPos();
+    const h = ui.frameHeight();
+    const colour = ui.raw("ImGui_GetColorU32")(c.ImGuiCol_Separator);
+    ui.getWindowDrawList().addLine(.{ at[0], at[1] + h * 0.15 }, .{ at[0], at[1] + h * 0.85 }, colour, 1);
+    ui.raw("ImGui_Dummy")(.{ .x = 1, .y = h });
+    ui.sameLine();
+}
+
+/// At most this many plugins on the bar.
+const max_plugins = 32;
+
+/// A button per plugin with menu items, in the order they added their first. One item and no
+/// settings opens it straight away, otherwise it's a list.
+fn pluginButtons(shell: *Shell) void {
+    _ = shell;
+    // Asked first, since a plugin going away waits on `MenuItems`
+    var names: [max_plugins][64]u8 = undefined;
+    var name_lens: [max_plugins]usize = @splat(0);
+    var has: [max_plugins]bool = @splat(false);
+    var n: usize = 0;
+    {
+        const items = MenuItems.read();
+        defer items.end();
+        for (items.entries, 0..) |e, i| {
+            if (n == max_plugins or firstSeen(items.entries, i) != i) continue;
+            const len = @min(e.owner.name.len, names[n].len);
+            @memcpy(names[n][0..len], e.owner.name[0..len]);
+            name_lens[n] = len;
+            n += 1;
         }
     }
+    for (0..n) |i| has[i] = ui_area.hasSettings(names[i][0..name_lens[i]]);
+
+    var settings_buf: [64]u8 = undefined;
+    var settings_for: ?[]const u8 = null;
+    {
+        const items = MenuItems.read();
+        defer items.end();
+        const all = items.entries;
+        var first = true;
+        for (all, 0..) |e, i| {
+            if (firstSeen(all, i) != i) continue;
+            const with_settings = for (names[0..n], name_lens[0..n], has[0..n]) |*name, len, h| {
+                if (std.mem.eql(u8, name[0..len], e.owner.name)) break h;
+            } else false;
+            if (first) divider() else ui.sameLine();
+            first = false;
+            const scope = ui.id(e.owner);
+            defer scope.end();
+            const name = if (e.item.menu.len > 0) e.item.menu else e.owner.name;
+            var count: usize = 0;
+            var any_open = false;
+            for (all[i..]) |item| if (item.owner == e.owner) {
+                count += 1;
+                if (item.item.open.*) any_open = true;
+            };
+            if (count == 1 and !with_settings) {
+                if (barButton(name, "", e.item.open.*, 0)) e.item.open.* = !e.item.open.*;
+                continue;
+            }
+            var label_buf: [96]u8 = undefined;
+            const label = std.fmt.bufPrint(&label_buf, "{s}  {s}", .{ name, icons.chevron_up }) catch name;
+            if (barButton(label, "", any_open, 0)) _ = ui.raw("ImGui_OpenPopup")("##items", 0);
+            if (!ui.raw("ImGui_BeginPopup")("##items", 0)) continue;
+            defer ui.raw("ImGui_EndPopup")();
+            for (all[i..]) |item| {
+                if (item.owner != e.owner) continue;
+                const item_scope = ui.id(item.item);
+                defer item_scope.end();
+                var item_buf: [128]u8 = undefined;
+                const item_label = std.fmt.bufPrintSentinel(&item_buf, "{s}", .{item.item.label}, 0) catch continue;
+                _ = ui.menuItem(item_label, .{ .checked = item.item.open });
+            }
+            if (with_settings) {
+                ui.separator();
+                if (ui.menuItem(icons.settings ++ "  Settings", .{})) {
+                    const len = @min(e.owner.name.len, settings_buf.len);
+                    @memcpy(settings_buf[0..len], e.owner.name[0..len]);
+                    settings_for = settings_buf[0..len];
+                }
+            }
+        }
+    }
+    // Outside `MenuItems`, since it calls into the plugin
+    if (settings_for) |plugin| _ = ui_area.openSettings(plugin);
+}
+
+/// Where the owner of `all[i]` first shows up.
+fn firstSeen(all: []const MenuItems.Entry, i: usize) usize {
+    for (all[0..i], 0..) |before, j| if (before.owner == all[i].owner) return j;
+    return i;
 }

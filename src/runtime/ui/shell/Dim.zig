@@ -20,6 +20,8 @@ pub const Mode = enum {
     behind,
     /// Over every overlay window but what's drawn after it, and takes their clicks.
     blocking,
+    /// Not drawn. Just the fade and holding the input.
+    none,
 };
 
 const fade_seconds = 0.25;
@@ -38,6 +40,7 @@ pub fn update(self: *Dim, overlay: *Overlay, wanted: bool, mode: Mode, name: [:0
     switch (mode) {
         .behind => fill(.{ .ptr = @ptrCast(ui.raw("ImGui_GetBackgroundDrawListEx")(viewport)) }, viewport, colour),
         .blocking => drawBlocker(viewport, colour, name),
+        .none => {},
     }
     return self.fade;
 }

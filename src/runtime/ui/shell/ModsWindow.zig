@@ -1,8 +1,8 @@
-//! The overlay's Mods page, from the hub. What's installed, dev plugins included, and what the
+//! The overlay's Mods window. What's installed, dev plugins included, and what the
 //! Wraith Hub has for this game or any game, to install, update, load and unload. The hub, files
 //! and the loader are only touched on a worker. Render thread.
 
-const ModsPage = @This();
+const ModsWindow = @This();
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -25,6 +25,8 @@ const log = core.log.scoped(.wraith_ui);
 const Listed = registry.mods.Listed;
 const Info = PluginLoader.Info;
 
+window: ui.Window = .{ .title = "Mods###wraith.mods", .size = .{ 880, 600 } },
+shell: *Shell = undefined,
 section: Section = .installed,
 search: [128]u8 = @splat(0),
 /// The row that's open, by id.
@@ -101,26 +103,25 @@ const Row = struct {
 };
 
 /// Gets what the hub has, the first time.
-pub fn open(self: *ModsPage, shell: *Shell) void {
+pub fn onOpen(self: *ModsWindow) void {
+    const shell = self.shell;
     self.search = @splat(0);
     self.expanded = .{};
     if (!self.work.fetched.load(.acquire)) self.start(shell, .refresh);
 }
 
 /// Waits for work in flight.
-pub fn deinit(self: *ModsPage, io: ?std.Io) void {
+pub fn deinit(self: *ModsWindow, io: ?std.Io) void {
     if (io) |i| self.work.group.await(i) catch {};
     if (self.work.arena) |*a| a.deinit();
     if (self.work.folders_arena) |*a| a.deinit();
     self.work = .{};
 }
 
-/// True to go back.
-pub fn draw(self: *ModsPage, shell: *Shell) bool {
-    const io = shell.options.io orelse return true;
+pub fn draw(self: *ModsWindow) void {
+    const shell = self.shell;
+    const io = shell.options.io orelse return ui.textDisabled("Mods need Wraith's folders, which it doesn't have here.", .{});
     self.snapshot(shell);
-    if (ui.iconButton(icons.arrow_left ++ "##back", "Back")) return true;
-    ui.sameLine();
     ui.setNextItemWidthPixels(-ui.scaled(40));
     _ = ui.inputTextHint("##search", icons.search ++ "  Search mods", &self.search);
     ui.sameLine();
@@ -157,7 +158,6 @@ pub fn draw(self: *ModsPage, shell: *Shell) bool {
         self.drawRows(shell, query);
     }
     self.drawFooter(shell, updates_n);
-    return false;
 }
 
 fn label(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]const u8 {
@@ -165,7 +165,7 @@ fn label(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]const u8 {
 }
 
 /// The loader's plugins and where things are, for this frame.
-pub fn snapshot(self: *ModsPage, shell: *Shell) void {
+pub fn snapshot(self: *ModsWindow, shell: *Shell) void {
     const loader = shell.acquireLoader() orelse {
         self.plugins_len = 0;
         return;
@@ -175,13 +175,13 @@ pub fn snapshot(self: *ModsPage, shell: *Shell) void {
     self.mods_dir.set(loader.plugins_dir);
 }
 
-fn findPlugin(self: *ModsPage, id: []const u8) ?*const Info {
+fn findPlugin(self: *ModsWindow, id: []const u8) ?*const Info {
     for (self.plugins[0..self.plugins_len]) |*p| if (std.mem.eql(u8, p.name.get(), id)) return p;
     return null;
 }
 
 /// Hold `work.lock`. Good till the next call.
-pub fn collect(self: *ModsPage, section: Section, query: []const u8) []const Row {
+pub fn collect(self: *ModsWindow, section: Section, query: []const u8) []const Row {
     var n: usize = 0;
     const listing = self.work.listing;
     switch (section) {
@@ -233,7 +233,7 @@ pub fn collect(self: *ModsPage, section: Section, query: []const u8) []const Row
     return rows;
 }
 
-fn drawRows(self: *ModsPage, shell: *Shell, query: []const u8) void {
+fn drawRows(self: *ModsWindow, shell: *Shell, query: []const u8) void {
     const rows = self.collect(self.section, query);
     if (rows.len == 0) {
         const fetched = self.work.fetched.load(.acquire);
@@ -258,7 +258,7 @@ fn drawRows(self: *ModsPage, shell: *Shell, query: []const u8) void {
     }
 }
 
-fn drawRow(self: *ModsPage, shell: *Shell, row: Row) void {
+fn drawRow(self: *ModsWindow, shell: *Shell, row: Row) void {
     const is_open = std.mem.eql(u8, self.expanded.get(), row.id);
     var buf: [160]u8 = undefined;
     if (ui.selectableWith(label(&buf, "##row", .{}), is_open, .{ .allow_overlap = true })) {
@@ -311,7 +311,7 @@ fn tag(colour: ui.Color, text: []const u8) void {
     ui.textColored(colour, "[{s}]", .{text});
 }
 
-fn drawDetails(self: *ModsPage, shell: *Shell, row: Row) void {
+fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
     ui.indent(ui.scaled(12));
     defer ui.unindent(ui.scaled(12));
     ui.textDisabled("{s}", .{row.id});
@@ -372,7 +372,7 @@ fn drawDetails(self: *ModsPage, shell: *Shell, row: Row) void {
     ui.raw("ImGui_NewLine")();
 }
 
-fn drawFooter(self: *ModsPage, shell: *Shell, updates: usize) void {
+fn drawFooter(self: *ModsWindow, shell: *Shell, updates: usize) void {
     ui.spacing();
     const doing = self.work.doing.message();
     if (self.work.isBusy() and doing.len > 0) {
@@ -457,18 +457,18 @@ const Op = struct {
     id: Text(64) = .{},
 };
 
-fn start(self: *ModsPage, shell: *Shell, kind: Kind) void {
+fn start(self: *ModsWindow, shell: *Shell, kind: Kind) void {
     self.begin(shell, .{ .kind = kind });
 }
 
-pub fn startOn(self: *ModsPage, shell: *Shell, kind: Kind, id: []const u8) void {
+pub fn startOn(self: *ModsWindow, shell: *Shell, kind: Kind, id: []const u8) void {
     var op: Op = .{ .kind = kind };
     op.id.set(id);
     self.begin(shell, op);
 }
 
 /// One at a time. Another while one's going is dropped.
-fn begin(self: *ModsPage, shell: *Shell, op: Op) void {
+fn begin(self: *ModsWindow, shell: *Shell, op: Op) void {
     const io = shell.options.io orelse return;
     if (self.work.busy.swap(true, .acq_rel)) return;
     self.work.group.concurrent(io, run, .{ self, shell, io, op }) catch {
@@ -476,20 +476,20 @@ fn begin(self: *ModsPage, shell: *Shell, op: Op) void {
     };
 }
 
-fn setDoing(self: *ModsPage, io: std.Io, comptime fmt: []const u8, args: anytype) void {
+fn setDoing(self: *ModsWindow, io: std.Io, comptime fmt: []const u8, args: anytype) void {
     self.work.lock.lockUncancelable(io);
     defer self.work.lock.unlock(io);
     self.work.doing.print(fmt, args);
     self.work.problem = .{};
 }
 
-fn failed(self: *ModsPage, io: std.Io, comptime fmt: []const u8, args: anytype) void {
+fn failed(self: *ModsWindow, io: std.Io, comptime fmt: []const u8, args: anytype) void {
     self.work.lock.lockUncancelable(io);
     defer self.work.lock.unlock(io);
     self.work.problem.print(fmt, args);
 }
 
-fn run(self: *ModsPage, shell: *Shell, io: std.Io, op: Op) void {
+fn run(self: *ModsWindow, shell: *Shell, io: std.Io, op: Op) void {
     defer self.work.busy.store(false, .release);
     const loader = shell.acquireLoader() orelse return;
     defer shell.releaseLoader();
@@ -549,7 +549,7 @@ fn run(self: *ModsPage, shell: *Shell, io: std.Io, op: Op) void {
 }
 
 /// Off while it updates, then back on if it was.
-fn updateOne(self: *ModsPage, io: std.Io, loader: *PluginLoader, scratch: std.mem.Allocator, where: registry.mods.Where, id: []const u8) void {
+fn updateOne(self: *ModsWindow, io: std.Io, loader: *PluginLoader, scratch: std.mem.Allocator, where: registry.mods.Where, id: []const u8) void {
     self.setDoing(io, "Updating {s}...", .{id});
     const was_on = isState(loader, id, .loaded);
     if (was_on) unloadNow(self, io, loader, id);
@@ -563,7 +563,7 @@ fn updateOne(self: *ModsPage, io: std.Io, loader: *PluginLoader, scratch: std.me
 }
 
 /// Installed ones with a newer version, from the last listing.
-fn withUpdates(self: *ModsPage, io: std.Io, scratch: std.mem.Allocator) []const []const u8 {
+fn withUpdates(self: *ModsWindow, io: std.Io, scratch: std.mem.Allocator) []const []const u8 {
     self.work.lock.lockUncancelable(io);
     defer self.work.lock.unlock(io);
     const listing = self.work.listing orelse return &.{};
@@ -586,7 +586,7 @@ fn whereOf(scratch: std.mem.Allocator, loader: *PluginLoader) !registry.mods.Whe
 }
 
 /// What the hub has for this game and any game, with what's installed.
-fn relist(self: *ModsPage, io: std.Io, loader: *PluginLoader) void {
+fn relist(self: *ModsWindow, io: std.Io, loader: *PluginLoader) void {
     var folders_arena: std.heap.ArenaAllocator = .init(loader.allocator);
     const folders = readFolders(folders_arena.allocator(), io, loader.plugins_dir) catch |err| blk: {
         log.warn("Couldn't read {s}: {t}", .{ loader.plugins_dir, err });
@@ -643,12 +643,12 @@ fn isState(loader: *PluginLoader, id: []const u8, state: PluginLoader.State) boo
     return s.state == state;
 }
 
-fn loadNow(self: *ModsPage, io: std.Io, loader: *PluginLoader, id: []const u8) void {
+fn loadNow(self: *ModsWindow, io: std.Io, loader: *PluginLoader, id: []const u8) void {
     const job = loader.load(id) catch |err| return self.failed(io, "Couldn't turn {s} on: {t}", .{ id, err });
     job.wait() catch |err| self.failed(io, "Couldn't turn {s} on: {t}", .{ id, err });
 }
 
-fn unloadNow(self: *ModsPage, io: std.Io, loader: *PluginLoader, id: []const u8) void {
+fn unloadNow(self: *ModsWindow, io: std.Io, loader: *PluginLoader, id: []const u8) void {
     if (!isState(loader, id, .loaded)) return;
     const job = loader.unload(id) catch |err| return self.failed(io, "Couldn't turn {s} off: {t}", .{ id, err });
     job.wait() catch |err| self.failed(io, "Couldn't turn {s} off: {t}", .{ id, err });
