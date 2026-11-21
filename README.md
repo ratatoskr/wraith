@@ -1,5 +1,11 @@
 # Wraith
 
+[![CI](https://img.shields.io/github/actions/workflow/status/ratatoskr/wraith/main_ci.yml?branch=main&label=CI)](https://github.com/ratatoskr/wraith/actions/workflows/main_ci.yml)
+[![License](https://img.shields.io/github/license/ratatoskr/wraith)](https://github.com/ratatoskr/wraith/blob/main/LICENSE)
+[![Version](https://img.shields.io/github/v/tag/ratatoskr/wraith?label=version)](https://github.com/ratatoskr/wraith/tags)
+[![Zig](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fratatoskr%2Fwraith%2Fmain%2Fbuild.zig.zon&search=minimum_zig_version%5Cs%2A%3D%5Cs%2A%22%28%5B%5E%22%2B%5D%2B%29&replace=%241&label=zig&color=f7a41d&logo=zig&logoColor=white)](https://github.com/ratatoskr/wraith/blob/main/build.zig.zon)
+[![Docs](https://img.shields.io/badge/docs-docs.wraith.io-blue)](https://docs.wraith.io)
+
 A mod loader for Windows games. It runs inside the game, draws an overlay and loads plugins.
 
 Pre-release. Expect breaking changes.
