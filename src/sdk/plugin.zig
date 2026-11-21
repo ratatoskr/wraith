@@ -20,6 +20,8 @@ pub const symbol = "wraith_plugin";
 pub const Entry = fn () callconv(.c) *const api.NativeEntry;
 
 pub const Context = struct {
+    /// Wraith's API, like `ctx.wraith.tweaks()`. The same as `sdk.wraith.root()`, without the null.
+    wraith: Owner.Wraith,
     owner: Owner,
     allocator: std.mem.Allocator,
     /// Don't block game threads like render or hooks, they might have little stack.
@@ -163,6 +165,7 @@ pub const Dll = struct {
         self.drawing_windows = false;
         self.ready = true;
         return .{
+            .wraith = owner.root,
             .owner = owner,
             .allocator = allocator,
             .io = self.threaded.io(),
