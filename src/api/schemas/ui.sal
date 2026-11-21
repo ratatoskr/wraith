@@ -24,6 +24,24 @@ struct SortSpec {
     bool descending;
 }
 
+error DialogError { Failed = 1 }
+
+// A file to open.
+struct FileDialog {
+    bool save;
+    string title;
+    string folder;
+    string file_name;
+    string kind;
+    string extension;
+}
+
+// A folder to open.
+struct FolderDialog {
+    string title;
+    string folder;
+}
+
 // One row of a clipped list.
 fn void ClipRow(u32 index);
 
@@ -87,4 +105,9 @@ trait Ui {
     usize imguiProc(string name);
     // The Dear ImGui it hosts, like 19250
     u32 imguiVersion();
+
+    // Windows' own dialogs, over the game. The full path, or null if it's cancelled. The game keeps
+    // running while it's open. One at a time per plugin, another fails while one's up.
+    async ?string!DialogError pickFile(FileDialog options);
+    async ?string!DialogError pickFolder(FolderDialog options);
 }

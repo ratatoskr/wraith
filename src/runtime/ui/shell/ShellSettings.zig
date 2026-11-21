@@ -80,7 +80,8 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
         .name = "Frame stats window (seconds)",
         .help = "How many seconds of frames the frame stats cover.",
         .group = Settings.group,
-        .section = "Frame stats",
+        // Set in the workbench's Frames panel
+        .hidden = true,
         .kind = .{ .number = .{ .default = defaults.window_seconds, .min = FrameStats.min_window_seconds, .max = FrameStats.max_window_seconds } },
     }, .{ .changed = .{ .ctx = shell, .call = frameStatsChanged } });
     try added.append(shell.allocator, self.frame_window);
@@ -89,7 +90,7 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
         .name = "Hitch at (times the median)",
         .help = "Frames this many times the median count as hitches.",
         .group = Settings.group,
-        .section = "Frame stats",
+        .hidden = true,
         .kind = .{ .number = .{ .default = defaults.hitch_factor, .min = FrameStats.min_hitch_factor, .max = FrameStats.max_hitch_factor } },
     }, .{ .changed = .{ .ctx = shell, .call = frameStatsChanged } });
     try added.append(shell.allocator, self.frame_hitch);
@@ -140,7 +141,8 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
             .id = std.fmt.bufPrint(&id_buf, "wraith.workbench.{s}", .{field}) catch unreachable,
             .name = humanName(&name_buf, field),
             .group = Settings.group,
-            .section = "Workbench",
+            // Set in the workbench's Keyboard shortcuts
+            .hidden = true,
             // Inside the workbench's window, not the game's
             .kind = .{ .key = .{ .default = @field(key_defaults, field), .in_game = false } },
         }, .{ .changed = .{ .ctx = shell, .call = workbenchKeyChanged } });
@@ -178,7 +180,7 @@ pub fn workbenchKeys(self: *const ShellSettings) WorkbenchKeys {
 }
 
 /// `copy_address` as "Copy address".
-fn humanName(buf: []u8, comptime field: []const u8) []const u8 {
+pub fn humanName(buf: []u8, comptime field: []const u8) []const u8 {
     const n = @min(field.len, buf.len);
     for (field[0..n], buf[0..n], 0..) |ch, *out, i| out.* = if (ch == '_') ' ' else if (i == 0) std.ascii.toUpper(ch) else ch;
     return buf[0..n];

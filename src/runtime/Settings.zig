@@ -68,7 +68,7 @@ pub const Own = struct {
             .name = "Log level",
             .help = "How much goes in the log. Debug is a lot, but it's what a bug report wants.",
             .group = group,
-            .section = "Diagnostics",
+            .section = "Advanced",
             .kind = .{ .choice = .{ .default = default_level, .options = &level_names } },
         }, .{ .changed = .{ .ctx = registry, .call = logLevelChanged } });
         errdefer registry.remove(log_level);
@@ -77,7 +77,7 @@ pub const Own = struct {
             .name = "Console window",
             .help = "Shows the log in a window of its own. Turning it off takes a restart.",
             .group = group,
-            .section = "Diagnostics",
+            .section = "Advanced",
             .kind = .{ .toggle = false },
         }, .{ .changed = .{ .ctx = registry, .call = consoleChanged } });
         errdefer registry.remove(console);
@@ -86,7 +86,7 @@ pub const Own = struct {
             .name = "Watch file access",
             .help = "Watches the files the game reads and writes, for the workbench's IO page, and lets plugins serve files. Turn it off if it clashes with this game or another mod.",
             .group = group,
-            .section = "Compatibility",
+            .section = "Advanced",
             .scope = .game,
             .restart = true,
             .kind = .{ .toggle = true },
@@ -97,7 +97,7 @@ pub const Own = struct {
             .name = "IME in the overlay",
             .help = "Lets the overlay's text boxes use the IME for typing Japanese, Chinese or Korean, even where the game switches it off, and puts its windows by the caret. Turn it off if it clashes with this game's own IME or another mod.",
             .group = group,
-            .section = "Compatibility",
+            .section = "Advanced",
             .scope = .game,
             .restart = true,
             .kind = .{ .toggle = true },

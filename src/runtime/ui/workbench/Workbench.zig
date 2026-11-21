@@ -41,6 +41,7 @@ const ProjectMenu = @import("ProjectMenu.zig");
 const SigMaker = @import("SigMaker.zig");
 const StatusBar = @import("StatusBar.zig");
 pub const ExportMod = @import("ExportMod.zig");
+const Shortcuts = @import("Shortcuts.zig");
 pub const Scripts = @import("Scripts.zig");
 const Addresses = @import("panels/Addresses.zig");
 const Accesses = @import("panels/Accesses.zig");
@@ -250,6 +251,7 @@ failures: u32 = 0,
 project_menu: ProjectMenu = .{},
 sig_maker: SigMaker = .{},
 export_mod: ExportMod = .{},
+shortcuts: Shortcuts = .{},
 dev_menus: DevMenus = .{},
 /// The project's epoch last seen, to start over when it becomes another.
 seen_epoch: u32 = 0,
@@ -533,6 +535,7 @@ pub fn draw(self: *Workbench) void {
         self.drawMenuBar();
         self.project_menu.drawPopups(self);
         self.export_mod.draw(self);
+        self.shortcuts.draw(self);
         self.sig_maker.poll(self);
         const id = c.ImGui_GetID(@ptrCast(dockspace_name ++ ".v" ++ layout_version));
         self.dockspace = id;
@@ -743,6 +746,7 @@ fn drawMenuBar(self: *Workbench) void {
     self.plugin_schemas_open = schemas_open;
     if (ui.menu("Window")) |menu| {
         defer menu.end();
+        if (ui.menuItem("Keyboard shortcuts...", .{})) self.shortcuts.open();
         if (self.app) |app| {
             var on_top = app.isTopmost();
             if (ui.menuItem("Always on top", .{ .checked = &on_top })) app.setTopmost(on_top);

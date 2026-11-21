@@ -51,8 +51,6 @@ const Tab = union(enum) {
     plugins,
 };
 
-/// Only shown in developer mode.
-const developer_sections = [_][]const u8{ "Workbench", "Frame stats" };
 const footer_height = 36;
 
 /// Starts editing what's in effect now.
@@ -113,7 +111,7 @@ pub fn draw(self: *SettingsPage, shell: *Shell) Result {
         } else if (ui.tabBar("##tabs")) |bar| {
             defer bar.end();
             var found: [16]Tab = undefined;
-            for (self.tabs(shell, &found)) |tab| {
+            for (self.tabs(&found)) |tab| {
                 var label_buf: [64]u8 = undefined;
                 const label: [:0]const u8 = switch (tab) {
                     .section => |s| if (s.len == 0) "General" else std.fmt.bufPrintSentinel(&label_buf, "{s}", .{s}, 0) catch "?",
@@ -131,22 +129,27 @@ pub fn draw(self: *SettingsPage, shell: *Shell) Result {
 }
 
 /// General first, then Wraith's sections in the order they were added, then keys and plugins.
-fn tabs(self: *SettingsPage, shell: *Shell, out: []Tab) []Tab {
+/// `last_sections` go at the end, in that order.
+fn tabs(self: *SettingsPage, out: []Tab) []Tab {
     var n: usize = 0;
     out[n] = .{ .section = "" };
     n += 1;
     var plugins = false;
+    var last: [last_sections.len]bool = @splat(false);
     for (self.settings) |s| {
         if (s.def.hidden) continue;
         if (!isWraith(s)) {
             if (!isGameKey(s)) plugins = true;
             continue;
         }
-        if (!shell.developerMode() and isDeveloperSection(s.def.section)) continue;
+        if (lastIndex(s.def.section)) |i| {
+            last[i] = true;
+            continue;
+        }
         const known = for (out[0..n]) |t| {
             if (t == .section and std.mem.eql(u8, t.section, s.def.section)) break true;
         } else false;
-        if (!known and n < out.len - 2) {
+        if (!known and n < out.len - 2 - last_sections.len) {
             out[n] = .{ .section = s.def.section };
             n += 1;
         }
@@ -157,12 +160,19 @@ fn tabs(self: *SettingsPage, shell: *Shell, out: []Tab) []Tab {
         out[n] = .plugins;
         n += 1;
     }
+    for (last_sections, last) |section, any| if (any) {
+        out[n] = .{ .section = section };
+        n += 1;
+    };
     return out[0..n];
 }
 
-fn isDeveloperSection(section: []const u8) bool {
-    for (developer_sections) |d| if (std.mem.eql(u8, d, section)) return true;
-    return false;
+/// On the far right, after everything else.
+const last_sections = [_][]const u8{ "Advanced", "Developer" };
+
+fn lastIndex(section: []const u8) ?usize {
+    for (last_sections, 0..) |l, i| if (std.mem.eql(u8, l, section)) return i;
+    return null;
 }
 
 fn isWraith(s: *const Setting) bool {

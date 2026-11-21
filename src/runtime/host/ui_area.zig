@@ -5,6 +5,7 @@ const std = @import("std");
 
 const api = @import("wraith_api");
 const sync = @import("tuft_sys").sync;
+const tuft_window = @import("tuft_window");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const host = @import("root.zig");
@@ -78,6 +79,88 @@ fn stateOf(loaded: *Loaded) ?*State {
 }
 
 const gpa = std.heap.page_allocator;
+
+const FilePromise = sal.Plain(Ui, "pickFile");
+const FolderPromise = sal.Plain(Ui, "pickFolder");
+comptime {
+    // Both give a path or null, so one resolver type does for both
+    std.debug.assert(FilePromise == FolderPromise);
+}
+
+/// A file or folder dialog on a thread of its own, since it blocks till it's closed. It only enters
+/// the plugin's owner to hand back the path, so unloading doesn't wait for someone to close it.
+const Dialog = struct {
+    arena: std.heap.ArenaAllocator,
+    owner: *sal.Owner,
+    what: union(enum) {
+        file: struct { resolver: wraith.ResolverOf(FilePromise), options: tuft_window.FileDialog },
+        folder: struct { resolver: wraith.ResolverOf(FilePromise), options: tuft_window.FolderDialog },
+    },
+
+    fn start(comptime kind: enum { file, folder }, loaded: *Loaded, options: anytype) FilePromise {
+        const pair = FilePromise.make() catch return .{};
+        const t = wraith.tablesOf(loaded) orelse {
+            pair.resolver.drop();
+            return pair.promise;
+        };
+        const d = gpa.create(Dialog) catch {
+            pair.resolver.fail(error.Failed);
+            return pair.promise;
+        };
+        d.* = .{ .arena = .init(gpa), .owner = t.owner, .what = undefined };
+        // The plugin's strings are only borrowed for the call
+        const a = d.arena.allocator();
+        const window = host.ui.gameWindow();
+        const owner: ?tuft_window.Handle = if (window != 0) @ptrFromInt(window) else null;
+        const copied = copy: {
+            const title = a.dupe(u8, options.title) catch break :copy false;
+            const folder = a.dupe(u8, options.folder) catch break :copy false;
+            if (kind == .file) {
+                d.what = .{ .file = .{ .resolver = pair.resolver, .options = .{
+                    .mode = if (options.save) .save else .open,
+                    .owner = owner,
+                    .title = title,
+                    .folder = folder,
+                    .file_name = a.dupe(u8, options.file_name) catch break :copy false,
+                    .kind = a.dupe(u8, options.kind) catch break :copy false,
+                    .extension = a.dupe(u8, options.extension) catch break :copy false,
+                } } };
+            } else {
+                d.what = .{ .folder = .{ .resolver = pair.resolver, .options = .{ .owner = owner, .title = title, .folder = folder } } };
+            }
+            break :copy true;
+        };
+        const thread = if (copied) std.Thread.spawn(.{}, run, .{d}) catch null else null;
+        if (thread) |th| th.detach() else {
+            d.arena.deinit();
+            gpa.destroy(d);
+            pair.resolver.fail(error.Failed);
+        }
+        return pair.promise;
+    }
+
+    fn run(d: *Dialog) void {
+        defer {
+            d.arena.deinit();
+            gpa.destroy(d);
+        }
+        switch (d.what) {
+            inline else => |w, tag| {
+                const picked = switch (tag) {
+                    .file => tuft_window.pickFile(gpa, w.options),
+                    .folder => tuft_window.pickFolder(gpa, w.options),
+                };
+                const path = picked catch null;
+                defer if (path) |p| gpa.free(p);
+                if (!d.owner.enter()) return w.resolver.drop();
+                defer d.owner.leave();
+                _ = picked catch return w.resolver.fail(error.Failed);
+                const got = path orelse return w.resolver.settle(null);
+                w.resolver.settle(w.resolver.hold(got) catch return w.resolver.fail(error.Failed));
+            },
+        }
+    }
+};
 
 pub const UiImpl = struct {
     pub fn available(loaded: *Loaded) bool {
@@ -184,6 +267,14 @@ pub const UiImpl = struct {
 
     pub fn imguiVersion(_: *Loaded) u32 {
         return host.ui.imguiVersion();
+    }
+
+    pub fn pickFile(loaded: *Loaded, options: W.FileDialog) FilePromise {
+        return Dialog.start(.file, loaded, options);
+    }
+
+    pub fn pickFolder(loaded: *Loaded, options: W.FolderDialog) FolderPromise {
+        return Dialog.start(.folder, loaded, options);
     }
 
     pub fn addMenuItem(loaded: *Loaded, label: []const u8, dev: bool) sal.Object(MenuItem) {
