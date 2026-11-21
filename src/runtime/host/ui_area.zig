@@ -111,14 +111,15 @@ const Dialog = struct {
         // The plugin's strings are only borrowed for the call
         const a = d.arena.allocator();
         const window = host.ui.gameWindow();
-        const owner: ?tuft_window.Handle = if (window != 0) @ptrFromInt(window) else null;
+        // Over the game, not owned by it, which would tie the dialog to the game's message loop
+        const over: ?tuft_window.Handle = if (window != 0) @ptrFromInt(window) else null;
         const copied = copy: {
             const title = a.dupe(u8, options.title) catch break :copy false;
             const folder = a.dupe(u8, options.folder) catch break :copy false;
             if (kind == .file) {
                 d.what = .{ .file = .{ .resolver = pair.resolver, .options = .{
                     .mode = if (options.save) .save else .open,
-                    .owner = owner,
+                    .over = over,
                     .title = title,
                     .folder = folder,
                     .file_name = a.dupe(u8, options.file_name) catch break :copy false,
@@ -126,7 +127,7 @@ const Dialog = struct {
                     .extension = a.dupe(u8, options.extension) catch break :copy false,
                 } } };
             } else {
-                d.what = .{ .folder = .{ .resolver = pair.resolver, .options = .{ .owner = owner, .title = title, .folder = folder } } };
+                d.what = .{ .folder = .{ .resolver = pair.resolver, .options = .{ .over = over, .title = title, .folder = folder } } };
             }
             break :copy true;
         };
