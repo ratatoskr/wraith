@@ -84,17 +84,11 @@ fn run() !void {
     const init = try readInit(fba.allocator(), init_path, &contents_buf);
     const install_dir = init.wraith_dir;
 
-    var bootstrap_buf: [win.MAX_PATH * 3]u8 = undefined;
-    const bootstrap_path = try std.fmt.bufPrint(&bootstrap_buf, "{s}\\{s}", .{ install_dir, bootstrap_dll });
-    var wide: [win.MAX_PATH * 3:0]u16 = undefined;
-    const n = std.unicode.utf8ToUtf16Le(&wide, bootstrap_path) catch return error.BadPath;
-    wide[n] = 0;
-
-    log("loading {s}", .{bootstrap_path});
-    const module = win.LoadLibraryW(&wide) orelse {
-        log("can't load {s}", .{bootstrap_path});
+    // The launcher deletes old versions, so follow it to the current one if ours is gone
+    var current_buf: [win.MAX_PATH * 3]u8 = undefined;
+    const module = loadBootstrap(install_dir) orelse
+        loadBootstrap(currentDir(install_dir, &current_buf) orelse return error.LoadFailed) orelse
         return error.LoadFailed;
-    };
     // On x86, stdcall exports get the argument byte count appended to the name
     const init_address = win.GetProcAddress(module, init_export) orelse
         win.GetProcAddress(module, init_export ++ "@4") orelse return error.NoInitExport;
@@ -106,6 +100,30 @@ fn run() !void {
     if (proxy.EntryGate.timedOut()) {
         log("wraith is set up, but the game didn't wait that long (it may have missed what the game did first)", .{});
     } else log("wraith is set up; letting the game start", .{});
+}
+
+fn loadBootstrap(dir: []const u8) ?win.HINSTANCE {
+    var path_buf: [win.MAX_PATH * 3]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}\\{s}", .{ dir, bootstrap_dll }) catch return null;
+    var wide: [win.MAX_PATH * 3:0]u16 = undefined;
+    const n = std.unicode.utf8ToUtf16Le(&wide, path) catch return null;
+    wide[n] = 0;
+    log("loading {s}", .{path});
+    return win.LoadLibraryW(&wide) orelse {
+        log("can't load {s}", .{path});
+        return null;
+    };
+}
+
+/// The launcher's current version beside `dir`, from its current.txt, like `...\framework\v0.2.0`.
+fn currentDir(dir: []const u8, buf: []u8) ?[]const u8 {
+    const root = std.fs.path.dirname(std.mem.trimEnd(u8, dir, "\\/")) orelse return null;
+    var path_buf: [win.MAX_PATH * 3]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}\\current.txt", .{root}) catch return null;
+    var text_buf: [64]u8 = undefined;
+    const folder = std.mem.trim(u8, readSmallFile(path, &text_buf) catch return null, " \t\r\n");
+    if (folder.len == 0 or std.mem.indexOfAny(u8, folder, "\\/:") != null or std.mem.startsWith(u8, folder, ".")) return null;
+    return std.fmt.bufPrint(buf, "{s}\\{s}", .{ root, folder }) catch null;
 }
 
 fn readInit(allocator: std.mem.Allocator, path: []const u8, buf: []u8) !info.Init {
