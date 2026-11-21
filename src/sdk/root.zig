@@ -35,6 +35,7 @@ pub const frame = @import("frame.zig");
 pub const tasks = @import("tasks.zig");
 /// Keys tasks can wait on.
 pub const keybinds = @import("keybinds.zig");
+pub const tweaks = @import("tweaks.zig");
 pub const timing = @import("timing.zig");
 pub const ui = @import("wraith_ui");
 /// Wraith's platform code, like `platform.fs` and `platform.clipboard`, to use as it is.
