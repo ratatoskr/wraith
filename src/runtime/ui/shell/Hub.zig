@@ -27,7 +27,7 @@ bar_focused: bool = false,
 
 const Button = struct {
     /// In `Shell.Windows`.
-    field: []const u8,
+    field: [:0]const u8,
     label: []const u8,
     icon: []const u8,
 };
@@ -39,8 +39,15 @@ const buttons = [_]Button{
     .{ .field = "about", .label = "About", .icon = icons.info },
 };
 
-/// Unscaled. Between the bar and the edge of the screen.
+/// Unscaled. Between the dock and the edge of the screen.
 const margin = 12;
+/// Unscaled, a tile's square and the icon in it.
+const tile_size = 56;
+const icon_size = 30;
+/// Under each tile, for the dot that says it's open. Unscaled.
+const dot_room = 8;
+/// How far a tile rises when hovered. Unscaled.
+const lift = 4;
 
 pub fn toggle(self: *Hub) void {
     self.open = !self.open;
@@ -76,6 +83,10 @@ fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
     const y = if (top) viewport.*.WorkPos.y + gap - tucked else viewport.*.WorkPos.y + viewport.*.WorkSize.y - gap + tucked;
     ui.raw("ImGui_SetNextWindowViewport")(viewport.*.ID);
     ui.raw("ImGui_SetNextWindowPosEx")(.{ .x = x, .y = y }, c.ImGuiCond_Always, .{ .x = 0.5, .y = if (top) 0 else 1 });
+    ui.raw("ImGui_SetNextWindowBgAlpha")(0.85);
+    ui.raw("ImGui_PushStyleVar")(c.ImGuiStyleVar_WindowRounding, ui.scaled(18));
+    ui.raw("ImGui_PushStyleVarImVec2")(c.ImGuiStyleVar_WindowPadding, .{ .x = ui.scaled(10), .y = ui.scaled(8) });
+    ui.raw("ImGui_PushStyleVarImVec2")(c.ImGuiStyleVar_ItemSpacing, .{ .x = ui.scaled(6), .y = 0 });
     const win = ui.window("##wraith.bar", .{ .flags = .{
         .no_title_bar = true,
         .no_resize = true,
@@ -86,8 +97,12 @@ fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
         .no_saved_settings = true,
         .no_docking = true,
         .no_inputs = !self.open,
-    } }) orelse return;
+    } }) orelse {
+        ui.raw("ImGui_PopStyleVarEx")(3);
+        return;
+    };
     defer win.end();
+    ui.raw("ImGui_PopStyleVarEx")(3);
     self.bar_height = ui.raw("ImGui_GetWindowSize")().y;
     self.bar_focused = ui.raw("ImGui_IsWindowFocused")(0);
 
@@ -96,15 +111,16 @@ fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
         if (i > 0) ui.sameLine();
         const w = &@field(shell.windows, b.field).window;
         const count = if (comptime std.mem.eql(u8, b.field, "tweaks")) on else 0;
-        if (barButton(b.label, b.icon, w.open, count)) w.toggle();
+        if (tile(b.field, b.icon, w.open, count)) w.toggle();
+        ui.tooltip("{s}", .{b.label});
     }
     pluginButtons(shell);
     divider();
-    if (barButton("Workbench", icons.square_terminal, shell.workbench.isOpen(), 0)) shell.toggleWorkbench();
+    if (tile("workbench", icons.square_terminal, shell.workbench.isOpen(), 0)) shell.toggleWorkbench();
     var key_buf: [64]u8 = undefined;
     if (shell.workbenchKey()) |k| {
-        ui.tooltip("Disassembly, memory, addresses and the other developer tools, in a window of their own. {s}", .{ui.chordName(&key_buf, k)});
-    } else ui.tooltip("Disassembly, memory, addresses and the other developer tools, in a window of their own", .{});
+        ui.tooltip("Workbench  {s}", .{ui.chordName(&key_buf, k)});
+    } else ui.tooltip("Workbench", .{});
 }
 
 fn tweaksOn(shell: *Shell) usize {
@@ -119,43 +135,62 @@ fn tweaksOn(shell: *Shell) usize {
     return n;
 }
 
-/// Lit while what it opens is open. A count in its corner if there's one.
-fn barButton(label: []const u8, icon: []const u8, lit: bool, count: usize) bool {
-    var buf: [128]u8 = undefined;
-    const text = (if (icon.len > 0) std.fmt.bufPrintSentinel(&buf, "{s}  {s}", .{ icon, label }, 0) else std.fmt.bufPrintSentinel(&buf, "{s}", .{label}, 0)) catch return false;
-    if (lit) {
-        const colour = ui.raw("ImGui_GetStyleColorVec4")(c.ImGuiCol_ButtonActive);
-        ui.raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_Button, colour.*);
-    }
-    const clicked = ui.button(text);
-    if (lit) ui.raw("ImGui_PopStyleColor")();
-    if (count > 0) badge(count);
-    return clicked;
-}
-
-fn badge(count: usize) void {
-    var buf: [8]u8 = undefined;
-    const text = if (count > 99) "99+" else std.fmt.bufPrint(&buf, "{d}", .{count}) catch return;
-    const size = ui.calcTextSize(text);
-    const max = ui.raw("ImGui_GetItemRectMax")();
-    const min = ui.raw("ImGui_GetItemRectMin")();
-    const r = @max(size[0], size[1]) / 2 + ui.scaled(2);
-    const centre: ui.Vec2 = .{ max.x - r * 0.5, min.y + r * 0.5 };
+/// A dock tile, a big icon on a rounded square that rises when hovered. A dot under it while
+/// what it opens is open, and a count in its corner if there's one.
+fn tile(id: [:0]const u8, icon: []const u8, lit: bool, count: usize) bool {
+    const size = ui.scaled(tile_size);
+    const at = ui.getCursorScreenPos();
+    const clicked = ui.invisibleButton(id, .{ size, size + ui.scaled(dot_room) });
+    const hovered = ui.isItemHovered();
+    const held = ui.isItemActive();
+    const up = if (hovered and !held) ui.scaled(lift) else 0;
+    const min: ui.Vec2 = .{ at[0], at[1] - up };
+    const max: ui.Vec2 = .{ at[0] + size, at[1] + size - up };
     const list = ui.getWindowDrawList();
     list.pushClipRectFullScreen();
     defer list.popClipRect();
+    const fill: c.ImGuiCol = if (held) c.ImGuiCol_ButtonActive else if (hovered or lit) c.ImGuiCol_ButtonHovered else c.ImGuiCol_Button;
+    ui.raw("ImDrawList_AddRectFilledEx")(list.ptr, .{ .x = min[0], .y = min[1] }, .{ .x = max[0], .y = max[1] }, ui.raw("ImGui_GetColorU32")(fill), ui.scaled(14), 0);
+    {
+        // Null keeps the font, just bigger
+        ui.raw("ImGui_PushFontFloat")(null, icon_size);
+        defer ui.raw("ImGui_PopFont")();
+        const box = ui.calcTextSize(icon);
+        list.addText(.{ min[0] + (size - box[0]) / 2, min[1] + (size - box[1]) / 2 }, ui.raw("ImGui_GetColorU32")(c.ImGuiCol_Text), icon);
+    }
+    if (lit) list.addCircleFilled(.{ at[0] + size / 2, at[1] + size + ui.scaled(dot_room) / 2 }, ui.scaled(2.5), ui.raw("ImGui_GetColorU32")(c.ImGuiCol_Text));
+    if (count > 0) badge(count, max[0], min[1]);
+    return clicked;
+}
+
+/// A plugin's tile, its first letter, since plugins have no icons yet.
+fn letterTile(id: [:0]const u8, name: []const u8, lit: bool) bool {
+    var buf: [4]u8 = undefined;
+    const first = if (name.len > 0) std.ascii.toUpper(name[0]) else '?';
+    buf[0] = first;
+    return tile(id, buf[0..1], lit, 0);
+}
+
+/// On the corner at `right`, `top`.
+fn badge(count: usize, right: f32, top: f32) void {
+    var buf: [8]u8 = undefined;
+    const text = if (count > 99) "99+" else std.fmt.bufPrint(&buf, "{d}", .{count}) catch return;
+    const size = ui.calcTextSize(text);
+    const r = @max(size[0], size[1]) / 2 + ui.scaled(3);
+    const centre: ui.Vec2 = .{ right - r * 0.4, top + r * 0.4 };
+    const list = ui.getWindowDrawList();
     list.addCircleFilled(centre, r, ui.rgba(214, 72, 84, 255));
     list.addText(.{ centre[0] - size[0] / 2, centre[1] - size[1] / 2 }, ui.rgba(255, 255, 255, 255), text);
 }
 
-/// A thin line between groups of buttons, on the same row.
+/// A thin line between groups of tiles, like the dock's.
 fn divider() void {
     ui.sameLine();
     const at = ui.getCursorScreenPos();
-    const h = ui.frameHeight();
+    const h = ui.scaled(tile_size);
     const colour = ui.raw("ImGui_GetColorU32")(c.ImGuiCol_Separator);
-    ui.getWindowDrawList().addLine(.{ at[0], at[1] + h * 0.15 }, .{ at[0], at[1] + h * 0.85 }, colour, 1);
-    ui.raw("ImGui_Dummy")(.{ .x = 1, .y = h });
+    ui.getWindowDrawList().addLine(.{ at[0] + ui.scaled(3), at[1] + h * 0.15 }, .{ at[0] + ui.scaled(3), at[1] + h * 0.85 }, colour, 1);
+    ui.raw("ImGui_Dummy")(.{ .x = ui.scaled(6), .y = h });
     ui.sameLine();
 }
 
@@ -208,12 +243,12 @@ fn pluginButtons(shell: *Shell) void {
                 if (item.item.open.*) any_open = true;
             };
             if (count == 1 and !with_settings) {
-                if (barButton(name, "", e.item.open.*, 0)) e.item.open.* = !e.item.open.*;
+                if (letterTile("##plugin", name, e.item.open.*)) e.item.open.* = !e.item.open.*;
+                ui.tooltip("{s}", .{name});
                 continue;
             }
-            var label_buf: [96]u8 = undefined;
-            const label = std.fmt.bufPrint(&label_buf, "{s}  {s}", .{ name, icons.chevron_up }) catch name;
-            if (barButton(label, "", any_open, 0)) _ = ui.raw("ImGui_OpenPopup")("##items", 0);
+            if (letterTile("##plugin", name, any_open)) _ = ui.raw("ImGui_OpenPopup")("##items", 0);
+            ui.tooltip("{s}", .{name});
             if (!ui.raw("ImGui_BeginPopup")("##items", 0)) continue;
             defer ui.raw("ImGui_EndPopup")();
             for (all[i..]) |item| {
