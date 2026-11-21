@@ -187,15 +187,78 @@ fn checkAnnotations(s: SalSchema, source: []const u8, diag: *SalSchema.Diagnosti
     for (s.types) |*t| {
         if (SalSchema.findAnnotation(t.annotations, "wraith", "Service")) |a| return diag.fail(source, a.at, "[Service] goes on a trait, and {s} isn't one", .{t.name});
         try checkOne(t.annotations, "VirtualTable", source, diag);
+        try checkTweak(s, t, source, diag);
         const st = switch (t.kind) {
             .@"struct" => |st| st,
             else => continue,
         };
+        for (st.fields) |f| try checkField(s, f, source, diag);
         for (st.methods) |m| try checkOne(m.annotations, "Sig", source, diag);
         for (st.statics) |v| try checkOne(v.annotations, "Sig", source, diag);
     }
     for (s.functions) |f| try checkOne(f.annotations, "Sig", source, diag);
     for (s.statics) |v| try checkOne(v.annotations, "Sig", source, diag);
+}
+
+/// `[Tweak("..")]` goes on a struct Wraith can find, so one with `[Instance]`.
+fn checkTweak(s: SalSchema, t: *const SalSchema.Type, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
+    const a = SalSchema.findAnnotation(t.annotations, "wraith", "Tweak") orelse return;
+    if (t.kind != .@"struct") return diag.fail(source, a.at, "[Tweak] goes on a struct, and {s} isn't one", .{t.name});
+    if (a.args.len != 1 or a.args[0] != .string) return diag.fail(source, a.at, "[Tweak] takes its title, like [Tweak(\"Money\")]", .{});
+    if (s.staticOf(t, "instance") == null) return diag.fail(source, a.at, "[Tweak] needs [Instance] too, so Wraith can find {s} in the game", .{t.name});
+}
+
+fn checkField(s: SalSchema, f: SalSchema.Field, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
+    if (SalSchema.findAnnotation(f.annotations, "wraith", "Label")) |a| {
+        if (a.args.len != 1 or a.args[0] != .string) return diag.fail(source, a.at, "[Label] takes the text to show, like [Label(\"Mira\")]", .{});
+    }
+    if (SalSchema.findAnnotation(f.annotations, "wraith", "Range")) |a| {
+        const numbers = a.args.len == 2 and for (a.args) |arg| {
+            if (arg != .int and arg != .float) break false;
+        } else true;
+        if (!numbers) return diag.fail(source, a.at, "[Range] takes the lowest and highest, like [Range(0, 9999999)]", .{});
+    }
+    if (SalSchema.findAnnotation(f.annotations, "wraith", "Choices")) |a| try checkChoices(s, a, source, diag);
+}
+
+fn nameOf(arg: SalSchema.Arg) ?[]const u8 {
+    return switch (arg) {
+        .ident, .string => |n| n,
+        else => null,
+    };
+}
+
+/// `[Choices("Type.path.to.list", id, name)]`: a type with `[Instance]`, fields down to an array of
+/// structs, and the two fields in those.
+fn checkChoices(s: SalSchema, a: *const SalSchema.Annotation, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
+    const usage = "[Choices] takes where the list is, then its id and name fields, like [Choices(\"DataTables.items\", id, name)]";
+    if (a.args.len != 3 or a.args[0] != .string) return diag.fail(source, a.at, usage, .{});
+    const id = nameOf(a.args[1]) orelse return diag.fail(source, a.at, usage, .{});
+    const name = nameOf(a.args[2]) orelse return diag.fail(source, a.at, usage, .{});
+    const path = a.args[0].string;
+    var parts = std.mem.splitScalar(u8, path, '.');
+    const root = parts.first();
+    var t = s.findType(root) orelse return diag.fail(source, a.at, "[Choices] starts at a type, and there's no {s}", .{root});
+    if (s.staticOf(t, "instance") == null) return diag.fail(source, a.at, "[Choices] starts at a type with [Instance], and {s} has none", .{root});
+    var list: ?SalSchema.Ref = null;
+    while (parts.next()) |part| {
+        if (list != null) return diag.fail(source, a.at, "[Choices] path {s} goes on past its list", .{path});
+        const f = s.findField(t, part) orelse return diag.fail(source, a.at, "{s} has no field {s}", .{ t.name, part });
+        var ty = f.type;
+        while (ty == .pointer or ty == .optional) ty = if (ty == .pointer) ty.pointer.* else ty.optional.*;
+        switch (ty) {
+            .array => |arr| list = arr.child.*,
+            .named => |n| t = s.findType(n) orelse return diag.fail(source, a.at, "there's no {s}", .{n}),
+            else => return diag.fail(source, a.at, "[Choices] path {s} has to lead to an array", .{path}),
+        }
+    }
+    const item_name = switch (list orelse return diag.fail(source, a.at, "[Choices] path {s} has to lead to an array", .{path})) {
+        .named => |n| n,
+        else => return diag.fail(source, a.at, "[Choices] needs a list of structs, to find {s} and {s} in", .{ id, name }),
+    };
+    const item = s.findType(item_name) orelse return diag.fail(source, a.at, "there's no {s}", .{item_name});
+    if (s.findField(item, id) == null) return diag.fail(source, a.at, "{s} has no field {s}", .{ item.name, id });
+    if (s.findField(item, name) == null) return diag.fail(source, a.at, "{s} has no field {s}", .{ item.name, name });
 }
 
 fn checkOne(annotations: []const SalSchema.Annotation, which: []const u8, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {

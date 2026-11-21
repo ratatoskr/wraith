@@ -1,10 +1,12 @@
-//! A tweak's data fields as controls, for the Tweaks menu and the workbench.
+//! A tweak's data fields as controls, for the Tweaks window and the workbench. Its list of choices
+//! is the struct editor's too.
 
 const std = @import("std");
 
 const ui = @import("wraith_ui");
 
 const Tweaks = @import("../Tweaks.zig");
+pub const Choice = @import("wraith_api").tweak.Choice;
 
 /// More than this many choices get a filter box.
 const filter_from = 12;
@@ -38,7 +40,7 @@ pub fn control(f: *const Tweaks.FieldInfo, label: [:0]const u8) ?f64 {
         var on = f.value != 0;
         return if (ui.checkbox(label, &on)) @as(f64, if (on) 1 else 0) else null;
     }
-    if (f.choices.len > 0) return choose(f, label);
+    if (f.choices.len > 0) return choose(label, f.choices, f.value, f.hex);
     if (f.type.isFloat()) return float(f, label);
     return if (f.type.isSigned()) int(i64, f, label) else int(u64, f, label);
 }
@@ -70,21 +72,26 @@ fn int(comptime T: type, f: *const Tweaks.FieldInfo, label: [:0]const u8) ?f64 {
 }
 
 /// Like `Tear Balm (1)`, or the id alone if it's not a choice.
-fn choiceText(buf: []u8, f: *const Tweaks.FieldInfo, value: f64, label: ?[]const u8) [:0]const u8 {
+fn choiceText(buf: []u8, hex: bool, value: f64, label: ?[]const u8) [:0]const u8 {
     const id: i64 = std.math.lossyCast(i64, value);
-    const l = label orelse return (if (f.hex) std.fmt.bufPrintSentinel(buf, "0x{X}", .{id}, 0) else std.fmt.bufPrintSentinel(buf, "{d}", .{id}, 0)) catch "";
-    return (if (f.hex) std.fmt.bufPrintSentinel(buf, "{s} (0x{X})", .{ l, id }, 0) else std.fmt.bufPrintSentinel(buf, "{s} ({d})", .{ l, id }, 0)) catch "";
+    const l = label orelse return (if (hex) std.fmt.bufPrintSentinel(buf, "0x{X}", .{id}, 0) else std.fmt.bufPrintSentinel(buf, "{d}", .{id}, 0)) catch "";
+    return (if (hex) std.fmt.bufPrintSentinel(buf, "{s} (0x{X})", .{ l, id }, 0) else std.fmt.bufPrintSentinel(buf, "{s} ({d})", .{ l, id }, 0)) catch "";
 }
 
-fn choose(f: *const Tweaks.FieldInfo, label: [:0]const u8) ?f64 {
+/// A dropdown of `choices`, with a filter box when there are lots. The one picked if it changed.
+pub fn choose(label: [:0]const u8, choices: []const Choice, value: f64, hex: bool) ?f64 {
     var preview_buf: [160]u8 = undefined;
-    const current = for (f.choices) |c| {
-        if (c.value == f.value) break c.label;
+    const current = for (choices) |c| {
+        if (c.value == value) break c.label;
     } else null;
-    const preview = choiceText(&preview_buf, f, f.value, current);
+    const preview = choiceText(&preview_buf, hex, value, current);
     if (!ui.raw("ImGui_BeginCombo")(ui.str(label), ui.str(preview), ui.c.ImGuiComboFlags_HeightLarge)) return null;
     defer ui.raw("ImGui_EndCombo")();
-    const searching = f.choices.len > filter_from;
+    if (choices.len == 0) {
+        ui.textDisabled("Nothing to pick yet", .{});
+        return null;
+    }
+    const searching = choices.len > filter_from;
     if (searching) {
         if (ui.raw("ImGui_IsWindowAppearing")()) {
             filter[0] = 0;
@@ -95,13 +102,13 @@ fn choose(f: *const Tweaks.FieldInfo, label: [:0]const u8) ?f64 {
     }
     const needle = std.mem.trim(u8, std.mem.sliceTo(&filter, 0), " ");
     var picked: ?f64 = null;
-    for (f.choices, 0..) |c, i| {
+    for (choices, 0..) |c, i| {
         var buf: [192]u8 = undefined;
-        const text = choiceText(&buf, f, c.value, c.label);
+        const text = choiceText(&buf, hex, c.value, c.label);
         if (searching and needle.len > 0 and std.ascii.findIgnoreCase(text, needle) == null) continue;
         const scope = ui.id(@as(i32, @intCast(i)));
         defer scope.end();
-        const selected = c.value == f.value;
+        const selected = c.value == value;
         if (ui.selectable(text, selected)) picked = c.value;
         if (selected and ui.raw("ImGui_IsWindowAppearing")()) ui.raw("ImGui_SetItemDefaultFocus")();
     }

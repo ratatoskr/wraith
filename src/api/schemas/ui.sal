@@ -58,6 +58,7 @@ trait MenuItem {
     void remove();
 }
 
+// New methods go last. Plugins built before them call the rest by position
 trait Ui {
     // Whether there's an overlay to draw in, which games whose graphics it can't hook don't have
     bool available();
@@ -109,4 +110,9 @@ trait Ui {
     // running while it's open. One at a time per plugin, another fails while one's up.
     async ?string!DialogError pickFile(FileDialog options);
     async ?string!DialogError pickFolder(FolderDialog options);
+
+    // A struct from the plugin's schemas as controls, read and written live. [Label], [Range],
+    // [ReadOnly] and [Hidden] on its fields change how they show. 0 for `address` uses its
+    // [Instance]. False if the schemas don't have it, or the game hasn't made it yet
+    bool editStruct(string type, usize address);
 }

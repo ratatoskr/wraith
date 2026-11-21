@@ -24,6 +24,8 @@ pub const Entry = struct {
     name: []const u8,
     /// The plugin's name.
     plugin: []const u8,
+    /// Its title, for people.
+    plugin_title: []const u8,
     id: []const u8,
     /// Parsed, in `arena` like the names. Like a file's, with no sections.
     def: api.tweak.Tweak,
@@ -114,7 +116,7 @@ fn typed(loaded: *Loaded, d: W.TweakDefinition, handler: Handler) api.TweakError
             .choices = choices,
         };
     }
-    return build(&arena, &loaded.owner, loaded.name, .{
+    return build(&arena, &loaded.owner, loaded.name, loaded.displayName(), .{
         .id = try a.dupe(u8, d.id),
         .title = try a.dupe(u8, d.title),
         .key = try a.dupe(u8, d.key),
@@ -124,7 +126,7 @@ fn typed(loaded: *Loaded, d: W.TweakDefinition, handler: Handler) api.TweakError
 }
 
 /// Takes `arena` once it's made, which `def` points into.
-fn build(arena: *std.heap.ArenaAllocator, owner: *Owner, plugin: []const u8, def: api.TweakDefinition, handler: Handler) api.TweakError!*Entry {
+fn build(arena: *std.heap.ArenaAllocator, owner: *Owner, plugin: []const u8, plugin_title: []const u8, def: api.TweakDefinition, handler: Handler) api.TweakError!*Entry {
     const a = arena.allocator();
     if (!validId(def.id)) return error.InvalidId;
     const fields = try a.alloc(api.tweak.Field, def.fields.len);
@@ -148,6 +150,7 @@ fn build(arena: *std.heap.ArenaAllocator, owner: *Owner, plugin: []const u8, def
         .owner = owner,
         .name = try std.fmt.allocPrint(a, "{s}:{s}", .{ plugin, def.id }),
         .plugin = try a.dupe(u8, plugin),
+        .plugin_title = try a.dupe(u8, plugin_title),
         .id = def.id,
         .def = .{ .title = if (def.title.len > 0) def.title else null, .key = try chord(def.key), .mode = def.mode, .fields = fields },
         .handler = handler,

@@ -710,6 +710,7 @@ const tests = struct {
         var loaded: Loaded = undefined;
         loaded.initForTest(testing.allocator, "kai");
         defer loaded.deinitForTest();
+        loaded.manifest.value.title = "Kai Tools";
         const sdk = @import("wraith_sdk");
         sdk.Owner.attach(loaded.root());
         defer sdk.Owner.detach();
@@ -734,6 +735,8 @@ const tests = struct {
         try testing.expectEqual(0, fake.runs);
         const info = (try tweaks.snapshot(arena.allocator()))[0];
         try testing.expectEqualStrings("kai", info.plugin.?);
+        // Shown under its title, not its id
+        try testing.expectEqualStrings("Kai Tools", info.plugin_title.?);
         try testing.expectEqualStrings("Fast", info.title);
         try testing.expect(info.on and info.running);
         try testing.expectEqual(.running, stateOf(tweaks, "kai:speed"));

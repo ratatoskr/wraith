@@ -54,6 +54,8 @@ path: []u8,
 name: []u8,
 /// The plugin that added it, which runs it instead of a session.
 plugin: ?[]u8 = null,
+/// That plugin's title.
+plugin_title: ?[]u8 = null,
 /// The installed project mod its file's from, by id. Null for the project's own.
 mod: ?[]u8 = null,
 /// A group, the file's own or one nested in it. Its state is its shared part's.

@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .salamander = .{
-            .url = "git+https://github.com/ratatoskr/salamander.git#c404a0585ab52ece57a84ac9f62fdff37e522287",
-            .hash = "salamander-0.0.1-6ZeDNjIQDQC1Qb_ibsYwqkcLP_r2pUesog3f2rj0SFnf",
+            .url = "git+https://github.com/ratatoskr/salamander.git#ca08de358a9ff5f5ea1b45db4507057f250794bd",
+            .hash = "salamander-0.0.1-6ZeDNl8rDQDRuID3lgv3LqEdYmpKtceKXzkCyqY6WawZ",
         },
         .tuft = .{
-            .url = "git+https://github.com/ratatoskr/tuft.git#57939e21ea13566e453142cb4d0bc62e53eba13c",
-            .hash = "tuft-0.0.0-DNo4ymxhJAD2gHtImJdPo5e6ssY3knyjzJyBbZ-UeY2A",
+            .url = "git+https://github.com/ratatoskr/tuft.git#0318e7880507bce235b77faacdd68cff0d8de9e4",
+            .hash = "tuft-0.0.0-DNo4yiRsJAC1XYuMxRpPAp5NtN9KTwWDIF2CGmaSwDeS",
         },
     },
 }

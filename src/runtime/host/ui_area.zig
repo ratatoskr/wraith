@@ -13,6 +13,8 @@ const wraith = @import("wraith.zig");
 const imgui = @import("../ui/imgui.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const MenuItems = @import("../ui/MenuItems.zig");
+const StructEditor = @import("../ui/StructEditor.zig");
+const struct_tweaks = @import("struct_tweaks.zig");
 
 const c = imgui.c;
 const sal = api.salamander;
@@ -192,6 +194,15 @@ pub const UiImpl = struct {
 
     pub fn inputMultiline(loaded: *Loaded, label: ?[*:0]const u8, text: []const u8, size: W.ImVec2, flags: W.ImGuiInputTextFlags) []const u8 {
         return textBox(loaded, label, text, @backingInt(flags), .{ .x = size.x, .y = size.y });
+    }
+
+    pub fn editStruct(loaded: *Loaded, type_name: []const u8, address: usize) bool {
+        if (!host.ui.inFrame()) return false;
+        const s = loaded.schemas orelse return false;
+        const schema = &s.parsed.schema;
+        if (schema.findType(type_name) == null) return false;
+        const at = if (address != 0) address else struct_tweaks.instance(s, type_name) orelse return false;
+        return StructEditor.draw(schema, type_name, at);
     }
 
     pub fn copyableText(_: *Loaded, id: ?[*:0]const u8, text: []const u8) void {

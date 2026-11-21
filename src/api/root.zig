@@ -17,7 +17,7 @@ pub const wraith = @import("wraith_api_zig");
 /// How every schema wraith reads is parsed. Plugins' write `[Sig]` and the rest without a `use`.
 /// `[Instance("..")] struct Player` is `static Player* instance` with that sig, so it's found the same.
 pub const sal_options: @import("salamander_schema").Options = .{
-    .namespaces = &.{.{ .name = "wraith", .annotations = &.{ "Sig", "Module", "Section", "VirtualTable", "Instance", "Service" } }},
+    .namespaces = &.{.{ .name = "wraith", .annotations = &.{ "Sig", "Module", "Section", "VirtualTable", "Instance", "Service", "Tweak", "Label", "Range", "ReadOnly", "Hidden", "Flatten", "Choices" } }},
     .uses = &.{"wraith"},
     .instances = &.{.{ .namespace = "wraith", .name = "Instance", .as = "Sig" }},
 };

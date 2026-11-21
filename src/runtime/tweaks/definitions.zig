@@ -466,7 +466,9 @@ fn newPluginTweak(tw: *Tweaks, entry: *const plugin_tweaks.Entry) !*Tweak {
     const n = try tw.allocator.dupe(u8, entry.name);
     errdefer tw.allocator.free(n);
     const plugin = try tw.allocator.dupe(u8, entry.plugin);
-    t.* = .{ .path = &.{}, .name = n, .plugin = plugin, .session = running.newSession(tw), .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
+    errdefer tw.allocator.free(plugin);
+    const plugin_title = try tw.allocator.dupe(u8, entry.plugin_title);
+    t.* = .{ .path = &.{}, .name = n, .plugin = plugin, .plugin_title = plugin_title, .session = running.newSession(tw), .parsed = .init(tw.allocator), .live_arena = .init(tw.allocator) };
     return t;
 }
 
@@ -476,6 +478,7 @@ pub fn freeTweak(tw: *Tweaks, t: *Tweak) void {
     Names.global.removeGroup(.tweak, t.name);
     if (t.problem) |p| tw.allocator.free(p);
     if (t.plugin) |p| tw.allocator.free(p);
+    if (t.plugin_title) |p| tw.allocator.free(p);
     if (t.mod) |m| tw.allocator.free(m);
     tw.allocator.free(t.part);
     t.parsed.deinit();

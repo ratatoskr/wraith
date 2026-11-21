@@ -997,7 +997,6 @@ const tests = struct {
         try testing.expectEqual(1, v.entries().len);
     }
 
-
     test "the mods page lists what's installed, dev plugins and the hub's, and turns plugins on and off" {
         const io = testing.io;
         const options = @import("test_options");
@@ -1079,7 +1078,6 @@ const tests = struct {
         try testing.expectEqualStrings("", page.work.problem.message());
     }
 
-
     test "the tweaks page, the list on screen and toasts for keys" {
         const support = @import("../../tweaks/test_support.zig");
         var rig: Rig = undefined;
@@ -1101,6 +1099,8 @@ const tests = struct {
         window.window.show();
         for (0..2) |_| rig.present();
         window.fold(testing.allocator, "kai");
+        // Its fields, opened
+        window.setOpen(testing.allocator, std.hash.Wyhash.hash(1, "speed"), true);
         window.search[0] = 'o';
         for (0..2) |_| rig.present();
         window.search = @splat(0);
@@ -1130,6 +1130,114 @@ const tests = struct {
         try shell.registry.set(shell.own.tweaks_toasts, .{ .toggle = false });
         tweakKeyed(shell, "Speed", .off);
         try testing.expectEqual(before + 1, rig.overlay.host.toasts.count());
+    }
+
+    test "[Tweak] structs list in the Tweaks window and draw their fields" {
+        const support = @import("../../tweaks/test_support.zig");
+        const host_schemas = @import("../../host/schemas.zig");
+        const struct_tweaks = @import("../../host/struct_tweaks.zig");
+        const StructEditor = @import("../StructEditor.zig");
+        const Loaded = @import("../../PluginLoader.zig").Loaded;
+        var rig: Rig = undefined;
+        try rig.init(.{});
+        defer rig.deinit();
+        var s: support.Setup = try .init(&.{});
+        defer s.deinit();
+        const shell = try Shell.create(testing.allocator, rig.overlay, rig.keybinds, .{});
+        defer shell.destroy();
+        shell.tweaks = try Tweaks.create(testing.allocator, s.project, shell.registry, .{}, .{ .context = shell });
+
+        // Needs [Instance] to be found
+        var diag: @import("salamander_schema").Schema.Diagnostic = .{};
+        try testing.expectError(error.InvalidSchema, host_schemas.fromFilesWhy(&.{.{ .name = "kai/a.sal", .text = "[Tweak(\"Money\")] struct Bank { u32 mira; }" }}, &diag));
+        try testing.expect(std.mem.indexOf(u8, diag.message(), "[Instance]") != null);
+        try testing.expectError(error.InvalidSchema, host_schemas.fromFilesWhy(&.{.{ .name = "kai/a.sal", .text = "[Instance(\"90\")] struct A { u32 n; [Choices(\"A.n\", id, name)] u32 pick; }" }}, &diag));
+        try testing.expect(std.mem.indexOf(u8, diag.message(), "lead to an array") != null);
+
+        var loaded: Loaded = undefined;
+        loaded.initForTest(testing.allocator, "kai");
+        defer loaded.deinitForTest();
+        loaded.schemas = try host_schemas.fromFiles(&.{
+            // Not this plugin's, so not listed
+            .{ .name = "other/b.sal", .text = "[Instance(\"90 90\"), Tweak(\"Theirs\")] struct Theirs { u32 x; }" },
+            .{ .name = "kai/game.sal", .text =
+            \\enum Mode : u8 { slow, fast }
+            \\bitfield Flags : u8 { bool shown; [Bit(1)] u8 level : 3; }
+            \\struct Inner { [Label("Hit points")] i32 hp; }
+            \\struct Item { u32 id; cstring name; }
+            \\[Instance("CC 13 37 CC 13 37 CC 13 37 CC", Rip), Tweak("Money")]
+            \\struct Bank {
+            \\    u32 mira;
+            \\    [Range(0, 10)] f32 speed;
+            \\    Mode mode;
+            \\    Flags flags;
+            \\    [ReadOnly] u16[3] slots;
+            \\    [Hidden] u32 secret;
+            \\    [Flatten] Inner inner;
+            \\    [Flatten] Inner* next;
+            \\    Inner* none;
+            \\    [Choices("Bank.items", id, name)] u32 pick;
+            \\    u32 used;
+            \\    Item[used] items;
+            \\}
+            },
+        });
+        struct_tweaks.publish(&loaded);
+        {
+            const r = struct_tweaks.read();
+            defer r.end();
+            try testing.expectEqual(1, r.entries.len);
+            try testing.expectEqualStrings("Money", r.entries[0].title);
+            try testing.expect(StructEditor.mentions(&loaded.schemas.?.parsed.schema, "Bank", "hit points"));
+        }
+
+        // Opened, though the game hasn't made it, then searched by a field
+        const window = &shell.windows.tweaks;
+        window.window.show();
+        rig.present();
+        try window.opened.append(testing.allocator, std.hash.Wyhash.hash(0, "kai/Bank"));
+        for (0..2) |_| rig.present();
+        window.search[0] = 'm';
+        window.search[1] = 'i';
+        for (0..2) |_| rig.present();
+
+        // Over memory of our own, every kind of field
+        const Inner = extern struct { hp: i32 };
+        const Item = extern struct { id: u32, name: [*:0]const u8 };
+        const Bank = extern struct { mira: u32, speed: f32, mode: u8, flags: u8, slots: [3]u16, secret: u32, inner: Inner, next: ?*Inner, none: ?*Inner, pick: u32, used: u32, items: [3]Item };
+        var other: Inner = .{ .hp = 7 };
+        var bank: Bank = .{ .mira = 500, .speed = 2, .mode = 1, .flags = 0b101, .slots = .{ 1, 2, 3 }, .secret = 9, .inner = .{ .hp = 30 }, .next = &other, .none = null, .pick = 20, .used = 2, .items = .{ .{ .id = 10, .name = "Tear Balm" }, .{ .id = 20, .name = "Potion" }, .{ .id = 30, .name = "past the count" } } };
+        const Drawer = struct {
+            schema: *const @import("salamander_schema").Schema,
+            address: usize,
+            drew: bool = false,
+            fn draw(d: *@This()) void {
+                const win = ui.window("Bank##test", .{}) orelse return;
+                defer win.end();
+                d.drew = StructEditor.draw(d.schema, "Bank", d.address);
+            }
+        };
+        var drawer: Drawer = .{ .schema = &loaded.schemas.?.parsed.schema, .address = @intFromPtr(&bank) };
+        var scope: core.Scope = .init(testing.allocator);
+        defer scope.deinit();
+        try rig.overlay.draw.subscribe(&scope, &drawer, Drawer.draw);
+        for (0..2) |_| rig.present();
+        try testing.expect(drawer.drew);
+        try testing.expectEqual(500, bank.mira);
+
+        // The list a [Choices] reads, only as long as its [Count] says
+        var list_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer list_arena.deinit();
+        const schema = &loaded.schemas.?.parsed.schema;
+        const picks = try StructEditor.readList(@import("tuft_schema").Ref.of(schema, "Bank", @intFromPtr(&bank)), "items", "id", "name", list_arena.allocator());
+        try testing.expectEqual(2, picks.len);
+        try testing.expectEqualStrings("Potion", picks[1].label);
+        try testing.expectEqual(20, picks[1].value);
+
+        loaded.owner.close();
+        const r = struct_tweaks.read();
+        defer r.end();
+        try testing.expectEqual(0, r.entries.len);
     }
 
     test "a theme, or whatever Windows says" {

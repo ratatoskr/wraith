@@ -74,6 +74,8 @@ pub const Info = struct {
     part: []const u8 = "",
     /// The plugin that added it. It has no file to edit.
     plugin: ?[]const u8 = null,
+    /// That plugin's title.
+    plugin_title: ?[]const u8 = null,
     /// The installed project mod it's from, by id. It has no file to edit either.
     mod: ?[]const u8 = null,
     /// That mod's title.
@@ -304,6 +306,7 @@ pub fn snapshot(self: *Tweaks, arena: std.mem.Allocator) ![]Info {
             .path = try arena.dupe(u8, t.path),
             .part = try arena.dupe(u8, t.part),
             .plugin = if (t.plugin) |p| try arena.dupe(u8, p) else null,
+            .plugin_title = if (t.plugin_title) |p| try arena.dupe(u8, p) else null,
             .mod = if (t.mod) |m| try arena.dupe(u8, m) else null,
             .mod_title = if (t.mod) |m| if (self.modTitle(m)) |title| try arena.dupe(u8, title) else null else null,
             .is_group = t.is_group,

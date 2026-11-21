@@ -13,6 +13,7 @@ const log = core.log.scoped(.wraith_runtime);
 
 /// Its schemas' files, its dependencies' too, in place of what it shared before. Call when they change.
 pub fn publish(loaded: *Loaded) void {
+    @import("struct_tweaks.zig").publish(loaded);
     const s = loaded.schemas orelse return;
     const lease = keeping(loaded) orelse return;
     defer lease.end();
@@ -66,4 +67,5 @@ const tests = struct {
 
 test {
     _ = tests;
+    _ = @import("struct_tweaks.zig");
 }
