@@ -82,6 +82,24 @@ pub const Plugin = struct {
             .install_subdir = "schemas",
             .include_extensions = &.{".sal"},
         }).step);
+        for (picturesOf(b)) |path| b.getInstallStep().dependOn(&b.addInstallFile(b.path(path), path).step);
+    }
+
+    /// The icon and images its wraith.json names, beside it, so they're in the package for the hub.
+    fn picturesOf(b: *std.Build) []const []const u8 {
+        const io = b.graph.io;
+        var root = b.root.openDir(io, ".", .{}) catch return &.{};
+        defer root.close(io);
+        const source = root.readFileAlloc(io, "wraith.json", b.allocator, .limited(64 << 10)) catch return &.{};
+        const manifest = std.json.parseFromSliceLeaky(struct {
+            icon: ?[]const u8 = null,
+            images: []const []const u8 = &.{},
+        }, b.allocator, source, .{ .ignore_unknown_fields = true }) catch |err| std.debug.panic("invalid wraith.json: {t}", .{err});
+        var out: std.ArrayList([]const u8) = .empty;
+        if (manifest.icon) |icon| out.append(b.allocator, icon) catch @panic("OOM");
+        out.appendSlice(b.allocator, manifest.images) catch @panic("OOM");
+        for (out.items) |path| root.access(io, path, .{}) catch std.debug.panic("wraith.json names {s}, but it's not there", .{path});
+        return out.items;
     }
 
     /// The plugins its wraith.json depends on, each a package in build.zig.zon by the same name, like

@@ -27,6 +27,11 @@ version: [33:0]u8 = @splat(0),
 description: [4096:0]u8 = @splat(0),
 license: [65:0]u8 = @splat(0),
 homepage: [257:0]u8 = @splat(0),
+repo: [257:0]u8 = @splat(0),
+/// Comma-separated, like these images.
+tags: [257:0]u8 = @splat(0),
+icon: [129:0]u8 = @splat(0),
+images: [1025:0]u8 = @splat(0),
 wraith: [17:0]u8 = @splat(0),
 /// Who it's for: one game by `ids` and `exes`, every game made with `engine`, or any game.
 target: Target = .game,
@@ -74,6 +79,10 @@ pub fn start(self: *ExportMod, wb: *Workbench) void {
     set(&self.description, d.description);
     set(&self.license, d.license);
     set(&self.homepage, d.homepage);
+    set(&self.repo, d.repo);
+    setList(&self.tags, d.tags);
+    set(&self.icon, d.icon);
+    setList(&self.images, d.images);
     set(&self.wraith, d.wraith);
     setList(&self.ids, d.ids);
     setList(&self.exes, d.exes);
@@ -130,6 +139,10 @@ pub fn details(self: *const ExportMod, a: std.mem.Allocator) !ProjectManifest.De
         .description = text(&self.description),
         .license = text(&self.license),
         .homepage = text(&self.homepage),
+        .repo = text(&self.repo),
+        .tags = try list(a, &self.tags),
+        .icon = text(&self.icon),
+        .images = try list(a, &self.images),
         .wraith = text(&self.wraith),
         .ids = if (self.target == .game) try list(a, &self.ids) else &.{},
         .exes = if (self.target == .game) try list(a, &self.exes) else &.{},
@@ -163,6 +176,10 @@ pub fn draw(self: *ExportMod, wb: *Workbench) void {
         ui.tooltip("Markdown, shown on its page on the hub", .{});
         field("License", &self.license, "An SPDX id, like MIT");
         field("Homepage", &self.homepage, "https://...");
+        field("Repo", &self.repo, "Where its source is, https://...");
+        field("Tags", &self.tags, "Comma-separated words for finding it on the hub, like ui, camera");
+        field("Icon", &self.icon, "A picture in the project, like icon.png. Square works best");
+        field("Images", &self.images, "Comma-separated screenshots in the project, like images/menu.png");
         field("Oldest Wraith", &self.wraith, "Like 0.4. Empty means any");
         field("Depends on", &self.depends, "Comma-separated mod ids, like unity or unity@1.2");
     }

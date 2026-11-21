@@ -81,7 +81,6 @@ pub const GameEngine = struct {
 pub const Kind = enum { plugin, project, provider };
 
 pub const Manifest = struct {
-    /// Its name, and its folder's. Letters, digits, `_` and `-`.
     id: []const u8 = "",
     kind: Kind = .plugin,
     version: ?[]const u8 = null,
@@ -91,20 +90,17 @@ pub const Manifest = struct {
     author: ?[]const u8 = null,
     license: ?[]const u8 = null,
     homepage: ?[]const u8 = null,
-    /// The oldest Wraith it runs on. Null means any.
+    repo: ?[]const u8 = null,
+    tags: []const []const u8 = &.{},
+    icon: ?[]const u8 = null,
+    images: []const []const u8 = &.{},
     wraith: ?[]const u8 = null,
-    /// One game. Null, with no `gameEngine` either, means any game.
     game: ?Game = null,
-    /// Every game made with one game engine, instead of `game`.
     gameEngine: ?GameEngine = null,
-    /// Null means every arch.
     arches: ?[]const Arch = null,
-    /// Null means `zig`.
     provider: ?[]const u8 = null,
     autoLoad: bool = true,
-    /// Code for other plugins, with nothing of its own to use.
     library: bool = false,
-    /// Plugins it needs loaded first, as `name` or `name@minimum-version`.
     depends: []const []const u8 = &.{},
 
     pub fn isFor(self: Manifest, here: Here) bool {
@@ -154,6 +150,25 @@ pub fn validId(id: []const u8) bool {
     if (!std.ascii.isLower(id[0]) and !std.ascii.isDigit(id[0])) return false;
     for (id) |c| if (!std.ascii.isLower(c) and !std.ascii.isDigit(c) and c != '_' and c != '-') return false;
     return true;
+}
+
+/// Like `camera` or `quality-of-life`: lowercase letters, digits and `-`, up to 24.
+pub fn validTag(tag: []const u8) bool {
+    if (tag.len == 0 or tag.len > 24 or tag[0] == '-') return false;
+    for (tag) |c| if (!std.ascii.isLower(c) and !std.ascii.isDigit(c) and c != '-') return false;
+    return true;
+}
+
+/// A picture's path in the package, like `images/menu.png`. PNG, JPEG or WebP, with `/` between
+/// folders and no `..` anywhere, as the hub has it.
+pub fn validImage(path: []const u8) bool {
+    if (path.len == 0 or path.len > 128 or path[0] == '/' or path[0] == '.') return false;
+    if (std.mem.indexOf(u8, path, "..") != null) return false;
+    for (path) |c| if (!std.ascii.isAlphanumeric(c) and std.mem.indexOfScalar(u8, "_ ./-", c) == null) return false;
+    var parts = std.mem.splitScalar(u8, path, '/');
+    while (parts.next()) |part| if (part.len == 0 or std.mem.eql(u8, part, "..")) return false;
+    for ([_][]const u8{ ".png", ".jpg", ".jpeg", ".webp" }) |ext| if (std.ascii.endsWithIgnoreCase(path, ext)) return true;
+    return false;
 }
 
 pub const ParseError = error{ OutOfMemory, BadManifest, BadId };
@@ -256,6 +271,22 @@ test "bad manifests say why" {
     try std.testing.expect(problem.len > 0);
     try std.testing.expectError(error.BadId, parse(arena.allocator(), "{ \"id\": \"Kai Bones\" }", &problem));
     try std.testing.expectError(error.BadId, parse(arena.allocator(), "{}", null));
+}
+
+test "tags and pictures" {
+    try std.testing.expect(validTag("camera"));
+    try std.testing.expect(validTag("quality-of-life"));
+    try std.testing.expect(!validTag("Camera"));
+    try std.testing.expect(!validTag("-ui"));
+    try std.testing.expect(!validTag("a much too long tag for the hub"));
+    try std.testing.expect(validImage("icon.png"));
+    try std.testing.expect(validImage("images/Main Menu.JPG"));
+    try std.testing.expect(!validImage("icon.gif"));
+    try std.testing.expect(!validImage("../icon.png"));
+    try std.testing.expect(!validImage("images/../../icon.png"));
+    try std.testing.expect(!validImage("/icon.png"));
+    try std.testing.expect(!validImage("images\\icon.png"));
+    try std.testing.expect(!validImage(".hidden.png"));
 }
 
 test "for every game of a game engine" {

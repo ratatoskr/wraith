@@ -21,6 +21,12 @@ pub const Details = struct {
     description: []const u8 = "",
     license: []const u8 = "",
     homepage: []const u8 = "",
+    repo: []const u8 = "",
+    /// Like `camera`, for finding it on the hub.
+    tags: []const []const u8 = &.{},
+    /// Pictures in the project, like `icon.png`, shown on the hub.
+    icon: []const u8 = "",
+    images: []const []const u8 = &.{},
     /// The oldest Wraith it runs on. Empty means any.
     wraith: []const u8 = "",
     /// Game ids, like steam-1245620. No ids, exes or game engine means any game.
@@ -89,6 +95,10 @@ pub fn read(arena: std.mem.Allocator, project: *Project, problem: *[]const u8) !
         .description = m.description orelse "",
         .license = m.license orelse "",
         .homepage = m.homepage orelse "",
+        .repo = m.repo orelse "",
+        .tags = m.tags,
+        .icon = m.icon orelse "",
+        .images = m.images,
         .wraith = m.wraith orelse "",
         .ids = game.ids,
         .exes = game.exes,
@@ -106,6 +116,12 @@ pub fn check(d: Details) ?[]const u8 {
     if (!isVersion(d.version)) return "The version should be like 1.2.0";
     if (d.wraith.len > 0 and !isNumbers(d.wraith, 3)) return "The oldest Wraith should be like 0.4 or 0.4.1";
     if (d.homepage.len > 0 and !std.mem.startsWith(u8, d.homepage, "https://")) return "The homepage should start with https://";
+    if (d.repo.len > 0 and !std.mem.startsWith(u8, d.repo, "https://")) return "The repo should start with https://";
+    if (d.tags.len > 10) return "Up to 10 tags";
+    for (d.tags) |t| if (!core.manifest.validTag(t)) return "Tags are lowercase words, like camera or quality-of-life";
+    if (d.icon.len > 0 and !core.manifest.validImage(d.icon)) return "The icon should be a PNG, JPEG or WebP in the project, like icon.png";
+    if (d.images.len > 8) return "Up to 8 images";
+    for (d.images) |i| if (!core.manifest.validImage(i)) return "Images should be PNGs, JPEGs or WebPs in the project, like images/menu.png";
     for (d.exes) |e| if (!std.ascii.endsWithIgnoreCase(e, ".exe") or std.mem.indexOfAny(u8, e, "/\\:") != null) return "Exes should be just a file's name, like game.exe";
     for (d.ids) |id| if (id.len == 0 or std.mem.indexOfAny(u8, id, " /\\") != null) return "Game ids look like steam-1245620, with no spaces";
     for (d.depends) |dep| if (!core.manifest.validId(core.manifest.Dependency.parse(dep).name)) return "Depends should be mod ids, like unity or unity@1.2";
@@ -158,6 +174,10 @@ pub fn toJson(arena: std.mem.Allocator, d: Details) ![]u8 {
         author: ?[]const u8 = null,
         license: ?[]const u8 = null,
         homepage: ?[]const u8 = null,
+        repo: ?[]const u8 = null,
+        tags: ?[]const []const u8 = null,
+        icon: ?[]const u8 = null,
+        images: ?[]const []const u8 = null,
         wraith: ?[]const u8 = null,
         game: ?Game_ = null,
         gameEngine: ?GameEngine_ = null,
@@ -173,6 +193,10 @@ pub fn toJson(arena: std.mem.Allocator, d: Details) ![]u8 {
         .author = nonEmpty(d.author),
         .license = nonEmpty(d.license),
         .homepage = nonEmpty(d.homepage),
+        .repo = nonEmpty(d.repo),
+        .tags = if (d.tags.len > 0) d.tags else null,
+        .icon = nonEmpty(d.icon),
+        .images = if (d.images.len > 0) d.images else null,
         .wraith = nonEmpty(d.wraith),
         .game = if (has_game) .{ .ids = if (d.ids.len > 0) d.ids else null, .exes = if (d.exes.len > 0) d.exes else null } else null,
         .gameEngine = if (d.game_engine.len > 0) .{ .id = d.game_engine, .variants = if (d.game_engine_variants.len > 0) d.game_engine_variants else null } else null,
@@ -236,6 +260,22 @@ test "written, read back and checked like the hub" {
     const again = (try read(a, project, &problem)).?;
     try testing.expectEqualStrings("Asgard", again.author);
     try testing.expectEqual(0, again.ids.len + again.exes.len);
+
+    // Hub extras survive being written back
+    var extras = again;
+    extras.repo = "https://github.com/me/kai";
+    extras.tags = &.{ "tables", "ui" };
+    extras.icon = "icon.png";
+    extras.images = &.{"images/menu.png"};
+    try write(project, testing.allocator, extras);
+    const kept = (try read(a, project, &problem)).?;
+    try testing.expectEqualStrings("https://github.com/me/kai", kept.repo);
+    try testing.expectEqualStrings("ui", kept.tags[1]);
+    try testing.expectEqualStrings("icon.png", kept.icon);
+    try testing.expectEqualStrings("images/menu.png", kept.images[0]);
+    var bad_tag = kept;
+    bad_tag.tags = &.{"Tables"};
+    try testing.expect(check(bad_tag) != null);
 
     // Every Unity IL2CPP game, never one game as well
     var engine = again;
