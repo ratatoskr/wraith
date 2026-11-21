@@ -919,7 +919,7 @@ const tests = struct {
         try testing.expect(shell.windows.about.window.open and shell.windows.settings.window.open);
     }
 
-    test "plugins' settings fold under their names, and their Settings button opens theirs" {
+    test "plugins get a Settings page of their own, which their Settings button opens" {
         var rig: Rig = undefined;
         try rig.init(.{});
         defer rig.deinit();
@@ -934,12 +934,15 @@ const tests = struct {
 
         try testing.expect(shell.pluginHasSettings("kai", "Kai"));
         try testing.expect(!shell.pluginHasSettings("nobody", "Nobody"));
-        // Without a button of its own, it's its heading in Wraith's Settings
+        // Without a button of its own, it's its page in Wraith's Settings, keys and all
         shell.openPluginSettings("kai", "Kai");
         const page = &shell.windows.settings;
-        try testing.expect(page.window.open and page.select_plugins);
+        try testing.expect(page.window.open and page.page == .owner);
+        try testing.expectEqualStrings("Kai", page.page_name[0..page.page_name_len]);
         for (0..2) |_| rig.present();
-        try testing.expect(!page.select_plugins);
+        // And every key on one page
+        page.page = .all_keys;
+        for (0..2) |_| rig.present();
         // Browse's pick lands next frame
         try SettingsWindow.browsed("kai.folder", "C:\\shots");
         rig.present();

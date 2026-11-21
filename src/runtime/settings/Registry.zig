@@ -298,13 +298,12 @@ pub fn find(self: *Registry, id: []const u8) ?*Setting {
     return null;
 }
 
-/// Whether `group`, like a plugin's title, has settings Settings lists, not counting keys.
+/// Whether `group`, like a plugin's title, has settings or keys Settings lists.
 pub fn listsAny(self: *Registry, group: []const u8) bool {
     self.lock.lockShared();
     defer self.lock.unlockShared();
     for (self.settings.items) |s| {
-        if (s.def.hidden or s.def.kind == .key or !std.mem.eql(u8, s.def.group, group)) continue;
-        return true;
+        if (!s.def.hidden and std.mem.eql(u8, s.def.group, group)) return true;
     }
     return false;
 }

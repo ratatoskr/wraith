@@ -1,7 +1,8 @@
 //! The overlay's settings window. Built from the registry, so Wraith's settings, plugins' and
-//! every key bound on the game show up the same way. Keys and plugins' settings fold under a
-//! heading for whoever they're for, and one for each tweak or entry in that. Changes take effect
-//! as you make them, and drags and typing get saved once they're done. Render thread.
+//! every key bound on the game show up the same way. A sidebar has Wraith's sections, then a page
+//! for each plugin, mod, your project and the address list with all its settings and keys, a fold
+//! for each tweak or entry in it, and a page of every key at the end. Changes take effect as you
+//! make them, and drags and typing get saved once they're done. Render thread.
 
 const SettingsWindow = @This();
 
@@ -35,19 +36,22 @@ restart_pending: bool = false,
 /// Keys on more than one thing, refreshed when the keys change.
 clashes: []Keybinds.Clash = &.{},
 seen_keys: u32 = std.math.maxInt(u32),
-/// A heading to show on the Plugins tab, open and in view, like from a plugin's Settings button.
-show_group: [96]u8 = undefined,
-show_group_len: usize = 0,
-/// Switch to the Plugins tab next frame.
-select_plugins: bool = false,
+/// What the sidebar has picked, named by `page_name`.
+page: PageKind = .wraith,
+page_name: [96]u8 = undefined,
+page_name_len: usize = 0,
 
-/// Wraith's settings by section, all the game's keys, or plugins'.
-const Tab = union(enum) {
-    section: []const u8,
-    keybinds,
-    plugins,
+const PageKind = enum {
+    /// One of Wraith's sections, by name. Empty is General.
+    wraith,
+    /// Everything for a plugin, a mod, your project or the address list, by its group.
+    owner,
+    /// Every key on the game, whoever's it is.
+    all_keys,
 };
 
+/// Unscaled.
+const sidebar_width = 180;
 /// Fresh, each time it's opened.
 pub fn onOpen(self: *SettingsWindow) void {
     const shell = self.shell;
@@ -94,71 +98,125 @@ pub fn draw(self: *SettingsWindow) void {
 
     var welcome = false;
     if (self.restart_pending) ui.textColored(.{ 1, 0.8, 0.3, 1 }, "{s}  Some changes take effect next time the game starts.", .{icons.triangle_alert});
-    if (ui.child("##settings", .{ 0, 0 }, .{})) |body| {
+    if (query.len > 0) {
+        const found = ui.child("##found", .{ 0, 0 }, .{}) orelse return;
+        defer found.end();
+        self.drawFound(shell, query);
+        return;
+    }
+    if (ui.child("##pages", .{ ui.scaled(sidebar_width), 0 }, .{ .border = true })) |side| {
+        defer side.end();
+        self.drawSidebar();
+    }
+    ui.sameLine();
+    if (ui.child("##page", .{ 0, 0 }, .{})) |body| {
         defer body.end();
-        if (query.len > 0) {
-            self.drawFound(shell, query);
-        } else if (ui.tabBar("##tabs")) |bar| {
-            defer bar.end();
-            var found: [16]Tab = undefined;
-            for (self.tabs(&found)) |tab| {
-                var label_buf: [64]u8 = undefined;
-                const label: [:0]const u8 = switch (tab) {
-                    .section => |s| if (s.len == 0) "General" else std.fmt.bufPrintSentinel(&label_buf, "{s}", .{s}, 0) catch "?",
-                    .keybinds => "Keybinds",
-                    .plugins => "Plugins",
-                };
-                const select = tab == .plugins and self.select_plugins;
-                if (select) self.select_plugins = false;
-                const item = ui.tabItem(label, .{ .select = select }) orelse continue;
-                defer item.end();
-                if (self.drawTab(shell, tab)) welcome = true;
-            }
-        }
+        welcome = self.drawPage(shell);
     }
     if (welcome) shell.showWelcome();
 }
 
-/// General first, then Wraith's sections in the order they were added, then keys and plugins.
-/// `last_sections` go at the end, in that order.
-fn tabs(self: *SettingsWindow, out: []Tab) []Tab {
+fn pageName(self: *const SettingsWindow) []const u8 {
+    return self.page_name[0..self.page_name_len];
+}
+
+fn setPage(self: *SettingsWindow, kind: PageKind, name: []const u8) void {
+    self.page = kind;
+    self.page_name_len = @min(name.len, self.page_name.len);
+    @memcpy(self.page_name[0..self.page_name_len], name[0..self.page_name_len]);
+}
+
+/// Shows everything for `group`, like a plugin's title, on its own page.
+pub fn showGroup(self: *SettingsWindow, group: []const u8) void {
+    self.setPage(.owner, group);
+    self.search = @splat(0);
+    self.window.show();
+    self.window.focus();
+}
+
+/// Wraith's sections, then whoever else has settings or keys, then every key.
+fn drawSidebar(self: *SettingsWindow) void {
+    var sections: [16][]const u8 = undefined;
+    for (self.wraithSections(&sections)) |section| self.pageItem(.wraith, section, if (section.len == 0) "General" else section);
+    var names: [64][]const u8 = undefined;
+    const others = self.owners(&names);
+    if (others.len > 0) {
+        ui.spacing();
+        ui.separatorText("Plugins and mods");
+    }
+    for (others) |owner| self.pageItem(.owner, owner, owner);
+    ui.spacing();
+    ui.separator();
+    self.pageItem(.all_keys, "", "All keys");
+}
+
+fn pageItem(self: *SettingsWindow, kind: PageKind, name: []const u8, label: []const u8) void {
+    const picked = self.page == kind and std.mem.eql(u8, self.pageName(), name);
+    var buf: [128]u8 = undefined;
+    if (ui.selectable(std.fmt.bufPrintSentinel(&buf, "{s}##{t}", .{ label, kind }, 0) catch "?", picked)) self.setPage(kind, name);
+}
+
+/// True if it asked for the welcome.
+fn drawPage(self: *SettingsWindow, shell: *Shell) bool {
+    switch (self.page) {
+        .wraith => return self.drawSection(shell, self.pageName()),
+        .owner => {
+            const group = self.pageName();
+            var names: [64][]const u8 = undefined;
+            const there = for (self.owners(&names)) |o| {
+                if (std.mem.eql(u8, o, group)) break true;
+            } else false;
+            // Like a plugin that's been turned off
+            if (!there) {
+                self.setPage(.wraith, "");
+                return self.drawSection(shell, "");
+            }
+            {
+                const bold = ui.bold();
+                defer bold.end();
+                var buf: [96]u8 = undefined;
+                ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{group}, 0) catch "?");
+            }
+            self.drawGroup(shell, group);
+        },
+        .all_keys => self.drawAllKeys(shell),
+    }
+    return false;
+}
+
+/// General first, then Wraith's sections in the order they were added. `last_sections` go at the
+/// end, in that order.
+fn wraithSections(self: *SettingsWindow, out: [][]const u8) [][]const u8 {
     var n: usize = 0;
-    out[n] = .{ .section = "" };
+    out[n] = "";
     n += 1;
-    var plugins = false;
     var last: [last_sections.len]bool = @splat(false);
     for (self.settings) |s| {
-        if (s.def.hidden) continue;
-        if (!isWraith(s)) {
-            if (!isGameKey(s)) plugins = true;
-            continue;
-        }
+        if (s.def.hidden or !isWraith(s)) continue;
         if (lastIndex(s.def.section)) |i| {
             last[i] = true;
             continue;
         }
-        const known = for (out[0..n]) |t| {
-            if (t == .section and std.mem.eql(u8, t.section, s.def.section)) break true;
-        } else false;
-        if (!known and n < out.len - 2 - last_sections.len) {
-            out[n] = .{ .section = s.def.section };
-            n += 1;
-        }
-    }
-    out[n] = .keybinds;
-    n += 1;
-    if (plugins) {
-        out[n] = .plugins;
-        n += 1;
+        if (n < out.len - last_sections.len) n = addName(out, n, s.def.section);
     }
     for (last_sections, last) |section, any| if (any) {
-        out[n] = .{ .section = section };
+        out[n] = section;
         n += 1;
     };
     return out[0..n];
 }
 
-/// On the far right, after everything else.
+/// Everyone but Wraith with settings or keys, in the order they came.
+fn owners(self: *SettingsWindow, out: [][]const u8) [][]const u8 {
+    var n: usize = 0;
+    for (self.settings) |s| {
+        if (s.def.hidden or isWraith(s)) continue;
+        n = addName(out, n, s.def.group);
+    }
+    return out[0..n];
+}
+
+/// At the end, after everything else.
 const last_sections = [_][]const u8{ "Advanced", "Developer" };
 
 fn lastIndex(section: []const u8) ?usize {
@@ -177,72 +235,23 @@ fn isGameKey(s: *const Setting) bool {
     };
 }
 
-/// True if it asked for the welcome.
-fn drawTab(self: *SettingsWindow, shell: *Shell, tab: Tab) bool {
-    switch (tab) {
-        .section => |section| {
-            for (self.settings) |s| {
-                if (s.def.hidden or !isWraith(s) or !std.mem.eql(u8, s.def.section, section)) continue;
-                self.row(shell, s);
-            }
-            if (std.mem.eql(u8, section, "Developer")) drawDevPlugins(shell);
-            if (section.len != 0) return false;
-            ui.spacing();
-            {
-                const bold = ui.bold();
-                defer bold.end();
-                ui.text("Welcome", .{});
-            }
-            const welcome = ui.button("Show the welcome");
-            helpText("Go through the first-run welcome again.", false, .global);
-            return welcome;
-        },
-        .keybinds => self.grouped(shell, true),
-        .plugins => self.grouped(shell, false),
+/// One of Wraith's own. True if it asked for the welcome.
+fn drawSection(self: *SettingsWindow, shell: *Shell, section: []const u8) bool {
+    for (self.settings) |s| {
+        if (s.def.hidden or !isWraith(s) or !std.mem.eql(u8, s.def.section, section)) continue;
+        self.row(shell, s);
     }
-    return false;
-}
-
-/// Opens on the Plugins tab with the heading for `group`, like a plugin's title, open and in view.
-pub fn showGroup(self: *SettingsWindow, group: []const u8) void {
-    self.show_group_len = @min(group.len, self.show_group.len);
-    @memcpy(self.show_group[0..self.show_group_len], group[0..self.show_group_len]);
-    self.select_plugins = true;
-    self.window.show();
-    self.window.focus();
-}
-
-fn listed(s: *const Setting, keys: bool) bool {
-    return !s.def.hidden and isGameKey(s) == keys and (keys or !isWraith(s));
-}
-
-/// A heading for each owner that folds, Wraith first. Keys from everyone, or plugins' other
-/// settings.
-fn grouped(self: *SettingsWindow, shell: *Shell, keys: bool) void {
-    var groups: [64][]const u8 = undefined;
-    var n: usize = 0;
-    for ([_]bool{ true, false }) |wraith_pass| for (self.settings) |s| {
-        if (!listed(s, keys) or isWraith(s) != wraith_pass) continue;
-        n = addName(&groups, n, s.def.group);
-    };
-    if (n == 0) return ui.textDisabled("{s}", .{if (keys) "No keys yet" else "No plugin settings yet"});
-
-    const show = if (keys) "" else self.show_group[0..self.show_group_len];
-    for (groups[0..n]) |group| {
-        const scope = ui.id(group);
-        defer scope.end();
-        const wanted = show.len > 0 and std.mem.eql(u8, group, show);
-        if (wanted) ui.setNextItemOpen(true, .always);
-        var buf: [96]u8 = undefined;
-        const open = ui.collapsingHeader(std.fmt.bufPrintSentinel(&buf, "{s}###group", .{group}, 0) catch "?###group", true);
-        if (wanted) {
-            ui.setScrollHereY(0);
-            self.show_group_len = 0;
-        }
-        if (!open) continue;
-        self.drawGroup(shell, group, keys);
-        ui.spacing();
+    if (std.mem.eql(u8, section, "Developer")) drawDevPlugins(shell);
+    if (section.len != 0) return false;
+    ui.spacing();
+    {
+        const bold = ui.bold();
+        defer bold.end();
+        ui.text("Welcome", .{});
     }
+    const welcome = ui.button("Show the welcome");
+    helpText("Go through the first-run welcome again.", false, .global);
+    return welcome;
 }
 
 /// `name` added to `list`'s first `n` if it's not there yet. The new count.
@@ -253,12 +262,13 @@ fn addName(list: [][]const u8, n: usize, name: []const u8) usize {
     return n + 1;
 }
 
-/// Settings without a section first, then one that folds for each section, like each tweak.
-fn drawGroup(self: *SettingsWindow, shell: *Shell, group: []const u8, keys: bool) void {
+/// Its settings and keys without a section first, then one that folds for each section, like
+/// each tweak.
+fn drawGroup(self: *SettingsWindow, shell: *Shell, group: []const u8) void {
     var sections: [256][]const u8 = undefined;
     var n: usize = 0;
     for (self.settings) |s| {
-        if (!listed(s, keys) or !std.mem.eql(u8, s.def.group, group)) continue;
+        if (s.def.hidden or !std.mem.eql(u8, s.def.group, group)) continue;
         if (s.def.section.len == 0) self.row(shell, s) else n = addName(&sections, n, s.def.section);
     }
     for (sections[0..n]) |section| {
@@ -267,14 +277,49 @@ fn drawGroup(self: *SettingsWindow, shell: *Shell, group: []const u8, keys: bool
         const node = ui.treeNode(std.fmt.bufPrintSentinel(&buf, "{s}", .{section}, 0) catch "?") orelse continue;
         defer node.end();
         for (self.settings) |s| {
-            if (!listed(s, keys) or !std.mem.eql(u8, s.def.group, group) or !std.mem.eql(u8, s.def.section, section)) continue;
+            if (s.def.hidden or !std.mem.eql(u8, s.def.group, group) or !std.mem.eql(u8, s.def.section, section)) continue;
             self.row(shell, s);
         }
     }
 }
 
+/// Every key on the game in one list, whoever's it is, Wraith's first. Clashes say so.
+fn drawAllKeys(self: *SettingsWindow, shell: *Shell) void {
+    var groups: [65][]const u8 = undefined;
+    groups[0] = Settings.group;
+    const others = self.owners(groups[1..]);
+    const table = ui.table("##keys", 2, .{ .row_background = true }) orelse return;
+    defer table.end();
+    ui.tableColumnWith("What", .{ .stretch = true, .width = 1 });
+    ui.tableColumnWith("Key", .{ .stretch = true, .width = 1 });
+    ui.tableHeaders();
+    var any = false;
+    for (groups[0 .. others.len + 1]) |group| for (self.settings) |s| {
+        if (s.def.hidden or !isGameKey(s) or !std.mem.eql(u8, s.def.group, group)) continue;
+        any = true;
+        const scope = ui.id(s);
+        defer scope.end();
+        ui.tableNextRow();
+        _ = ui.tableNextColumn();
+        ui.alignTextToFramePadding();
+        ui.textDisabled("{s}", .{group});
+        ui.sameLine();
+        if (s.def.section.len > 0) ui.text("{s}: {s}", .{ s.def.section, s.def.name }) else ui.text("{s}", .{s.def.name});
+        _ = ui.tableNextColumn();
+        self.keyRow(shell, s, shell.registry.get(s).key);
+    };
+    if (!any) {
+        ui.tableNextRow();
+        _ = ui.tableNextColumn();
+        ui.textDisabled("No keys yet", .{});
+    }
+}
+
+/// With where each is from over it.
 fn drawFound(self: *SettingsWindow, shell: *Shell, query: []const u8) void {
     var any = false;
+    var group: []const u8 = "";
+    var section: []const u8 = "";
     for (self.settings) |s| {
         if (s.def.hidden) continue;
         const hit = std.ascii.findIgnoreCase(s.def.name, query) != null or
@@ -282,12 +327,17 @@ fn drawFound(self: *SettingsWindow, shell: *Shell, query: []const u8) void {
             std.ascii.findIgnoreCase(s.def.group, query) != null or
             std.ascii.findIgnoreCase(s.def.section, query) != null;
         if (!hit) continue;
+        if (!any or !std.mem.eql(u8, group, s.def.group) or !std.mem.eql(u8, section, s.def.section)) {
+            group = s.def.group;
+            section = s.def.section;
+            ui.spacing();
+            if (section.len > 0) ui.textDisabled("{s} / {s}", .{ group, section }) else ui.textDisabled("{s}", .{group});
+        }
         any = true;
         self.row(shell, s);
     }
     if (!any) ui.textDisabled("Nothing matches", .{});
 }
-
 /// Takes effect now. Saved too, unless it's mid-drag or mid-typing.
 fn apply(self: *SettingsWindow, shell: *Shell, s: *Setting, v: Registry.Value, save: bool) void {
     const was = shell.registry.get(s);
