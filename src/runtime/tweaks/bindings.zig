@@ -16,27 +16,28 @@ const definitions = @import("definitions.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
-/// Under the lock. Each key is a setting in the registry, for just this game, listed under Tweaks.
-/// The project's key is its default if they're used, and the one picked in Settings wins.
+/// Under the lock. Each key is a setting in the registry, for just this game, listed under Tweaks
+/// with a heading for each tweak, its own key then its fields'. The project's key is its default
+/// if they're used, and the one picked in Settings wins.
 pub fn apply(tw: *Tweaks) void {
     for (tw.list.items) |t| {
         const key: ?input.Chord = if (tw.kept.settings.project_keys) t.def.key else null;
         var id_buf: [192]u8 = undefined;
-        var name_buf: [192]u8 = undefined;
+        var section_buf: [192]u8 = undefined;
         const id = std.fmt.bufPrint(&id_buf, "wraith.tweak.{s}", .{t.name}) catch continue;
-        const label = labelOf(&name_buf, t) orelse continue;
-        bind(tw, &t.setting, &t.key, key, id, label, .{ .ctx = t, .call = keyPressed });
+        const section = labelOf(&section_buf, t) orelse continue;
+        const own = if (!t.is_group and t.def.mode == .action) "Run" else "On and off";
+        bind(tw, &t.setting, &t.key, key, id, section, own, .{ .ctx = t, .call = keyPressed });
         for (t.fields) |*f| {
             const field_key = if (tw.kept.settings.project_keys) f.def.key else null;
             const field_id = std.fmt.bufPrint(&id_buf, "wraith.tweak.{s}.{s}", .{ t.name, f.def.name }) catch continue;
-            const field_label = std.fmt.bufPrint(&name_buf, "{s}: {s}", .{ t.title(), f.def.label }) catch continue;
-            bind(tw, &f.setting, &f.key, field_key, field_id, field_label, .{ .ctx = f, .call = fieldKeyPressed });
+            bind(tw, &f.setting, &f.key, field_key, field_id, section, f.def.label, .{ .ctx = f, .call = fieldKeyPressed });
         }
     }
 }
 
 /// Registered again if its default changed, which keeps a key picked for it.
-fn bind(tw: *Tweaks, setting: *?*Registry.Setting, default: *?input.Chord, key: ?input.Chord, id: []const u8, label: []const u8, action: Registry.KeyAction) void {
+fn bind(tw: *Tweaks, setting: *?*Registry.Setting, default: *?input.Chord, key: ?input.Chord, id: []const u8, section: []const u8, label: []const u8, action: Registry.KeyAction) void {
     const registry = tw.registry orelse return;
     if (setting.* != null and std.meta.eql(key, default.*)) return;
     if (setting.*) |s| registry.remove(s);
@@ -46,10 +47,11 @@ fn bind(tw: *Tweaks, setting: *?*Registry.Setting, default: *?input.Chord, key: 
         .id = id,
         .name = label,
         .group = "Tweaks",
+        .section = section,
         .scope = .game,
         .kind = .{ .key = .{ .default = key } },
     }, .{ .key = action }) catch |err| blk: {
-        log.warn("Couldn't add the key for {s}: {t}", .{ label, err });
+        log.warn("Couldn't add the key for {s}, {s}: {t}", .{ section, label, err });
         break :blk null;
     };
 }

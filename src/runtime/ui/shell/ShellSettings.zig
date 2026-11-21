@@ -29,6 +29,8 @@ tweaks_on_screen: *Registry.Setting,
 tweaks_toasts: *Registry.Setting,
 /// Who exported a mod last, to start the next with.
 export_author: *Registry.Setting,
+/// The order of the overlay bar's tiles, as `Reorder.Arrangement` ids in hex.
+hub_order: *Registry.Setting,
 workbench_keys: [key_names.len]*Registry.Setting,
 
 pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
@@ -132,6 +134,15 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
         .kind = .{ .text = "" },
     }, .{});
     try added.append(shell.allocator, self.export_author);
+    self.hub_order = try registry.add(.{
+        .id = "wraith.overlay.bar_order",
+        .name = "Overlay bar order",
+        .group = Settings.group,
+        // Set by dragging the bar's tiles
+        .hidden = true,
+        .kind = .{ .text = "" },
+    }, .{});
+    try added.append(shell.allocator, self.hub_order);
 
     const key_defaults: WorkbenchKeys = .{};
     inline for (key_names, 0..) |field, i| {
@@ -153,7 +164,7 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
 
 pub fn remove(self: *const ShellSettings) void {
     const r = self.registry;
-    inline for (.{ "theme", "bar_place", "welcome_seen", "frame_window", "frame_hitch", "overlay_gamepad", "tweaks_on_screen", "tweaks_toasts", "export_author" }) |name| r.remove(@field(self, name));
+    inline for (.{ "theme", "bar_place", "welcome_seen", "frame_window", "frame_hitch", "overlay_gamepad", "tweaks_on_screen", "tweaks_toasts", "export_author", "hub_order" }) |name| r.remove(@field(self, name));
     for (self.workbench_keys) |s| r.remove(s);
 }
 

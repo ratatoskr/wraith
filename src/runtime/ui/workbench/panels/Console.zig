@@ -100,7 +100,7 @@ fn line(picking: anytype, row: usize, l: *const Scripts.Line, with_session: bool
         .code, .debug => ui.getColorU32(.text_disabled),
         .value, .info => null,
     };
-    const coloured = ui.withColor(ui.c.ImGuiCol_Text, colour);
+    const coloured = ui.withColor(.text, colour);
     defer coloured.end();
     const prefix = if (l.kind == .code) "> " else "";
     if (with_session) {

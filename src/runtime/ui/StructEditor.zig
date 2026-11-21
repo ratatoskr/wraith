@@ -21,8 +21,6 @@ const Sig = @import("tuft_mem").Sig;
 const Memory = @import("tuft_mem").Memory;
 const Names = @import("../Names.zig");
 
-const c = ui.c;
-
 /// Unscaled.
 const label_width = 170;
 /// Folds this deep stay shut, in case pointers loop.
@@ -140,7 +138,7 @@ fn fold(schema: *const Schema, label: []const u8, r: Ref, t: *const Schema.Type,
         return;
     }
     // Tests see inside everything
-    if (builtin.is_test) ui.raw("ImGui_SetNextItemOpen")(true, c.ImGuiCond_Always);
+    if (builtin.is_test) ui.setNextItemOpen(true, .always);
     const node = ui.treeNode(text) orelse return;
     defer node.end();
     members(schema, t, r, depth + 1);
@@ -152,7 +150,7 @@ fn elements(schema: *const Schema, label: []const u8, notes: []const Schema.Anno
     var buf: [112]u8 = undefined;
     const text = std.fmt.bufPrintSentinel(&buf, "{s} ({d})##fold", .{ label, len }, 0) catch return;
     if (depth >= max_depth) return ui.textDisabled("{s}", .{label});
-    if (builtin.is_test) ui.raw("ImGui_SetNextItemOpen")(true, c.ImGuiCond_Always);
+    if (builtin.is_test) ui.setNextItemOpen(true, .always);
     const node = ui.treeNode(text) orelse return;
     defer node.end();
     for (0..@min(len, max_elements)) |i| {

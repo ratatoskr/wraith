@@ -6,8 +6,6 @@ const std = @import("std");
 
 const ui = @import("wraith_ui");
 
-const c = ui.c;
-
 /// Called with a link's URL when it's clicked. The URL lives as long as the text.
 pub const Open = *const fn (url: []const u8) void;
 
@@ -16,8 +14,8 @@ const title_size = 22;
 const max_line = 2048;
 
 pub fn draw(text: []const u8, open: Open) void {
-    ui.raw("ImGui_PushTextWrapPos")(0);
-    defer ui.raw("ImGui_PopTextWrapPos")();
+    const wrap = ui.wrapAt(0);
+    defer wrap.end();
     var lines = std.mem.splitScalar(u8, text, '\n');
     var index: i32 = 0;
     var in_code = false;
@@ -65,8 +63,8 @@ pub fn draw(text: []const u8, open: Open) void {
 fn title(text: []const u8) void {
     const bold = ui.bold();
     defer bold.end();
-    ui.raw("ImGui_PushFontFloat")(null, title_size);
-    defer ui.raw("ImGui_PopFont")();
+    const big = ui.fontSized(title_size);
+    defer big.end();
     plain(text);
 }
 
@@ -137,7 +135,7 @@ fn isUrl(line: []const u8) bool {
 fn link(text: []const u8, url: []const u8, open: Open) void {
     var buf: [256]u8 = undefined;
     const label = std.fmt.bufPrintSentinel(&buf, "{s}", .{text}, 0) catch return;
-    if (ui.raw("ImGui_TextLink")(@ptrCast(label.ptr))) open(url);
+    if (ui.textLink(label)) open(url);
     ui.tooltip("{s}", .{url});
 }
 
@@ -172,7 +170,7 @@ fn inlineText(line: []const u8) void {
 }
 
 fn plain(text: []const u8) void {
-    ui.raw("ImGui_TextUnformattedEx")(@ptrCast(text.ptr), @ptrCast(text.ptr + text.len));
+    ui.textUnformatted(text);
 }
 
 test "cells and links" {

@@ -139,12 +139,12 @@ pub fn poll(self: *CeImport, wb: *Workbench) bool {
     }
     if (self.open_popup) {
         self.open_popup = false;
-        _ = ui.raw("ImGui_OpenPopup")(ui.str(done_popup), 0);
+        ui.openPopup(done_popup);
     }
-    if (ui.raw("ImGui_BeginPopupModal")(ui.str(done_popup), null, ui.c.ImGuiWindowFlags_AlwaysAutoResize)) {
-        defer ui.raw("ImGui_EndPopup")();
+    if (ui.modal(done_popup, .{ .remember = true })) |done| {
+        defer done.end();
         ui.text("{s}", .{self.summary.items});
-        if (ui.button("OK") or ui.isKeyPressed(.escape, false)) ui.raw("ImGui_CloseCurrentPopup")();
+        if (ui.button("OK") or ui.isKeyPressed(.escape, false)) ui.closePopup();
     }
     return loaded;
 }

@@ -1,6 +1,7 @@
 //! The overlay's settings window. Built from the registry, so Wraith's settings, plugins' and
-//! every key bound on the game show up the same way. Changes take effect as you make them, and
-//! drags and typing get saved once they're done. Render thread.
+//! every key bound on the game show up the same way. Keys and plugins' settings fold under a
+//! heading for whoever they're for, and one for each tweak or entry in that. Changes take effect
+//! as you make them, and drags and typing get saved once they're done. Render thread.
 
 const SettingsWindow = @This();
 
@@ -11,6 +12,7 @@ const ui = @import("wraith_ui");
 const Chord = @import("wraith_platform").input.Chord;
 const Keybinds = @import("tuft_input").Keybinds;
 const tuft_window = @import("tuft_window");
+const sync = @import("tuft_sys").sync;
 
 const icons = @import("../fonts.zig").icons;
 const Settings = @import("../../Settings.zig");
@@ -19,7 +21,6 @@ const Setting = Registry.Setting;
 const Shell = @import("Shell.zig");
 const Workbench = @import("../workbench/Workbench.zig");
 
-const c = ui.c;
 const log = core.log.scoped(.wraith_ui);
 
 window: ui.Window = .{ .title = "Wraith Settings###wraith.settings", .size = .{ 720, 560 } },
@@ -34,6 +35,11 @@ restart_pending: bool = false,
 /// Keys on more than one thing, refreshed when the keys change.
 clashes: []Keybinds.Clash = &.{},
 seen_keys: u32 = std.math.maxInt(u32),
+/// A heading to show on the Plugins tab, open and in view, like from a plugin's Settings button.
+show_group: [96]u8 = undefined,
+show_group_len: usize = 0,
+/// Switch to the Plugins tab next frame.
+select_plugins: bool = false,
 
 /// Wraith's settings by section, all the game's keys, or plugins'.
 const Tab = union(enum) {
@@ -81,6 +87,7 @@ fn refresh(self: *SettingsWindow, shell: *Shell) void {
 pub fn draw(self: *SettingsWindow) void {
     const shell = self.shell;
     self.refresh(shell);
+    self.takePicked(shell);
     ui.setNextItemWidthPixels(-1);
     _ = ui.inputTextHint("##search", icons.search ++ "  Search settings", &self.search);
     const query = std.mem.sliceTo(&self.search, 0);
@@ -101,7 +108,9 @@ pub fn draw(self: *SettingsWindow) void {
                     .keybinds => "Keybinds",
                     .plugins => "Plugins",
                 };
-                const item = ui.tabItem(label, .{}) orelse continue;
+                const select = tab == .plugins and self.select_plugins;
+                if (select) self.select_plugins = false;
+                const item = ui.tabItem(label, .{ .select = select }) orelse continue;
                 defer item.end();
                 if (self.drawTab(shell, tab)) welcome = true;
             }
@@ -194,22 +203,74 @@ fn drawTab(self: *SettingsWindow, shell: *Shell, tab: Tab) bool {
     return false;
 }
 
-/// Under a heading per owner, Wraith first. Keys from everyone, or plugins' other settings.
+/// Opens on the Plugins tab with the heading for `group`, like a plugin's title, open and in view.
+pub fn showGroup(self: *SettingsWindow, group: []const u8) void {
+    self.show_group_len = @min(group.len, self.show_group.len);
+    @memcpy(self.show_group[0..self.show_group_len], group[0..self.show_group_len]);
+    self.select_plugins = true;
+    self.window.show();
+    self.window.focus();
+}
+
+fn listed(s: *const Setting, keys: bool) bool {
+    return !s.def.hidden and isGameKey(s) == keys and (keys or !isWraith(s));
+}
+
+/// A heading for each owner that folds, Wraith first. Keys from everyone, or plugins' other
+/// settings.
 fn grouped(self: *SettingsWindow, shell: *Shell, keys: bool) void {
-    var last: []const u8 = "";
-    var any = false;
+    var groups: [64][]const u8 = undefined;
+    var n: usize = 0;
     for ([_]bool{ true, false }) |wraith_pass| for (self.settings) |s| {
-        if (s.def.hidden or isGameKey(s) != keys or isWraith(s) != wraith_pass) continue;
-        if (!keys and isWraith(s)) continue;
-        if (!std.mem.eql(u8, last, s.def.group)) {
-            last = s.def.group;
-            var buf: [96]u8 = undefined;
-            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{s.def.group}, 0) catch "?");
-        }
-        any = true;
-        self.row(shell, s);
+        if (!listed(s, keys) or isWraith(s) != wraith_pass) continue;
+        n = addName(&groups, n, s.def.group);
     };
-    if (!any) ui.textDisabled("{s}", .{if (keys) "No keys yet" else "No plugin settings yet"});
+    if (n == 0) return ui.textDisabled("{s}", .{if (keys) "No keys yet" else "No plugin settings yet"});
+
+    const show = if (keys) "" else self.show_group[0..self.show_group_len];
+    for (groups[0..n]) |group| {
+        const scope = ui.id(group);
+        defer scope.end();
+        const wanted = show.len > 0 and std.mem.eql(u8, group, show);
+        if (wanted) ui.setNextItemOpen(true, .always);
+        var buf: [96]u8 = undefined;
+        const open = ui.collapsingHeader(std.fmt.bufPrintSentinel(&buf, "{s}###group", .{group}, 0) catch "?###group", true);
+        if (wanted) {
+            ui.setScrollHereY(0);
+            self.show_group_len = 0;
+        }
+        if (!open) continue;
+        self.drawGroup(shell, group, keys);
+        ui.spacing();
+    }
+}
+
+/// `name` added to `list`'s first `n` if it's not there yet. The new count.
+fn addName(list: [][]const u8, n: usize, name: []const u8) usize {
+    for (list[0..n]) |have| if (std.mem.eql(u8, have, name)) return n;
+    if (n == list.len) return n;
+    list[n] = name;
+    return n + 1;
+}
+
+/// Settings without a section first, then one that folds for each section, like each tweak.
+fn drawGroup(self: *SettingsWindow, shell: *Shell, group: []const u8, keys: bool) void {
+    var sections: [256][]const u8 = undefined;
+    var n: usize = 0;
+    for (self.settings) |s| {
+        if (!listed(s, keys) or !std.mem.eql(u8, s.def.group, group)) continue;
+        if (s.def.section.len == 0) self.row(shell, s) else n = addName(&sections, n, s.def.section);
+    }
+    for (sections[0..n]) |section| {
+        var buf: [192]u8 = undefined;
+        ui.setNextItemOpen(true, .once);
+        const node = ui.treeNode(std.fmt.bufPrintSentinel(&buf, "{s}", .{section}, 0) catch "?") orelse continue;
+        defer node.end();
+        for (self.settings) |s| {
+            if (!listed(s, keys) or !std.mem.eql(u8, s.def.group, group) or !std.mem.eql(u8, s.def.section, section)) continue;
+            self.row(shell, s);
+        }
+    }
 }
 
 fn drawFound(self: *SettingsWindow, shell: *Shell, query: []const u8) void {
@@ -270,7 +331,7 @@ fn row(self: *SettingsWindow, shell: *Shell, s: *Setting) void {
             var x: f32 = @floatCast(v.number);
             ui.setNextItemWidth(240);
             const format: [:0]const u8 = if (n.step >= 1) "%.0f" else "%.2f";
-            if (ui.raw("ImGui_SliderFloatEx")(@ptrCast("##value"), &x, @floatCast(n.min), @floatCast(n.max), @ptrCast(format.ptr), 0)) self.apply(shell, s, .{ .number = x }, false);
+            if (ui.sliderWith("##value", &x, @floatCast(n.min), @floatCast(n.max), .{ .format = format })) self.apply(shell, s, .{ .number = x }, false);
             self.finish(shell, s);
         },
         .choice => |ch| {
@@ -295,12 +356,129 @@ fn row(self: *SettingsWindow, shell: *Shell, s: *Setting) void {
         },
         .colour => {
             var colour = v.colour;
-            if (ui.raw("ImGui_ColorEdit4")(@ptrCast("##value"), @ptrCast(&colour), 0)) self.apply(shell, s, .{ .colour = colour }, false);
+            if (ui.colorEdit("##value", &colour)) self.apply(shell, s, .{ .colour = colour }, false);
             self.finish(shell, s);
         },
         .key => self.keyRow(shell, s, v.key),
+        .path => |p| {
+            var buf: [512]u8 = @splat(0);
+            const n = @min(v.path.len, buf.len - 1);
+            @memcpy(buf[0..n], v.path[0..n]);
+            var hint_buf: [256]u8 = undefined;
+            const hint = std.fmt.bufPrintSentinel(&hint_buf, "{s}", .{p.placeholder}, 0) catch "";
+            ui.setNextItemWidth(320);
+            if (ui.inputTextHint("##value", hint, &buf)) self.apply(shell, s, .{ .path = std.mem.sliceTo(&buf, 0) }, false);
+            self.finish(shell, s);
+            ui.sameLine();
+            const off = ui.disabled(pickerBusy());
+            defer off.end();
+            if (ui.button("Browse...")) browse(s, p, v.path);
+        },
     }
     helpText(s.def.help, s.def.restart, s.def.scope);
+}
+
+/// What a path's Browse dialog picked, for the setting it was for. Static, since the dialog's on a
+/// thread of its own so the game keeps going, and it can outlast the window.
+const Picked = struct {
+    lock: sync.RwLock = .{},
+    busy: bool = false,
+    ready: bool = false,
+    id: [160]u8 = undefined,
+    id_len: usize = 0,
+    path: ?[]u8 = null,
+};
+
+var mailbox: Picked = .{};
+const picker_allocator = std.heap.smp_allocator;
+
+fn pickerBusy() bool {
+    mailbox.lock.lockShared();
+    defer mailbox.lock.unlockShared();
+    return mailbox.busy;
+}
+
+const PickJob = struct {
+    arena: std.heap.ArenaAllocator,
+    file: bool,
+    title: []const u8,
+    folder: []const u8,
+    extension: []const u8,
+};
+
+/// Starts where it is now, or where its file is.
+fn browse(s: *const Setting, path: Registry.Path, now: []const u8) void {
+    {
+        mailbox.lock.lock();
+        defer mailbox.lock.unlock();
+        if (mailbox.busy) return;
+        mailbox.busy = true;
+        mailbox.ready = false;
+        mailbox.id_len = @min(s.def.id.len, mailbox.id.len);
+        @memcpy(mailbox.id[0..mailbox.id_len], s.def.id[0..mailbox.id_len]);
+    }
+    const started = start: {
+        const job = picker_allocator.create(PickJob) catch break :start false;
+        job.* = .{ .arena = .init(picker_allocator), .file = path.file, .title = "", .folder = "", .extension = "" };
+        const a = job.arena.allocator();
+        const folder = if (path.file) std.fs.path.dirname(now) orelse "" else now;
+        job.title = a.dupe(u8, s.def.name) catch "";
+        job.folder = a.dupe(u8, folder) catch "";
+        job.extension = a.dupe(u8, path.extension) catch "";
+        const thread = std.Thread.spawn(.{}, pick, .{job}) catch {
+            job.arena.deinit();
+            picker_allocator.destroy(job);
+            break :start false;
+        };
+        thread.detach();
+        break :start true;
+    };
+    if (started) return;
+    mailbox.lock.lock();
+    defer mailbox.lock.unlock();
+    mailbox.busy = false;
+}
+
+fn pick(job: *PickJob) void {
+    defer {
+        job.arena.deinit();
+        picker_allocator.destroy(job);
+    }
+    const window = @import("../../host/ui.zig").gameWindow();
+    // Over the game, not owned by it, which would tie the dialog to the game's message loop
+    const over: ?tuft_window.Handle = if (window != 0) @ptrFromInt(window) else null;
+    const result = if (job.file)
+        tuft_window.pickFile(picker_allocator, .{ .mode = .open, .over = over, .title = job.title, .folder = job.folder, .extension = job.extension })
+    else
+        tuft_window.pickFolder(picker_allocator, .{ .over = over, .title = job.title, .folder = job.folder });
+    const path = result catch |err| blk: {
+        log.warn("Couldn't show the dialog: {t}", .{err});
+        break :blk null;
+    };
+    mailbox.lock.lock();
+    defer mailbox.lock.unlock();
+    if (mailbox.path) |old| picker_allocator.free(old);
+    mailbox.path = path;
+    mailbox.ready = true;
+    mailbox.busy = false;
+}
+
+/// Puts what the dialog picked in its setting, once it's closed.
+fn takePicked(self: *SettingsWindow, shell: *Shell) void {
+    var id_buf: [160]u8 = undefined;
+    const id, const path = blk: {
+        mailbox.lock.lock();
+        defer mailbox.lock.unlock();
+        if (!mailbox.ready) return;
+        mailbox.ready = false;
+        const path = mailbox.path orelse return;
+        mailbox.path = null;
+        @memcpy(id_buf[0..mailbox.id_len], mailbox.id[0..mailbox.id_len]);
+        break :blk .{ id_buf[0..mailbox.id_len], path };
+    };
+    defer picker_allocator.free(path);
+    const s = shell.registry.find(id) orelse return;
+    self.apply(shell, s, .{ .path = path }, true);
 }
 
 fn keyRow(self: *SettingsWindow, shell: *Shell, s: *Setting, current: ?Chord) void {
@@ -326,7 +504,8 @@ fn keyRow(self: *SettingsWindow, shell: *Shell, s: *Setting, current: ?Chord) vo
             const sep = if (first) "" else ", ";
             first = false;
             if (shell.registry.find(id)) |other| {
-                w.print("{s}{s}: {s}", .{ sep, other.def.group, other.def.name }) catch {};
+                w.writeAll(sep) catch {};
+                other.def.describe(&w) catch {};
             } else w.print("{s}{s}", .{ sep, id }) catch {};
         }
         ui.textColored(.{ 1, 0.75, 0.3, 1 }, "{s}", .{w.buffered()});
@@ -402,7 +581,7 @@ fn addDevPlugin(shell: *Shell) void {
 
 fn helpText(help: []const u8, restart: bool, scope: Registry.Scope) void {
     if (help.len == 0 and !restart and scope == .global) return;
-    const dim = ui.withStyleColor(c.ImGuiCol_Text, c.ImGuiCol_TextDisabled);
+    const dim = ui.withStyleColor(.text, .text_disabled);
     defer dim.end();
     ui.textWrapped("{s}{s}{s}", .{
         help,
@@ -415,4 +594,15 @@ fn helpText(help: []const u8, restart: bool, scope: Registry.Scope) void {
 pub fn edit(self: *SettingsWindow, shell: *Shell, id: []const u8, v: Registry.Value) !void {
     const s = shell.registry.find(id) orelse return error.NoSuchSetting;
     self.apply(shell, s, v, true);
+}
+
+/// As if a path's Browse dialog picked `path`, for tests. It lands next frame.
+pub fn browsed(id: []const u8, path: []const u8) !void {
+    mailbox.lock.lock();
+    defer mailbox.lock.unlock();
+    mailbox.id_len = @min(id.len, mailbox.id.len);
+    @memcpy(mailbox.id[0..mailbox.id_len], id[0..mailbox.id_len]);
+    if (mailbox.path) |old| picker_allocator.free(old);
+    mailbox.path = try picker_allocator.dupe(u8, path);
+    mailbox.ready = true;
 }

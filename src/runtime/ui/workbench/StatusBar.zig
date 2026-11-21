@@ -8,8 +8,6 @@ const std = @import("std");
 
 const ui = @import("wraith_ui");
 
-const c = @import("../imgui.zig").c;
-
 pub const Side = enum { left, right };
 
 pub const Item = struct {
@@ -28,7 +26,7 @@ pub const Response = struct {
     menu: bool,
 };
 
-list: *c.ImDrawList,
+list: ui.DrawList,
 top: f32,
 bottom: f32,
 /// Where the next item on each side goes.
@@ -37,20 +35,20 @@ right: f32,
 
 /// How much of the window to leave free for it.
 pub fn height() f32 {
-    return c.ImGui_GetFrameHeight();
+    return ui.frameHeight();
 }
 
 /// Across the bottom of the current window, over the last `height` of it.
 pub fn begin() StatusBar {
-    const pos = c.ImGui_GetWindowPos();
-    const size = c.ImGui_GetWindowSize();
-    const min: c.ImVec2 = .{ .x = pos.x, .y = pos.y + size.y - height() };
-    const max: c.ImVec2 = .{ .x = pos.x + size.x, .y = pos.y + size.y };
-    const list = c.ImGui_GetWindowDrawList();
-    c.ImDrawList_AddRectFilled(list, min, max, c.ImGui_GetColorU32(c.ImGuiCol_MenuBarBg));
-    c.ImDrawList_AddLine(list, min, .{ .x = max.x, .y = min.y }, c.ImGui_GetColorU32(c.ImGuiCol_Border));
+    const pos = ui.getWindowPos();
+    const size = ui.getWindowSize();
+    const min: ui.Vec2 = .{ pos[0], pos[1] + size[1] - height() };
+    const max: ui.Vec2 = .{ pos[0] + size[0], pos[1] + size[1] };
+    const list = ui.getWindowDrawList();
+    list.addRectFilled(min, max, ui.getColorU32(.menu_bar_bg));
+    list.addLine(min, .{ max[0], min[1] }, ui.getColorU32(.border), 1);
     const edge = ui.scaled(4);
-    return .{ .list = list, .top = min.y, .bottom = max.y, .left = min.x + edge, .right = max.x - edge };
+    return .{ .list = list, .top = min[1], .bottom = max[1], .left = min[0] + edge, .right = max[0] - edge };
 }
 
 pub fn item(self: *StatusBar, it: Item) Response {
@@ -66,22 +64,23 @@ pub fn item(self: *StatusBar, it: Item) Response {
         .right => self.right -= width,
     }
 
-    const min: c.ImVec2 = .{ .x = x, .y = self.top };
-    const max: c.ImVec2 = .{ .x = x + width, .y = self.bottom };
-    c.ImGui_SetCursorScreenPos(min);
-    _ = c.ImGui_InvisibleButton(it.id, .{ .x = width, .y = self.bottom - self.top }, c.ImGuiButtonFlags_MouseButtonLeft | c.ImGuiButtonFlags_MouseButtonRight);
-    if (c.ImGui_IsItemHovered(0)) c.ImDrawList_AddRectFilled(self.list, min, max, c.ImGui_GetColorU32(c.ImGuiCol_HeaderHovered));
-    const color = if (it.color) |v| c.ImGui_GetColorU32ImVec4(.{ .x = v[0], .y = v[1], .z = v[2], .w = v[3] }) else c.ImGui_GetColorU32(c.ImGuiCol_Text);
-    const text_at: c.ImVec2 = .{ .x = x + pad, .y = self.top + (self.bottom - self.top - text_size[1]) / 2 };
-    c.ImDrawList_AddTextEx(self.list, text_at, color, @ptrCast(it.text.ptr), @ptrCast(it.text.ptr + it.text.len));
+    const min: ui.Vec2 = .{ x, self.top };
+    const max: ui.Vec2 = .{ x + width, self.bottom };
+    ui.setCursorScreenPos(min);
+    _ = ui.invisibleButtonWith(it.id, .{ width, self.bottom - self.top }, .{ .right = true });
+    if (ui.isItemHovered()) self.list.addRectFilled(min, max, ui.getColorU32(.header_hovered));
+    const color = if (it.color) |v| ui.colorU32(v) else ui.getColorU32(.text);
+    const text_at: ui.Vec2 = .{ x + pad, self.top + (self.bottom - self.top - text_size[1]) / 2 };
+    self.list.addText(text_at, color, it.text);
     if (it.tooltip) |t| ui.tooltip("{s}", .{t});
     return .{
-        .clicked = c.ImGui_IsItemClicked(),
-        .menu = c.ImGui_BeginPopupContextItemEx(it.id, c.ImGuiPopupFlags_MouseButtonRight),
+        .clicked = ui.isItemClicked(.left),
+        .menu = ui.contextMenu(it.id) != null,
     };
 }
 
 /// After an item's menu, when `menu` said it was open.
 pub fn endMenu() void {
-    c.ImGui_EndPopup();
+    const menu: ui.Popup = .{};
+    menu.end();
 }

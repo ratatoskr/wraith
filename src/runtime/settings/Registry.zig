@@ -18,7 +18,7 @@ const log = core.log.scoped(.wraith_runtime);
 pub const Scope = enum { global, game };
 
 /// What sort of setting, shared by Kind and Value.
-pub const Type = enum { toggle, number, choice, text, colour, key };
+pub const Type = enum { toggle, number, choice, text, colour, key, path };
 
 pub const Kind = union(Type) {
     toggle: bool,
@@ -27,6 +27,7 @@ pub const Kind = union(Type) {
     text: []const u8,
     colour: [4]f32,
     key: Key,
+    path: Path,
 };
 
 pub const Number = struct {
@@ -40,6 +41,17 @@ pub const Number = struct {
 pub const Choice = struct {
     default: []const u8,
     options: []const []const u8,
+};
+
+/// A folder or file, picked with Windows' own dialog or typed. Empty means its `placeholder`.
+pub const Path = struct {
+    default: []const u8 = "",
+    /// A file, not a folder.
+    file: bool = false,
+    /// The file type it picks, like ".json".
+    extension: []const u8 = "",
+    /// What it uses while it's empty, like `Pictures\Wraith`.
+    placeholder: []const u8 = "",
 };
 
 pub const Key = struct {
@@ -62,12 +74,14 @@ pub const Value = union(Type) {
     colour: [4]f32,
     /// Null is no key.
     key: ?Chord,
+    path: []const u8,
 
     pub fn eql(a: Value, b: Value) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
         return switch (a) {
             .choice => |s| std.mem.eql(u8, s, b.choice),
             .text => |s| std.mem.eql(u8, s, b.text),
+            .path => |s| std.mem.eql(u8, s, b.path),
             .key => |k| if (k) |x| (if (b.key) |y| x.eql(y) else false) else b.key == null,
             else => std.meta.eql(a, b),
         };
@@ -89,6 +103,13 @@ pub const Definition = struct {
     restart: bool = false,
     /// Kept, but not listed in Settings, like whether the welcome's been seen.
     hidden: bool = false,
+
+    /// Who it's for and what it is, like `Tweaks: Speed: On and off`, for saying which.
+    pub fn describe(self: *const Definition, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try w.print("{s}: ", .{self.group});
+        if (self.section.len > 0) try w.print("{s}: ", .{self.section});
+        try w.writeAll(self.name);
+    }
 };
 
 /// A key setting's action. On the render thread.
@@ -277,6 +298,17 @@ pub fn find(self: *Registry, id: []const u8) ?*Setting {
     return null;
 }
 
+/// Whether `group`, like a plugin's title, has settings Settings lists, not counting keys.
+pub fn listsAny(self: *Registry, group: []const u8) bool {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    for (self.settings.items) |s| {
+        if (s.def.hidden or s.def.kind == .key or !std.mem.eql(u8, s.def.group, group)) continue;
+        return true;
+    }
+    return false;
+}
+
 /// Strings in it last as long as the registry.
 pub fn get(self: *Registry, s: *const Setting) Value {
     self.lock.lockShared();
@@ -358,6 +390,7 @@ pub fn defaultOf(kind: Kind) Value {
         .text => |t| .{ .text = t },
         .colour => |c| .{ .colour = c },
         .key => |k| .{ .key = k.default },
+        .path => |p| .{ .path = p.default },
     };
 }
 
@@ -395,7 +428,10 @@ fn bindKey(self: *Registry, s: *Setting) void {
         return;
     }
     const c = chord orelse return;
-    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = s.def.name, .chord = c, .consume = key.consume, .while_typing = key.while_typing }, s, Setting.fire) catch |err| blk: {
+    // Named in full, like `Mira: set 999999`, since keys are listed without their headings
+    var name_buf: [256]u8 = undefined;
+    const name = if (s.def.section.len > 0) std.fmt.bufPrint(&name_buf, "{s}: {s}", .{ s.def.section, s.def.name }) catch s.def.name else s.def.name;
+    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = name, .chord = c, .consume = key.consume, .while_typing = key.while_typing }, s, Setting.fire) catch |err| blk: {
         log.warn("Couldn't bind {f} for {s}: {t}", .{ c, s.def.id, err });
         break :blk null;
     };
@@ -433,6 +469,7 @@ fn ownValue(self: *Registry, v: Value) !Value {
     return switch (v) {
         .choice => |s| .{ .choice = try self.ownString(s) },
         .text => |s| .{ .text = try self.ownString(s) },
+        .path => |s| .{ .path = try self.ownString(s) },
         else => v,
     };
 }
@@ -462,6 +499,12 @@ fn ownDefinition(self: *Registry, def: Definition) !Definition {
             d.kind = .{ .choice = .{ .default = try self.ownString(ch.default), .options = options } };
         },
         .text => |t| d.kind = .{ .text = try self.ownString(t) },
+        .path => |p| d.kind = .{ .path = .{
+            .default = try self.ownString(p.default),
+            .file = p.file,
+            .extension = try self.ownString(p.extension),
+            .placeholder = try self.ownString(p.placeholder),
+        } },
         else => {},
     }
     return d;

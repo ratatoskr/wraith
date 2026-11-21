@@ -66,31 +66,25 @@ const max_slider = 1000;
 
 /// The new value if it changed, kept inside its limits. Tweak fields and the struct editor's.
 pub fn intInput(comptime T: type, label: [:0]const u8, value: T, limits: Limits) ?T {
-    const data_type = if (T == i64) ui.c.ImGuiDataType_S64 else ui.c.ImGuiDataType_U64;
     const fmt: [:0]const u8 = if (limits.hex) "%llX" else if (T == i64) "%lld" else "%llu";
     var v = value;
-    var lo: T = if (limits.min) |m| std.math.lossyCast(T, m) else std.math.minInt(T);
-    var hi: T = if (limits.max) |m| std.math.lossyCast(T, m) else std.math.maxInt(T);
+    const lo: T = if (limits.min) |m| std.math.lossyCast(T, m) else std.math.minInt(T);
+    const hi: T = if (limits.max) |m| std.math.lossyCast(T, m) else std.math.maxInt(T);
     if (limits.min != null and limits.max != null and hi -| lo <= max_slider) {
-        if (!ui.raw("ImGui_SliderScalarEx")(ui.str(label), data_type, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str(fmt), ui.c.ImGuiSliderFlags_AlwaysClamp)) return null;
+        if (!ui.sliderWith(label, &v, lo, hi, .{ .format = fmt, .clamp = true })) return null;
         return v;
     }
-    var step: T = 1;
-    var fast: T = 100;
-    const flags: ui.c.ImGuiInputTextFlags = if (limits.hex) ui.c.ImGuiInputTextFlags_CharsHexadecimal else 0;
-    if (!ui.raw("ImGui_InputScalarEx")(ui.str(label), data_type, @ptrCast(&v), @ptrCast(&step), @ptrCast(&fast), ui.str(fmt), flags)) return null;
+    if (!ui.inputNumber(label, &v, .{ .format = fmt, .step = 1, .step_fast = 100, .hex = limits.hex })) return null;
     return std.math.clamp(v, lo, hi);
 }
 
 pub fn floatInput(label: [:0]const u8, value: f64, limits: Limits) ?f64 {
     var v = value;
     if (limits.min != null and limits.max != null) {
-        var lo = limits.min.?;
-        var hi = limits.max.?;
-        if (!ui.raw("ImGui_SliderScalarEx")(ui.str(label), ui.c.ImGuiDataType_Double, @ptrCast(&v), @ptrCast(&lo), @ptrCast(&hi), ui.str("%.3f"), ui.c.ImGuiSliderFlags_AlwaysClamp)) return null;
+        if (!ui.sliderWith(label, &v, limits.min.?, limits.max.?, .{ .format = "%.3f", .clamp = true })) return null;
         return v;
     }
-    if (!ui.raw("ImGui_InputDoubleEx")(ui.str(label), &v, 0, 0, ui.str("%.3f"), 0)) return null;
+    if (!ui.inputNumber(label, &v, .{ .format = "%.3f" })) return null;
     return std.math.clamp(v, limits.min orelse -std.math.inf(f64), limits.max orelse std.math.inf(f64));
 }
 
@@ -104,15 +98,14 @@ fn choiceText(buf: []u8, hex: bool, value: f64, label: ?[]const u8) [:0]const u8
 /// The number box a Shift+clicked dropdown turns into. Enter or clicking away sets it, Escape
 /// doesn't, and either way it's a dropdown again.
 fn typeIn(label: [:0]const u8, hex: bool) ?f64 {
-    if (settling > 0) ui.raw("ImGui_SetKeyboardFocusHere")();
+    if (settling > 0) ui.focusNext();
     const fmt: [:0]const u8 = if (hex) "%llX" else "%lld";
-    const flags: ui.c.ImGuiInputTextFlags = if (hex) ui.c.ImGuiInputTextFlags_CharsHexadecimal else 0;
-    _ = ui.raw("ImGui_InputScalarEx")(ui.str(label), ui.c.ImGuiDataType_S64, @ptrCast(&typed), null, null, ui.str(fmt), flags);
-    if (ui.raw("ImGui_IsItemDeactivatedAfterEdit")()) {
+    _ = ui.inputNumber(label, &typed, .{ .format = fmt, .hex = hex });
+    if (ui.isItemDeactivatedAfterEdit()) {
         typing = 0;
         return @floatFromInt(typed);
     }
-    if (ui.raw("ImGui_IsItemActive")()) {
+    if (ui.isItemActive()) {
         settling = 0;
     } else if (settling > 0) {
         settling -= 1;
@@ -123,17 +116,17 @@ fn typeIn(label: [:0]const u8, hex: bool) ?f64 {
 /// A dropdown of `choices`, with a filter box when there are lots. Shift+click types a value in
 /// instead, for one that isn't listed. The one picked if it changed.
 pub fn choose(label: [:0]const u8, choices: []const Choice, value: f64, hex: bool) ?f64 {
-    const id = ui.raw("ImGui_GetID")(ui.str(label));
+    const id = ui.getId(label);
     if (typing == id) return typeIn(label, hex);
     var preview_buf: [160]u8 = undefined;
     const current = for (choices) |c| {
         if (c.value == value) break c.label;
     } else null;
     const preview = choiceText(&preview_buf, hex, value, current);
-    if (!ui.raw("ImGui_BeginCombo")(ui.str(label), ui.str(preview), ui.c.ImGuiComboFlags_HeightLarge)) return null;
-    defer ui.raw("ImGui_EndCombo")();
-    if (ui.getIO().KeyShift and ui.raw("ImGui_IsWindowAppearing")()) {
-        ui.raw("ImGui_CloseCurrentPopup")();
+    const combo = ui.comboBegin(label, preview, .{ .large = true }) orelse return null;
+    defer combo.end();
+    if (ui.getIO().KeyShift and ui.isWindowAppearing()) {
+        ui.closePopup();
         typing = id;
         typed = std.math.lossyCast(i64, value);
         settling = 2;
@@ -145,9 +138,9 @@ pub fn choose(label: [:0]const u8, choices: []const Choice, value: f64, hex: boo
     }
     const searching = choices.len > filter_from;
     if (searching) {
-        if (ui.raw("ImGui_IsWindowAppearing")()) {
+        if (ui.isWindowAppearing()) {
             filter[0] = 0;
-            ui.raw("ImGui_SetKeyboardFocusHere")();
+            ui.focusNext();
         }
         ui.setNextItemWidth(ui.fill);
         _ = ui.inputTextHint("##filter", "Search names or ids", &filter);
@@ -162,7 +155,7 @@ pub fn choose(label: [:0]const u8, choices: []const Choice, value: f64, hex: boo
         defer scope.end();
         const selected = c.value == value;
         if (ui.selectable(text, selected)) picked = c.value;
-        if (selected and ui.raw("ImGui_IsWindowAppearing")()) ui.raw("ImGui_SetItemDefaultFocus")();
+        if (selected and ui.isWindowAppearing()) ui.setItemDefaultFocus();
     }
     return picked;
 }

@@ -156,11 +156,11 @@ pub fn details(self: *const ExportMod, a: std.mem.Allocator) !ProjectManifest.De
 pub fn draw(self: *ExportMod, wb: *Workbench) void {
     if (self.open_popup) {
         self.open_popup = false;
-        _ = ui.raw("ImGui_OpenPopup")(ui.str(popup), 0);
+        ui.openPopup(popup);
     }
-    ui.raw("ImGui_SetNextWindowSize")(.{ .x = ui.scaled(620), .y = 0 }, ui.c.ImGuiCond_Appearing);
-    if (!ui.raw("ImGui_BeginPopupModal")(ui.str(popup), null, 0)) return;
-    defer ui.raw("ImGui_EndPopup")();
+    ui.setNextWindowSize(.{ ui.scaled(620), 0 }, .appearing);
+    const modal = ui.modal(popup, .{ .auto_resize = false, .remember = true }) orelse return;
+    defer modal.end();
 
     ui.textWrapped("A zip of this project as a mod, to send someone or upload to the Wraith Hub. What's here is kept in the project as its wraith.json, for next time.", .{});
     ui.spacing();
@@ -187,10 +187,10 @@ pub fn draw(self: *ExportMod, wb: *Workbench) void {
     if (self.problem.message().len > 0) ui.textColored(red, "{s}", .{self.problem.message()});
     ui.spacing();
     if (ui.button("Export...")) {
-        if (self.exportTo(wb)) ui.raw("ImGui_CloseCurrentPopup")();
+        if (self.exportTo(wb)) ui.closePopup();
     }
     ui.sameLine();
-    if (ui.button("Cancel") or ui.isKeyPressed(.escape, false)) ui.raw("ImGui_CloseCurrentPopup")();
+    if (ui.button("Cancel") or ui.isKeyPressed(.escape, false)) ui.closePopup();
 }
 
 const target_labels = [_][:0]const u8{ "One game", "Every game made with a game engine", "Any game" };

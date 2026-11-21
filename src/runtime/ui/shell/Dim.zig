@@ -7,8 +7,6 @@ const ui = @import("wraith_ui");
 
 const Overlay = @import("../Overlay.zig");
 
-const c = ui.c;
-
 /// 0 is gone, 1 all the way in.
 fade: f32 = 0,
 holding: bool = false,
@@ -35,10 +33,10 @@ pub fn update(self: *Dim, overlay: *Overlay, wanted: bool, mode: Mode, name: [:0
     const step = ui.getIO().DeltaTime / fade_seconds;
     self.fade = if (wanted) @min(self.fade + step, 1) else @max(self.fade - step, 0);
     if (self.fade == 0) return 0;
-    const viewport = ui.raw("ImGui_GetMainViewport")();
+    const viewport = ui.mainViewport();
     const colour = ui.rgba(0, 0, 0, @intFromFloat(darkness * self.fade * 255));
     switch (mode) {
-        .behind => fill(.{ .ptr = @ptrCast(ui.raw("ImGui_GetBackgroundDrawListEx")(viewport)) }, viewport, colour),
+        .behind => fill(ui.getBackgroundDrawList(), viewport, colour),
         .blocking => drawBlocker(viewport, colour, name),
         .none => {},
     }
@@ -72,10 +70,10 @@ fn hold(self: *Dim, overlay: *Overlay, on: bool) void {
     overlay.take(.gamepad, pad);
 }
 
-fn drawBlocker(viewport: *c.ImGuiViewport, colour: u32, name: [:0]const u8) void {
-    ui.raw("ImGui_SetNextWindowViewport")(viewport.*.ID);
-    ui.raw("ImGui_SetNextWindowPos")(viewport.*.Pos, c.ImGuiCond_Always);
-    ui.raw("ImGui_SetNextWindowSize")(viewport.*.Size, c.ImGuiCond_Always);
+fn drawBlocker(viewport: ui.Viewport, colour: u32, name: [:0]const u8) void {
+    ui.setNextWindowOnMainViewport();
+    ui.setNextWindowPos(viewport.pos, .always, .{ 0, 0 });
+    ui.setNextWindowSize(viewport.size, .always);
     const win = ui.window(name, .{ .flags = .{
         .no_title_bar = true,
         .no_resize = true,
@@ -96,9 +94,9 @@ fn drawBlocker(viewport: *c.ImGuiViewport, colour: u32, name: [:0]const u8) void
     fill(draw_list, viewport, colour);
 }
 
-fn fill(draw_list: ui.DrawList, viewport: *c.ImGuiViewport, colour: u32) void {
-    const min: ui.Vec2 = .{ viewport.*.Pos.x, viewport.*.Pos.y };
-    draw_list.addRectFilled(min, .{ min[0] + viewport.*.Size.x, min[1] + viewport.*.Size.y }, colour);
+fn fill(draw_list: ui.DrawList, viewport: ui.Viewport, colour: u32) void {
+    const min = viewport.pos;
+    draw_list.addRectFilled(min, .{ min[0] + viewport.size[0], min[1] + viewport.size[1] }, colour);
 }
 
 /// Over the other windows. Call between a window's begin and end.

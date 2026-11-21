@@ -79,6 +79,8 @@ fn sync(self: *AddressKeys, list: *const AddressList) void {
         hash.update(@tagName(b.chord.key));
         hash.update(b.label);
         hash.update(&.{0});
+        hash.update(b.entry);
+        hash.update(&.{0});
         hash.update(b.owner);
         hash.update(&.{0});
     }
@@ -103,8 +105,9 @@ fn sync(self: *AddressKeys, list: *const AddressList) void {
         };
         slot.setting = registry.add(.{
             .id = id,
-            .name = b.label,
+            .name = b.does,
             .group = "Address list",
+            .section = b.entry,
             .scope = .game,
             .kind = .{ .key = .{ .default = b.chord } },
         }, .{ .key = .{ .ctx = slot, .call = Slot.pressed } }) catch |err| blk: {
@@ -159,7 +162,8 @@ const tests = struct {
             keys.tick(&list);
             try testing.expectEqual(1, keys.boundCount());
             const setting = registry.find("wraith.address.mira.0").?;
-            try testing.expectEqualStrings("Mira: set 999999", setting.def.name);
+            try testing.expectEqualStrings("Mira", setting.def.section);
+            try testing.expectEqualStrings("set 999999", setting.def.name);
             try testing.expectEqual(.game, setting.def.scope);
             // Like Wraith's settings would
             try registry.set(setting, .{ .key = .{ .key = .f9 } });

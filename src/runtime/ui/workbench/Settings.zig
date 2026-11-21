@@ -50,4 +50,7 @@ pub const Keys = struct {
     expand: Chord = .{ .key = .right },
     collapse: Chord = .{ .key = .left },
     toggle_search: Chord = .{ .key = .f, .mods = .{ .ctrl = true, .shift = true } },
+    /// Move what's picked up or down a list, past the one next to it.
+    move_up: Chord = .{ .key = .up, .mods = .{ .alt = true } },
+    move_down: Chord = .{ .key = .down, .mods = .{ .alt = true } },
 };

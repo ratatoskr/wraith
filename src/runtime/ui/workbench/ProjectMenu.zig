@@ -135,7 +135,7 @@ pub fn drawPopups(self: *ProjectMenu, wb: *Workbench) void {
     }
     if (self.open_next) |name| {
         self.open_next = null;
-        _ = ui.raw("ImGui_OpenPopup")(ui.str(name), 0);
+        ui.openPopup(name);
     }
     self.drawClose(wb);
     if (self.ce.poll(wb)) remember(wb, "");
@@ -240,21 +240,13 @@ fn pickTable(wb: *Workbench) ?[]u8 {
     };
 }
 
-fn beginModal(name: [:0]const u8) bool {
-    return ui.raw("ImGui_BeginPopupModal")(ui.str(name), null, ui.c.ImGuiWindowFlags_AlwaysAutoResize);
-}
-
-fn endModal() void {
-    ui.raw("ImGui_EndPopup")();
-}
-
 fn close() void {
-    ui.raw("ImGui_CloseCurrentPopup")();
+    ui.closePopup();
 }
 
 fn drawUnsaved(self: *ProjectMenu, wb: *Workbench, project: *Project) void {
-    if (!beginModal(unsaved_popup)) return;
-    defer endModal();
+    const modal = ui.modal(unsaved_popup, .{ .remember = true }) orelse return;
+    defer modal.end();
     const action = self.pending orelse return close();
     ui.text("Save changes to {s} first?", .{project.name()});
     if (ui.button("Save")) {
@@ -276,8 +268,8 @@ fn drawUnsaved(self: *ProjectMenu, wb: *Workbench, project: *Project) void {
 }
 
 fn drawRevert(wb: *Workbench, project: *Project) void {
-    if (!beginModal(revert_popup)) return;
-    defer endModal();
+    const modal = ui.modal(revert_popup, .{ .remember = true }) orelse return;
+    defer modal.end();
     ui.text("Drop the unsaved changes to {s}?", .{project.name()});
     if (ui.button("Revert")) {
         close();
@@ -288,8 +280,8 @@ fn drawRevert(wb: *Workbench, project: *Project) void {
 }
 
 fn drawClose(self: *ProjectMenu, wb: *Workbench) void {
-    if (!beginModal(close_popup)) return;
-    defer endModal();
+    const modal = ui.modal(close_popup, .{ .remember = true }) orelse return;
+    defer modal.end();
     const doc = for (wb.documents.items) |d| {
         if (self.closing == d.id) break d;
     } else return close();

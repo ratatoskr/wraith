@@ -175,6 +175,9 @@ overlay: ?*Overlay,
 shell: ?*Shell,
 /// The project's tweaks, set by the shell. Null without a project.
 tweaks: ?*Tweaks = null,
+/// How tweak lists are laid out, shared with the overlay's Tweaks window. The Tweaks panel keeps
+/// its own without it.
+tweak_layout: ?*@import("../TweakLayout.zig") = null,
 /// The open project. Null without files.
 project: ?*Project = null,
 ini_path: ?[]u8,

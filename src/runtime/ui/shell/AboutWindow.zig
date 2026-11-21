@@ -12,7 +12,6 @@ const icons = fonts.icons;
 const brands = fonts.brands;
 const markdown = @import("../markdown.zig");
 
-const c = ui.c;
 const log = core.log.scoped(.wraith_ui);
 
 const AboutWindow = @This();
@@ -66,13 +65,12 @@ pub fn draw(self: *AboutWindow) void {
 
 /// One row of buttons sharing the width, the picked one lit.
 fn drawSections(self: *AboutWindow) void {
-    const style = ui.raw("ImGui_GetStyle")();
     const n: f32 = @floatFromInt(sections.len);
-    const width = (ui.getContentRegionAvailPixels()[0] - style.*.ItemSpacing.x * (n - 1)) / n;
+    const width = (ui.getContentRegionAvailPixels()[0] - ui.scaled(ui.getStyle().item_spacing[0]) * (n - 1)) / n;
     for (sections, 0..) |s, i| {
         if (i > 0) ui.sameLine();
         const picked = s.section == self.section;
-        const lit = ui.withStyleColor(c.ImGuiCol_Button, if (picked) c.ImGuiCol_ButtonActive else c.ImGuiCol_FrameBg);
+        const lit = ui.withStyleColor(.button, if (picked) ui.Col.button_active else ui.Col.frame_bg);
         defer lit.end();
         if (ui.buttonSized(s.label, .{ width, 0 })) self.section = s.section;
     }
@@ -90,12 +88,12 @@ fn drawAbout() void {
     {
         const bold = ui.bold();
         defer bold.end();
-        ui.raw("ImGui_PushFontFloat")(null, title_size);
-        defer ui.raw("ImGui_PopFont")();
+        const big = ui.fontSized(title_size);
+        defer big.end();
         ui.text("Wraith", .{});
     }
     ui.sameLine();
-    ui.raw("ImGui_AlignTextToFramePadding")();
+    ui.alignTextToFramePadding();
     ui.textDisabled("{s}", .{build_info.version});
 
     ui.textColored(tagline_colour, "Mod your Windows games.", .{});
@@ -119,20 +117,19 @@ fn drawAbout() void {
 
 /// Evenly across the window, in their own colours.
 fn drawLinks() void {
-    const style = ui.raw("ImGui_GetStyle")();
-    const gap = style.*.ItemSpacing.x;
+    const gap = ui.scaled(ui.getStyle().item_spacing[0]);
     const n: f32 = @floatFromInt(links.len);
     const width = (ui.getContentRegionAvailPixels()[0] - gap * (n - 1)) / n;
-    const height = ui.raw("ImGui_GetFrameHeight")() * 1.4;
+    const height = ui.frameHeight() * 1.4;
     for (links, 0..) |link, i| {
         if (i > 0) ui.sameLine();
-        const button = ui.withColor(c.ImGuiCol_Button, vec4(link.colour, 0.85));
+        const button = ui.withColor(.button, withAlpha(link.colour, 0.85));
         defer button.end();
-        const hovered = ui.withColor(c.ImGuiCol_ButtonHovered, vec4(link.colour, 1));
+        const hovered = ui.withColor(.button_hovered, withAlpha(link.colour, 1));
         defer hovered.end();
-        const active = ui.withColor(c.ImGuiCol_ButtonActive, vec4(lighter(link.colour), 1));
+        const active = ui.withColor(.button_active, withAlpha(lighter(link.colour), 1));
         defer active.end();
-        const text = ui.withColor(c.ImGuiCol_Text, ui.Color{ 1, 1, 1, 1 });
+        const text = ui.withColor(.text, ui.Color{ 1, 1, 1, 1 });
         defer text.end();
         if (ui.buttonSized(link.label, .{ width, height })) open(link.url);
         ui.tooltip("{s}", .{link.url});
@@ -145,7 +142,10 @@ fn drawCredit() void {
     const after = " by Asgard";
     const width = ui.calcTextSize(before)[0] + ui.calcTextSize(icons.heart)[0] + ui.calcTextSize(after)[0];
     const free = ui.getContentRegionAvailPixels()[0] - width;
-    if (free > 0) ui.raw("ImGui_SetCursorPosX")(ui.raw("ImGui_GetCursorPosX")() + free / 2);
+    if (free > 0) {
+        const at = ui.getCursorScreenPos();
+        ui.setCursorScreenPos(.{ at[0] + free / 2, at[1] });
+    }
     ui.textDisabled(before, .{});
     ui.sameLineWith(0, 0);
     ui.textColored(heart_colour, icons.heart, .{});
@@ -178,6 +178,6 @@ fn lighter(colour: ui.Color) ui.Color {
     return .{ @min(colour[0] * 1.2, 1), @min(colour[1] * 1.2, 1), @min(colour[2] * 1.2, 1), 1 };
 }
 
-fn vec4(colour: ui.Color, alpha: f32) c.ImVec4 {
-    return .{ .x = colour[0], .y = colour[1], .z = colour[2], .w = alpha };
+fn withAlpha(colour: ui.Color, alpha: f32) ui.Color {
+    return .{ colour[0], colour[1], colour[2], alpha };
 }

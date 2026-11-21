@@ -28,6 +28,8 @@ const Welcome = @import("Welcome.zig");
 const Hub = @import("Hub.zig");
 const ModsWindow = @import("ModsWindow.zig");
 const TweaksWindow = @import("TweaksWindow.zig");
+const TweakLayout = @import("../TweakLayout.zig");
+const ui_area = @import("../../host/ui_area.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
 const AboutWindow = @import("AboutWindow.zig");
 const ShellSettings = @import("ShellSettings.zig");
@@ -83,6 +85,8 @@ clashes_told: std.ArrayList(u64) = .empty,
 project: ?*Project = null,
 /// The project's tweaks. Null without a project.
 tweaks: ?*Tweaks = null,
+/// How the Tweaks window and the workbench's panel lay them out. Any thread.
+tweak_layout: TweakLayout = .{},
 /// Hold `loader_lock` to use it.
 loader: ?*PluginLoader = null,
 /// Script sessions and tweaks, while there's a loader. Under `loader_lock` too.
@@ -156,6 +160,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
 
     if (project) |p| {
         const settings = if (options.game) |g| g.value.tweaks else GameSettings.Tweaks{};
+        if (options.game) |g| self.tweak_layout.load(g.value.tweak_layout);
         self.tweaks = Tweaks.create(allocator, p, registry, settings, .{ .context = self, .ready = tweaksReady, .save = saveTweakSettings, .keyed = tweakKeyed }) catch |err| blk: {
             log.warn("Couldn't start tweaks: {t}", .{err});
             break :blk null;
@@ -163,6 +168,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
     }
     errdefer if (self.tweaks) |t| t.destroy();
     self.workbench.tweaks = self.tweaks;
+    self.workbench.tweak_layout = &self.tweak_layout;
     self.workbench.panels.addresses.keys.attach(registry);
     try overlay.draw.subscribe(&self.scope, self, draw);
     self.overlay_key = try registry.add(.{
@@ -218,6 +224,7 @@ pub fn destroy(self: *Shell) void {
     // Waits for its thread, and saves its layout
     self.workbench.destroy();
     if (self.tweaks) |t| t.destroy();
+    self.tweak_layout.deinit();
     // Unsaved changes go with it
     if (self.project) |p| p.destroy();
     // Last, since tweaks take their keys out of it
@@ -334,6 +341,19 @@ pub fn toggleWorkbench(self: *Shell) void {
     self.workbench.toggle();
 }
 
+/// Whether a plugin gets a Settings button, on the Mods page and under its button on the bar: one
+/// of its own, or for its settings in Wraith's. `title` is what it's shown as.
+pub fn pluginHasSettings(self: *Shell, name: []const u8, title: []const u8) bool {
+    return ui_area.hasSettings(name) or self.registry.listsAny(title);
+}
+
+/// What its Settings button does. Its own if it has one, else its heading in Wraith's Settings.
+/// Render thread, in a frame.
+pub fn openPluginSettings(self: *Shell, name: []const u8, title: []const u8) void {
+    if (ui_area.openSettings(name)) return;
+    self.windows.settings.showGroup(title);
+}
+
 /// For tweaks, in JS or Lua.
 fn tweaksReady(context: ?*anyopaque, _: []const u8) bool {
     const self: *Shell = @ptrCast(@alignCast(context.?));
@@ -368,8 +388,18 @@ fn saveTweakSettings(context: ?*anyopaque, tweaks: GameSettings.Tweaks) void {
     game.save() catch |err| log.warn("Couldn't save the tweak settings: {t}", .{err});
 }
 
+/// Once it's changed, from either UI.
+fn saveTweakLayout(self: *Shell) void {
+    const game = self.options.game orelse return;
+    self.settings_lock.lock();
+    defer self.settings_lock.unlock();
+    game.value.tweak_layout = self.tweak_layout.takeChanged(game.arena.allocator()) orelse return;
+    game.save() catch |err| log.warn("Couldn't save how the tweaks are laid out: {t}", .{err});
+}
+
 fn draw(self: *Shell) void {
     if (self.tweaks) |t| t.tick();
+    self.saveTweakLayout();
     self.workbench.tickUnopened();
     self.followOsTheme();
     self.watchClashes();
@@ -387,9 +417,7 @@ fn draw(self: *Shell) void {
 
 /// In the middle of the game the first time, wherever it's moved after.
 fn startCentred(_: *anyopaque) void {
-    const viewport = ui.raw("ImGui_GetMainViewport")();
-    const centre: ui.c.ImVec2 = .{ .x = viewport.*.WorkPos.x + viewport.*.WorkSize.x / 2, .y = viewport.*.WorkPos.y + viewport.*.WorkSize.y / 2 };
-    ui.raw("ImGui_SetNextWindowPosEx")(centre, ui.c.ImGuiCond_FirstUseEver, .{ .x = 0.5, .y = 0.5 });
+    ui.setNextWindowPos(ui.mainViewport().centre(), .first_use_ever, .{ 0.5, 0.5 });
 }
 
 /// Straight into the overlay, without letting go of the input, so the welcome leads somewhere.
@@ -483,7 +511,8 @@ fn toastClash(self: *Shell, clash: Keybinds.Clash) void {
     for (clash.ids, 0..) |id, i| {
         const sep = if (i == 0) "" else if (i + 1 == clash.ids.len) " and " else ", ";
         if (self.registry.find(id)) |s| {
-            w.print("{s}{s}: {s}", .{ sep, s.def.group, s.def.name }) catch {};
+            w.writeAll(sep) catch {};
+            s.def.describe(&w) catch {};
         } else w.print("{s}{s}", .{ sep, id }) catch {};
     }
     w.writeAll(". They all go off. You can change them in Settings.") catch {};
@@ -766,6 +795,29 @@ const tests = struct {
         rig.overlay.ui_takes_gamepad.store(false, .release);
     }
 
+    test "the bar's tiles move within their group and stay put" {
+        var rig: Rig = undefined;
+        try rig.init(.{});
+        defer rig.deinit();
+        const shell = try Shell.create(testing.allocator, rig.overlay, rig.keybinds, .{});
+        defer shell.destroy();
+        shell.hub.open = true;
+        for (0..2) |_| rig.present();
+        // Like a drag, or Move left from its menu
+        const tweaks = shell.hub.reorder.moveOf(Hub.tileId("window", "tweaks"), .up).?;
+        shell.hub.reorder.pending = tweaks;
+        rig.present();
+        const saved = shell.registry.get(shell.own.hub_order).text;
+        try testing.expect(saved.len > 0);
+        try testing.expectEqual(Hub.tileId("window", "tweaks"), shell.hub.order.orderIds()[0]);
+
+        // Read back next time
+        shell.hub.order.load(&.{}, &.{});
+        shell.hub.order_loaded = false;
+        rig.present();
+        try testing.expectEqual(Hub.tileId("window", "tweaks"), shell.hub.order.orderIds()[0]);
+    }
+
     test "the overlay key slides the bar in" {
         var rig: Rig = undefined;
         try rig.init(.{});
@@ -865,6 +917,33 @@ const tests = struct {
             for (0..2) |_| rig.present();
         }
         try testing.expect(shell.windows.about.window.open and shell.windows.settings.window.open);
+    }
+
+    test "plugins' settings fold under their names, and their Settings button opens theirs" {
+        var rig: Rig = undefined;
+        try rig.init(.{});
+        defer rig.deinit();
+        const shell = try Shell.create(testing.allocator, rig.overlay, rig.keybinds, .{});
+        defer shell.destroy();
+        rig.present();
+        // Like a plugin's, a folder and a key under a heading of its own
+        const folder = try shell.registry.add(.{ .id = "kai.folder", .name = "Folder", .group = "Kai", .kind = .{ .path = .{ .placeholder = "Pictures" } } }, .{});
+        defer shell.registry.remove(folder);
+        const key = try shell.registry.add(.{ .id = "kai.shoot", .name = "Shoot", .group = "Kai", .section = "Camera", .kind = .{ .key = .{ .default = .{ .key = .f10 } } } }, .{});
+        defer shell.registry.remove(key);
+
+        try testing.expect(shell.pluginHasSettings("kai", "Kai"));
+        try testing.expect(!shell.pluginHasSettings("nobody", "Nobody"));
+        // Without a button of its own, it's its heading in Wraith's Settings
+        shell.openPluginSettings("kai", "Kai");
+        const page = &shell.windows.settings;
+        try testing.expect(page.window.open and page.select_plugins);
+        for (0..2) |_| rig.present();
+        try testing.expect(!page.select_plugins);
+        // Browse's pick lands next frame
+        try SettingsWindow.browsed("kai.folder", "C:\\shots");
+        rig.present();
+        try testing.expectEqualStrings("C:\\shots", shell.registry.get(folder).path);
     }
 
     test "after the welcome the overlay comes up, without letting go of the input" {
@@ -1098,7 +1177,18 @@ const tests = struct {
         const window = &shell.windows.tweaks;
         window.window.show();
         for (0..2) |_| rig.present();
-        window.fold(testing.allocator, "kai");
+        const layout = &shell.tweak_layout;
+        layout.toggle(TweakLayout.tweakId("kai"));
+        // Moved, like by a drag or the menu, it stays among the ones next to it
+        window.reorder.pending = .{ .dragged = TweakLayout.tweakId("kai"), .target = TweakLayout.tweakId("speed"), .place = .before };
+        for (0..2) |_| rig.present();
+        {
+            var a: std.heap.ArenaAllocator = .init(testing.allocator);
+            defer a.deinit();
+            const all = try layout.entries(a.allocator(), try tweaks.snapshot(a.allocator()), &.{});
+            try testing.expectEqual(TweakLayout.tweakId("kai"), all[1].id);
+            try testing.expect(all[1].folded);
+        }
         // Its fields, opened
         window.setOpen(testing.allocator, std.hash.Wyhash.hash(1, "speed"), true);
         window.search[0] = 'o';

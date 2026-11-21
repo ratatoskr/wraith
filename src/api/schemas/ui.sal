@@ -49,6 +49,7 @@ fn void ClipRow(u32 index);
 // settings window from it.
 fn void OpenSettings();
 
+
 // An entry under the plugin's own button on the overlay's bar, which opens and closes something of
 // the plugin's.
 trait MenuItem {
@@ -58,19 +59,22 @@ trait MenuItem {
     void remove();
 }
 
-// New methods go last. Plugins built before them call the rest by position
+// Plugins built against an older order still work, since tables are matched up by name
 trait Ui {
+    // The overlay
+
     // Whether there's an overlay to draw in, which games whose graphics it can't hook don't have
     bool available();
     // The game window's size in pixels. Zero outside a frame callback.
     ImVec2 displaySize();
 
-    // Where the current window draws, or everything in front of or behind the windows. Only in a frame
-    // callback, null outside one.
+    // Drawing, only in a frame callback
+
+    // Where the current window draws, or everything in front of or behind the windows. Null
+    // outside a frame callback.
     ?ImDrawList windowDrawList();
     ?ImDrawList foregroundDrawList();
     ?ImDrawList backgroundDrawList();
-
     // A text box of any length, which gives what's in it now. While it's being typed in it keeps the
     // edit, by `label`, so `text` only shows once it's left.
     string inputText(cstring label, string text, ImGuiInputTextFlags flags);
@@ -81,12 +85,20 @@ trait Ui {
     void clip(u32 count, ClipRow row);
     // How the current table's sorted, once the user's sorted it. Null otherwise.
     ?SortSpec tableSortedBy();
+    // A struct from the plugin's schemas as controls, read and written live. [Label], [Range],
+    // [ReadOnly] and [Hidden] on its fields change how they show. 0 for `address` uses its
+    // [Instance]. False if the schemas don't have it, or the game hasn't made it yet
+    bool editStruct(string type, usize address);
+
+    // Toasts
 
     // Gives its id, or 0 without an overlay
     u32 toast(Toast toast);
     // False once it's gone
     bool updateToast(u32 id, Toast toast);
     void dismissToast(u32 id);
+
+    // The cursor and the game's input
 
     // Shows the mouse cursor while any plugin asks
     void showCursor(bool show);
@@ -95,24 +107,24 @@ trait Ui {
     void takeInput(InputDevice device, bool take);
     bool inputTaken(InputDevice device);
 
+    // Wraith's own UI
+
     // Under the plugin's own button on the overlay's bar, named after it
     MenuItem addMenuItem(string label);
-    // Gives the plugin a Settings button on the Mods page. A second call replaces the first, and
-    // it's gone with the plugin
+    // What the plugin's Settings button on the Mods page does, like opening a window of its own.
+    // Without one, it shows the plugin's settings in Wraith's Settings. A second call replaces the
+    // first, and it's gone with the plugin
     void onOpenSettings(keep OpenSettings open);
-
-    // For native code that binds Dear ImGui itself: a dcimgui function's address by name, or 0.
-    usize imguiProc(string name);
-    // The Dear ImGui it hosts, like 19250
-    u32 imguiVersion();
 
     // Windows' own dialogs, over the game. The full path, or null if it's cancelled. The game keeps
     // running while it's open. One at a time per plugin, another fails while one's up.
     async ?string!DialogError pickFile(FileDialog options);
     async ?string!DialogError pickFolder(FolderDialog options);
 
-    // A struct from the plugin's schemas as controls, read and written live. [Label], [Range],
-    // [ReadOnly] and [Hidden] on its fields change how they show. 0 for `address` uses its
-    // [Instance]. False if the schemas don't have it, or the game hasn't made it yet
-    bool editStruct(string type, usize address);
+    // Native code that binds Dear ImGui itself
+
+    // A dcimgui function's address by name, or 0
+    usize imguiProc(string name);
+    // The Dear ImGui it hosts, like 19250
+    u32 imguiVersion();
 }

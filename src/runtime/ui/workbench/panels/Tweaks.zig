@@ -1,5 +1,6 @@
 //! The project's tweaks. Turn them on and off, give them keys, edit them. A group is a row that
-//! folds, with its shared part's values, and what's in it under it, nested groups too.
+//! folds, with its shared part's values, and what's in it under it, nested groups too. Rows drag
+//! or move with Move up and down among the ones next to them, laid out like the Tweaks window.
 
 const TweaksPanel = @This();
 
@@ -13,7 +14,10 @@ const Workbench = @import("../Workbench.zig");
 const Project = @import("../../../Project.zig");
 const Tweaks = @import("../../../Tweaks.zig");
 const TweakFields = @import("../../TweakFields.zig");
+const TweakLayout = @import("../../TweakLayout.zig");
 const TweakEditor = @import("../documents/TweakEditor.zig");
+
+const Entry = TweakLayout.Entry;
 
 const red: ui.Color = .{ 1, 0.4, 0.4, 1 };
 
@@ -26,12 +30,14 @@ target_len: usize = 0,
 /// The target's key input starts listening.
 listen_key: bool = false,
 confirm_delete: ui.Confirm = .{},
-renaming: ?usize = null,
+/// By `idOf`.
+renaming: ?u64 = null,
 rename: [64:0]u8 = @splat(0),
 focus_rename: bool = false,
 problem: ?devtools.Problem = null,
-/// Groups folded away, by `idOf`.
-folded: std.ArrayList(u64) = .empty,
+reorder: ui.Reorder = .{ .kind = "wraith.tweaks", .siblings_only = true },
+/// Without the shell's, like in tests.
+own_layout: TweakLayout = .{},
 /// Values shown or hidden by hand, by `idOf`. They show while it's on and hide while it's off
 /// otherwise. Turning it on or off goes back to that.
 values: std.AutoHashMapUnmanaged(u64, ValuesShown) = .empty,
@@ -40,8 +46,13 @@ const ValuesShown = struct { shown: bool, active: bool };
 
 pub fn deinit(self: *TweaksPanel) void {
     self.picked.deinit();
-    self.folded.deinit(self.wb.allocator);
+    self.reorder.deinit();
+    self.own_layout.deinit();
     self.values.deinit(self.wb.allocator);
+}
+
+fn layout(self: *TweaksPanel) *TweakLayout {
+    return self.wb.tweak_layout orelse &self.own_layout;
 }
 
 fn isActive(t: *const Tweaks.Info) bool {
@@ -57,19 +68,12 @@ fn toggleValues(self: *TweaksPanel, t: *const Tweaks.Info) void {
     self.values.put(self.wb.allocator, idOf(t), .{ .shown = !self.showsValues(t), .active = isActive(t) }) catch {};
 }
 
-fn isFolded(self: *const TweaksPanel, group: []const u8) bool {
-    return std.mem.indexOfScalar(u64, self.folded.items, std.hash.Wyhash.hash(0, group)) != null;
-}
-
-fn fold(self: *TweaksPanel, group: []const u8) void {
-    const id = std.hash.Wyhash.hash(0, group);
-    if (std.mem.indexOfScalar(u64, self.folded.items, id)) |i| {
-        _ = self.folded.swapRemove(i);
-    } else self.folded.append(self.wb.allocator, id) catch {};
-}
-
 fn idOf(t: *const Tweaks.Info) u64 {
-    return std.hash.Wyhash.hash(0, t.name);
+    return TweakLayout.tweakId(t.name);
+}
+
+fn entryId(e: *const Entry) u64 {
+    return e.id;
 }
 
 pub fn draw(self: *TweaksPanel) void {
@@ -83,16 +87,30 @@ pub fn draw(self: *TweaksPanel) void {
     const all = tweaks.snapshot(arena.allocator()) catch return;
     if (self.problem) |*p| ui.textColored(red, "{s}", .{p.message()});
     if (all.len == 0) ui.textDisabled("None yet. Right-click for a new one", .{});
-    // What's in a folded group isn't a row
-    var shown: std.ArrayList(Tweaks.Info) = .empty;
+    const lay = self.layout();
+    const entries = lay.entries(arena.allocator(), all, &.{}) catch return;
+    // Just your project's needs no heading
+    var sources: usize = 0;
+    for (entries) |*e| sources += @intFromBool(e.what == .source);
+    const headings = sources > 1;
+    // What's in something folded isn't a row
+    var shown: std.ArrayList(Entry) = .empty;
     var folded_at: ?u32 = null;
-    for (all) |t| {
+    for (entries) |e| {
         if (folded_at) |d| {
-            if (t.depth > d) continue;
+            if (e.depth > d) continue;
             folded_at = null;
         }
-        shown.append(arena.allocator(), t) catch return;
-        if (t.is_group and self.isFolded(t.name)) folded_at = t.depth;
+        switch (e.what) {
+            .source => if (!headings) continue,
+            .tweak => |t| if (!t.is_group) {
+                shown.append(arena.allocator(), e) catch return;
+                continue;
+            },
+            .structure => continue,
+        }
+        shown.append(arena.allocator(), e) catch return;
+        if (e.folded) folded_at = e.depth;
     }
     const list = shown.items;
 
@@ -103,45 +121,51 @@ pub fn draw(self: *TweaksPanel) void {
         ui.tableColumnWith("Key", .{ .fixed = true, .width = 110 });
         ui.tableColumnWith("Status", .{ .stretch = true, .width = 3 });
         ui.tableHeaders();
-        var picking = self.picked.begin(list.len, ui.Selection.Rows(Tweaks.Info, idOf){ .rows = list }, .{});
-        var group: ?[]const u8 = null;
-        for (list, 0..) |*t, i| {
+        self.reorder.begin();
+        var picking = self.picked.begin(list.len, ui.Selection.Rows(Entry, entryId){ .rows = list }, .{});
+        for (list, 0..) |*e, i| {
             const scope = ui.id(@as(i32, @intCast(i)));
             defer scope.end();
-            if (t.source != .project and (group == null or !std.mem.eql(u8, group.?, t.source_id))) {
-                group = t.source_id;
-                ui.tableNextRow();
-                _ = ui.tableNextColumn();
-                _ = ui.tableNextColumn();
-                ui.textDisabled("From {s}", .{t.source_title});
-            }
+            const t = switch (e.what) {
+                .tweak => |t| t,
+                .source => |s| {
+                    ui.tableNextRow();
+                    _ = ui.tableNextColumn();
+                    _ = picking.row(i, "##row");
+                    self.reorder.item(.{ .id = e.id, .label = s.title });
+                    _ = ui.tableNextColumn();
+                    if (ui.Outline.arrow(!e.folded)) lay.toggle(e.id);
+                    if (s.id.len == 0) ui.textDisabled("{s}", .{s.title}) else ui.textDisabled("From {s}", .{s.title});
+                    continue;
+                },
+                .structure => continue,
+            };
             ui.tableNextRow();
             _ = ui.tableNextColumn();
             _ = picking.row(i, "##row");
+            self.reorder.item(.{ .id = e.id, .parent = e.parent, .label = t.title });
             ui.sameLine();
             var on = t.on;
             // Off, with something in it on
-            if (t.partial) ui.raw("ImGui_PushItemFlag")(ui.c.ImGuiItemFlags_MixedValue, true);
+            const mixed = ui.mixedValue(t.partial);
             const clicked = ui.checkbox("##on", &on);
-            if (t.partial) ui.raw("ImGui_PopItemFlag")();
+            mixed.end();
             if (clicked) tweaks.setOn(t.name, on);
             if (t.mode == .action) ui.tooltip("Runs it once", .{}) else if (t.partial) ui.tooltip("Off, but something in it is on, so its shared part is up", .{});
             _ = ui.tableNextColumn();
             const indent: f32 = @floatFromInt(t.depth * 16);
             if (indent > 0) ui.indent(indent);
-            if (self.renaming == i) {
+            if (self.renaming == e.id) {
                 self.drawRename(t);
             } else if (t.is_group) {
-                if (ui.smallButton(if (self.isFolded(t.name)) "+" else "-")) self.fold(t.name);
-                ui.sameLine();
+                if (ui.Outline.arrow(!e.folded)) lay.toggle(e.id);
                 ui.text("{s}", .{t.title});
                 ui.tooltip("A group, in {s}. Its box turns it on, and @children says what that does to what's in it. Its shared part is up while it or anything in it is on", .{t.path});
             } else {
                 if (t.fields.len > 0) {
-                    if (ui.smallButton(if (self.showsValues(t)) "-" else "+")) self.toggleValues(t);
+                    if (ui.Outline.arrow(self.showsValues(t))) self.toggleValues(t);
                     ui.tooltip("{s} its values. They show while it's on", .{if (self.showsValues(t)) "Hides" else "Shows"});
-                    ui.sameLine();
-                }
+                } else ui.Outline.noArrow();
                 ui.text("{s}", .{t.title});
                 if (t.source != .project) ui.tooltip("{s}'s, so it has no file to edit", .{t.source_title}) else if (t.group == null and !std.mem.eql(u8, t.title, t.name)) ui.tooltip("{s}", .{t.path});
             }
@@ -155,12 +179,13 @@ pub fn draw(self: *TweaksPanel) void {
             if (t.key != null and !ui.listeningForKeys()) ui.tooltip("{s}. Click to change it", .{if (t.own_key) "Yours" else "The project's"});
             _ = ui.tableNextColumn();
             if (t.is_group) drawGroupStatus(t, all) else drawStatus(t);
-            if (self.showsValues(t) and !(t.is_group and self.isFolded(t.name))) drawFields(tweaks, t);
+            if (self.showsValues(t) and !(t.is_group and e.folded)) drawFields(tweaks, t);
         }
         picking.end();
     }
     // After the table, not in it, or its items can't be clicked
-    self.commands(tweaks, project, list);
+    self.commands(tweaks, project, all);
+    if (self.reorder.take()) |move| _ = lay.apply(entries, move);
     self.drawDelete(project, all);
 }
 
@@ -253,11 +278,9 @@ fn commands(self: *TweaksPanel, tweaks: *Tweaks, project: *Project, list: []cons
     if (menu.item(.{ .label = "New tweak", .chord = keys.new_entry })) self.wb.openNewTweak(.tweak);
     if (menu.item(.{ .label = "New group", .tooltip = "A file of tweaks that share data and code, with a group nested in it" })) self.wb.openNewTweak(.group);
     if (menu.item(.{ .label = "Rename", .chord = keys.edit, .enabled = whole })) {
-        for (list, 0..) |*t, i| if (t == one.?) {
-            self.renaming = i;
-            _ = std.fmt.bufPrintSentinel(&self.rename, "{s}", .{t.name}, 0) catch {};
-            self.focus_rename = true;
-        };
+        self.renaming = idOf(one.?);
+        _ = std.fmt.bufPrintSentinel(&self.rename, "{s}", .{one.?.name}, 0) catch {};
+        self.focus_rename = true;
     }
     if (menu.item(.{ .label = "Delete", .chord = keys.delete, .enabled = file })) {
         self.setTarget(one.?.name);
@@ -281,6 +304,8 @@ fn commands(self: *TweaksPanel, tweaks: *Tweaks, project: *Project, list: []cons
             self.wb.openTweak(path);
         }
     }
+    menu.separator();
+    self.reorder.commands(&menu, self.picked.focused(), .{ .up = keys.move_up, .down = keys.move_down });
 }
 
 /// Asks where, then writes the tweak at `path` there. Its editor's text is in the project by then.

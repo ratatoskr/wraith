@@ -1,6 +1,7 @@
 //! The overlay's Tweaks window, and the small list it leaves on screen when it's pinned. Plugins'
 //! `[Tweak]` structs show here too, as a row that opens up into the game's values. Every tweak this game has: your project's, installed projects' and
-//! plugins', with what's on, their values and their keys. Render thread.
+//! plugins', with what's on, their values and their keys. Headings and groups fold, and rows drag
+//! or move from the right-click menu among the ones next to them. Render thread.
 
 const TweaksWindow = @This();
 
@@ -11,17 +12,19 @@ const ui = @import("wraith_ui");
 const icons = @import("../fonts.zig").icons;
 const Tweaks = @import("../../Tweaks.zig");
 const TweakFields = @import("../TweakFields.zig");
+const TweakLayout = @import("../TweakLayout.zig");
 const struct_tweaks = @import("../../host/struct_tweaks.zig");
 const Shell = @import("Shell.zig");
 
 const Info = Tweaks.Info;
+const Entry = TweakLayout.Entry;
 
 window: ui.Window = .{ .title = "Tweaks###wraith.tweaks", .size = .{ 820, 600 } },
 shell: *Shell = undefined,
 search: [128]u8 = @splat(0),
 only_on: bool = false,
-/// Folded groups, by their names' hashes.
-folded: std.ArrayList(u64) = .empty,
+/// Dragging rows about. What's folded and the order are in the shell's `tweak_layout`.
+reorder: ui.Reorder = .{ .kind = "wraith.tweaks", .siblings_only = true },
 /// Tweaks showing their fields and `[Tweak]` structs showing their values, by `openKey` and
 /// `structKey`. Shut to start, so the list stays short.
 opened: std.ArrayList(u64) = .empty,
@@ -44,13 +47,8 @@ pub fn onOpen(self: *TweaksWindow) void {
 }
 
 pub fn deinit(self: *TweaksWindow, gpa: std.mem.Allocator) void {
-    self.folded.deinit(gpa);
+    self.reorder.deinit();
     self.opened.deinit(gpa);
-}
-
-/// Where it's from, for its heading. Empty for your project.
-fn sourceId(t: *const Info) []const u8 {
-    return t.source_id;
 }
 
 fn sourceLabel(t: *const Info) []const u8 {
@@ -59,29 +57,6 @@ fn sourceLabel(t: *const Info) []const u8 {
 
 fn isAction(t: *const Info) bool {
     return !t.is_group and t.mode == .action;
-}
-
-fn isFolded(self: *const TweaksWindow, name: []const u8) bool {
-    return std.mem.indexOfScalar(u64, self.folded.items, std.hash.Wyhash.hash(0, name)) != null;
-}
-
-pub fn fold(self: *TweaksWindow, gpa: std.mem.Allocator, name: []const u8) void {
-    const id = std.hash.Wyhash.hash(0, name);
-    if (std.mem.indexOfScalar(u64, self.folded.items, id)) |i| {
-        _ = self.folded.swapRemove(i);
-    } else self.folded.append(gpa, id) catch {};
-}
-
-/// In a folded group, at any depth.
-fn hidden(self: *const TweaksWindow, list: []const Info, t: *const Info) bool {
-    var at = t.group;
-    while (at) |name| {
-        if (self.isFolded(name)) return true;
-        at = for (list) |*g| {
-            if (std.mem.eql(u8, g.name, name)) break g.group;
-        } else null;
-    }
-    return false;
 }
 
 fn matches(t: *const Info, query: []const u8) bool {
@@ -118,7 +93,7 @@ pub fn draw(self: *TweaksWindow) void {
     ui.tooltip("Turns every tweak off", .{});
     ui.sameLine();
     const pinned = shell.registry.get(shell.own.tweaks_on_screen).toggle;
-    const lit: ui.StyleColors = if (pinned) ui.withStyleColor(ui.c.ImGuiCol_Button, ui.c.ImGuiCol_ButtonActive) else .{ .n = 0 };
+    const lit: ui.StyleColors = if (pinned) ui.withStyleColor(.button, .button_active) else .{ .n = 0 };
     const pin = ui.iconButton(if (pinned) icons.pin ++ "##pin" else icons.pin_off ++ "##pin", if (pinned) "Pinned. Closing this leaves a small list on screen, of the ones with keys and which are on" else "Pin it, so closing this leaves a small list on screen, of the ones with keys and which are on");
     lit.end();
     if (pin) shell.registry.set(shell.own.tweaks_on_screen, .{ .toggle = !pinned }) catch {};
@@ -128,7 +103,7 @@ pub fn draw(self: *TweaksWindow) void {
         defer body.end();
         // A copy, since rows call into `tweaks` and a struct's fields are only drawn under its lock
         const structs = struct_tweaks.snapshot(arena.allocator(), query);
-        self.drawList(shell, tweaks, list, structs[0..@min(structs.len, max_structs)], query);
+        self.drawList(shell, tweaks, arena.allocator(), list, structs[0..@min(structs.len, max_structs)], query);
     }
 }
 
@@ -137,74 +112,93 @@ pub fn turnAllOff(tweaks: *Tweaks, list: []const Info) void {
     for (list) |*t| if (t.group == null and (t.on or t.partial)) tweaks.turnOff(t.name);
 }
 
-fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, list: []const Info, structs: []const struct_tweaks.Summary, query: []const u8) void {
+fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, arena: std.mem.Allocator, list: []const Info, structs: []const struct_tweaks.Summary, query: []const u8) void {
     if (list.len == 0 and structs.len == 0) {
         ui.textWrapped("No tweaks for this game yet. Install a project from Mods, or write your own in the Workbench.", .{});
         return;
     }
-    const table = ui.table("##rows", 3, .{}) orelse return;
-    defer table.end();
-    ui.tableColumnWith("On", .{ .fixed = true, .width = 28 });
-    ui.tableColumnWith("Tweak", .{ .stretch = true, .width = 1 });
-    ui.tableColumnWith("Key", .{ .fixed = true, .width = key_width });
-    var source: ?[]const u8 = null;
-    var any = false;
-    var drawn: [max_structs]bool = @splat(false);
-    for (list, 0..) |*t, i| {
-        // Searching shows tweaks alone, wherever they are
-        if (query.len > 0 and (t.is_group or !matches(t, query))) continue;
-        if (query.len == 0 and self.hidden(list, t)) continue;
-        if (self.only_on and !isActive(t)) continue;
-        any = true;
-        if (source == null or !std.mem.eql(u8, source.?, sourceId(t))) {
-            // A plugin's structs go after its other tweaks
-            if (source) |before| any = self.drawStructs(shell.allocator, structs, &drawn, before, query) or any;
-            source = sourceId(t);
+    const layout = &shell.tweak_layout;
+    const all = layout.entries(arena, list, structs) catch return;
+    // Searching shows what matches, whatever's folded
+    const folds = query.len == 0;
+    {
+        // Striped, so each tweak and what it opens up into reads as one
+        const table = ui.table("##rows", 3, .{ .row_background = true }) orelse return;
+        defer table.end();
+        ui.tableColumnWith("On", .{ .fixed = true, .width = 28 });
+        ui.tableColumnWith("Tweak", .{ .stretch = true, .width = 1 });
+        ui.tableColumnWith("Key", .{ .fixed = true, .width = key_width });
+        self.reorder.begin();
+        var any = false;
+        // What's in something folded or hidden, deeper than this
+        var skip_below: ?u32 = null;
+        for (all, 0..) |*e, i| {
+            if (skip_below) |depth| {
+                if (e.depth > depth) continue;
+                skip_below = null;
+            }
+            const scope = ui.id(@as(i32, @intCast(i)));
+            defer scope.end();
+            switch (e.what) {
+                .source => |s| {
+                    if (!self.anyShown(all[i + 1 ..], query)) {
+                        skip_below = e.depth;
+                        continue;
+                    }
+                    self.drawHeading(layout, e, s.title, folds);
+                    if (folds and e.folded) skip_below = e.depth;
+                },
+                .tweak => |t| {
+                    if (!self.showsTweak(t, query)) continue;
+                    self.drawRow(shell.allocator, tweaks, layout, e, t, folds);
+                    if (folds and t.is_group and e.folded) skip_below = e.depth;
+                    any = true;
+                },
+                .structure => |s| if (self.showsStruct(s, query)) {
+                    self.drawStruct(shell.allocator, e, s);
+                    any = true;
+                },
+            }
+        }
+        if (!any) {
             ui.tableNextRow();
             _ = ui.tableNextColumn();
             _ = ui.tableNextColumn();
-            var buf: [96]u8 = undefined;
-            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{sourceLabel(t)}, 0) catch "?");
+            ui.textDisabled("{s}", .{if (query.len > 0) "Nothing matches" else "Nothing's on"});
         }
-        const scope = ui.id(@as(i32, @intCast(i)));
-        defer scope.end();
-        self.drawRow(shell.allocator, tweaks, t, query.len == 0);
     }
-    if (source) |last| any = self.drawStructs(shell.allocator, structs, &drawn, last, query) or any;
-    // Plugins with only structs, under headings of their own
-    var heading: ?[]const u8 = null;
-    for (structs, 0..) |*e, i| {
-        if (drawn[i] or !self.showsStruct(e, query)) continue;
-        if (heading == null or !std.mem.eql(u8, heading.?, e.source)) {
-            heading = e.source;
-            ui.tableNextRow();
-            _ = ui.tableNextColumn();
-            _ = ui.tableNextColumn();
-            var buf: [96]u8 = undefined;
-            ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{e.source_title}, 0) catch "?");
-        }
-        self.drawStruct(shell.allocator, e);
-        any = true;
-    }
-    if (!any) {
-        ui.tableNextRow();
-        _ = ui.tableNextColumn();
-        _ = ui.tableNextColumn();
-        ui.textDisabled("{s}", .{if (query.len > 0) "Nothing matches" else "Nothing's on"});
-    }
+    _ = self.reorder.drawMenu(null);
+    if (self.reorder.take()) |move| _ = layout.apply(all, move);
 }
 
-/// `source`'s structs, marked drawn. True if any were.
-fn drawStructs(self: *TweaksWindow, gpa: std.mem.Allocator, structs: []const struct_tweaks.Summary, drawn: []bool, source: []const u8, query: []const u8) bool {
-    var any = false;
-    for (structs, 0..) |*e, i| {
-        if (drawn[i] or !std.mem.eql(u8, e.source, source)) continue;
-        drawn[i] = true;
-        if (!self.showsStruct(e, query)) continue;
-        self.drawStruct(gpa, e);
-        any = true;
-    }
-    return any;
+fn withOpen(row: ui.Reorder.Item, open: bool) ui.Reorder.Item {
+    var r = row;
+    r.open = open;
+    return r;
+}
+
+fn showsTweak(self: *const TweaksWindow, t: *const Info, query: []const u8) bool {
+    // Searching shows tweaks alone, wherever they are
+    if (query.len > 0 and (t.is_group or !matches(t, query))) return false;
+    return !self.only_on or isActive(t);
+}
+
+/// Anything under a heading, up to the next one.
+fn anyShown(self: *const TweaksWindow, rest: []const Entry, query: []const u8) bool {
+    for (rest) |*e| switch (e.what) {
+        .source => return false,
+        .tweak => |t| if (self.showsTweak(t, query)) return true,
+        .structure => |s| if (self.showsStruct(s, query)) return true,
+    };
+    return false;
+}
+
+/// Where they're from, as a bar across the row. Clicking folds it, and it drags to put a source
+/// above or below another.
+fn drawHeading(self: *TweaksWindow, layout: *TweakLayout, e: *const Entry, title: []const u8, folds: bool) void {
+    ui.tableNextRow();
+    _ = ui.tableNextColumn();
+    if (ui.Outline.node(&self.reorder, .{ .id = e.id, .label = title, .open = !(folds and e.folded) }, .heading) and folds) layout.toggle(e.id);
 }
 
 /// They're never on, so "only what's on" hides them. Searching finds their fields too.
@@ -238,24 +232,23 @@ fn structKey(e: *const struct_tweaks.Summary) u64 {
 }
 
 /// One row, that opens up into the game's values, edited as they're changed.
-fn drawStruct(self: *TweaksWindow, gpa: std.mem.Allocator, e: *const struct_tweaks.Summary) void {
+fn drawStruct(self: *TweaksWindow, gpa: std.mem.Allocator, entry: *const Entry, e: *const struct_tweaks.Summary) void {
     const scope = ui.id(e.type_name.ptr);
     defer scope.end();
     const key = structKey(e);
     const at = std.mem.indexOfScalar(u64, self.opened.items, key);
     ui.tableNextRow();
     _ = ui.tableNextColumn();
-    var toggle = ui.smallButton(if (at != null) icons.chevron_down ++ "##open" else icons.chevron_right ++ "##open");
-    ui.tooltip("{s}", .{if (at != null) "Hide its values" else "Show its values"});
     _ = ui.tableNextColumn();
-    var buf: [128]u8 = undefined;
-    if (ui.selectable(std.fmt.bufPrintSentinel(&buf, "{s}", .{e.title}, 0) catch "?", false)) toggle = true;
+    const toggle = ui.Outline.node(&self.reorder, .{ .id = entry.id, .parent = entry.parent, .label = e.title, .open = at != null }, .folds);
     if (toggle) {
         if (at) |i| {
             _ = self.opened.swapRemove(i);
         } else self.opened.append(gpa, key) catch {};
     }
     if (at != null and !toggle) {
+        const inside = ui.Outline.inside();
+        defer inside.end();
         switch (struct_tweaks.drawFields(e.source, e.type_name)) {
             .drawn, .gone => {},
             .not_there_yet => ui.textDisabled("Not in the game yet. It shows up once the game makes it, like after loading a save.", .{}),
@@ -264,50 +257,44 @@ fn drawStruct(self: *TweaksWindow, gpa: std.mem.Allocator, e: *const struct_twea
     _ = ui.tableNextColumn();
 }
 
-fn drawRow(self: *TweaksWindow, gpa: std.mem.Allocator, tweaks: *Tweaks, t: *const Info, nested: bool) void {
+fn drawRow(self: *TweaksWindow, gpa: std.mem.Allocator, tweaks: *Tweaks, layout: *TweakLayout, e: *const Entry, t: *const Info, nested: bool) void {
     ui.tableNextRow();
     _ = ui.tableNextColumn();
+    // The same size as a checkbox, so they line up
     if (isAction(t)) {
-        if (ui.smallButton(icons.play ++ "##run")) tweaks.setOn(t.name, true);
-        ui.tooltip("Runs it once", .{});
+        if (ui.iconButton(icons.play ++ "##run", "Runs it once")) tweaks.setOn(t.name, true);
     } else {
         var on = t.on;
         // Off, with something in it on
-        if (t.partial) ui.raw("ImGui_PushItemFlag")(ui.c.ImGuiItemFlags_MixedValue, true);
+        const mixed = ui.mixedValue(t.partial);
         const clicked = ui.checkbox("##on", &on);
-        if (t.partial) ui.raw("ImGui_PopItemFlag")();
+        mixed.end();
         if (clicked) tweaks.setOn(t.name, on);
         if (t.partial) ui.tooltip("Off, but something in it is on", .{});
     }
 
     _ = ui.tableNextColumn();
-    const indent: f32 = if (nested) ui.scaled(@floatFromInt(t.depth * 16)) else 0;
+    const indent: f32 = if (nested) @floatFromInt(t.depth * 16) else 0;
     if (indent > 0) ui.indent(indent);
     defer if (indent > 0) ui.unindent(indent);
-    ui.alignTextToFramePadding();
     const has_fields = !t.is_group and t.fields.len > 0;
     var open = false;
+    const row: ui.Reorder.Item = .{ .id = e.id, .parent = e.parent, .label = t.title };
     if (t.is_group and nested) {
-        const folded = self.isFolded(t.name);
-        if (ui.smallButton(if (folded) icons.chevron_right ++ "##fold" else icons.chevron_down ++ "##fold")) self.fold(gpa, t.name);
-        ui.sameLine();
         const bold = ui.bold();
         defer bold.end();
-        ui.text("{s}", .{t.title});
+        if (ui.Outline.node(&self.reorder, withOpen(row, !e.folded), .folds)) layout.toggle(e.id);
     } else if (has_fields) {
         open = self.isOpen(openKey(t.name));
-        var toggle = ui.smallButton(if (open) icons.chevron_down ++ "##open" else icons.chevron_right ++ "##open");
-        ui.tooltip("{s}", .{if (open) "Hide its settings" else "Show its settings"});
-        ui.sameLine();
-        var buf: [128]u8 = undefined;
-        if (ui.selectable(std.fmt.bufPrintSentinel(&buf, "{s}##title", .{t.title}, 0) catch "?", false)) toggle = true;
-        if (toggle) {
+        if (ui.Outline.node(&self.reorder, withOpen(row, open), .folds)) {
             self.setOpen(gpa, openKey(t.name), !open);
             open = !open;
         }
     } else {
-        ui.text("{s}", .{t.title});
+        _ = ui.Outline.node(&self.reorder, row, .leaf);
     }
+    const inside = ui.Outline.inside();
+    defer inside.end();
     if (t.problem) |p| {
         const first = p[0 .. std.mem.indexOfScalar(u8, p, '\n') orelse p.len];
         ui.textColored(red, "{s}", .{first});
@@ -343,10 +330,10 @@ pub fn drawOnScreen(self: *TweaksWindow, shell: *Shell, interactive: bool) void 
     }
     if (n == 0) return;
 
-    const viewport = ui.raw("ImGui_GetMainViewport")();
-    ui.raw("ImGui_SetNextWindowViewport")(viewport.*.ID);
-    ui.raw("ImGui_SetNextWindowPosEx")(.{ .x = viewport.*.WorkPos.x + ui.scaled(12), .y = viewport.*.WorkPos.y + ui.scaled(40) }, ui.c.ImGuiCond_FirstUseEver, .{ .x = 0, .y = 0 });
-    ui.raw("ImGui_SetNextWindowBgAlpha")(0.6);
+    const viewport = ui.mainViewport();
+    ui.setNextWindowOnMainViewport();
+    ui.setNextWindowPos(.{ viewport.work_pos[0] + ui.scaled(12), viewport.work_pos[1] + ui.scaled(40) }, .first_use_ever, .{ 0, 0 });
+    ui.setNextWindowBgAlpha(0.6);
     const win = ui.window("Tweaks##wraith.tweaks_on_screen", .{ .flags = .{
         .no_title_bar = true,
         .always_auto_resize = true,

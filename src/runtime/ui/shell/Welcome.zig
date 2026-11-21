@@ -9,8 +9,6 @@ const Chord = @import("wraith_platform").input.Chord;
 const Overlay = @import("../Overlay.zig");
 const Dim = @import("Dim.zig");
 
-const c = ui.c;
-
 /// Showing, or fading out.
 open: bool = false,
 /// Continue was clicked, so it's on its way out.
@@ -36,12 +34,13 @@ pub fn draw(self: *Welcome, overlay: *Overlay) ?Choices {
         return null;
     }
 
-    const viewport = ui.raw("ImGui_GetMainViewport")();
-    ui.raw("ImGui_PushStyleVar")(c.ImGuiStyleVar_Alpha, fade);
-    defer ui.raw("ImGui_PopStyleVar")();
-    const centre: c.ImVec2 = .{ .x = viewport.*.Pos.x + viewport.*.Size.x / 2, .y = viewport.*.Pos.y + viewport.*.Size.y / 2 };
-    ui.raw("ImGui_SetNextWindowViewport")(viewport.*.ID);
-    ui.raw("ImGui_SetNextWindowPosEx")(centre, c.ImGuiCond_Always, .{ .x = 0.5, .y = 0.5 });
+    const viewport = ui.mainViewport();
+    const faded = ui.styleVars(.{ .alpha = fade });
+    defer faded.end();
+    // The whole viewport's middle, not just its work area's
+    const centre: ui.Vec2 = .{ viewport.pos[0] + viewport.size[0] / 2, viewport.pos[1] + viewport.size[1] / 2 };
+    ui.setNextWindowOnMainViewport();
+    ui.setNextWindowPos(centre, .always, .{ 0.5, 0.5 });
     if (!self.leaving) ui.setNextWindowFocus();
     // 0 height fits it to what's in it
     const win = ui.window("Welcome to Wraith###wraith.welcome", .{

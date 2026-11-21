@@ -158,6 +158,12 @@ fn kindOfTyped(a: std.mem.Allocator, def: Definition) error{OutOfMemory}!?Regist
         },
         .text => .{ .text = if (def.has_default) d.text else "" },
         .colour => .{ .colour = if (def.has_default) .{ d.colour.r, d.colour.g, d.colour.b, d.colour.a } else .{ 1, 1, 1, 1 } },
+        .path => .{ .path = .{
+            .default = if (def.has_default) d.text else "",
+            .file = def.file,
+            .extension = def.extension,
+            .placeholder = def.placeholder,
+        } },
         else => null,
     };
 }
@@ -169,7 +175,7 @@ pub fn get(record: *Record) TypedError!Value {
     switch (r.get(setting)) {
         .toggle => |b| out.toggle = b,
         .number => |n| out.number = n,
-        .choice, .text => |t| {
+        .choice, .text, .path => |t| {
             const copy = allocator.dupe(u8, t) catch return error.Failed;
             allocator.free(record.text);
             record.text = copy;
@@ -189,6 +195,7 @@ pub fn set(record: *Record, value: Value) TypedError!void {
         .number => .{ .number = value.number },
         .choice => .{ .choice = value.text },
         .text => .{ .text = value.text },
+        .path => .{ .path = value.text },
         .colour => .{ .colour = .{ value.colour.r, value.colour.g, value.colour.b, value.colour.a } },
         .key => return error.InvalidValue,
     };
@@ -249,6 +256,13 @@ const tests = struct {
         try mode.set(.{ .text = "slow" });
         try testing.expectEqualStrings("slow", (try mode.get()).text);
         try testing.expectError(error.InvalidValue, mode.set(.{ .text = "medium" }));
+
+        // A folder, empty till it's picked
+        const folder = try list.add(.{ .id = "folder", .kind = .path, .placeholder = "Pictures" }, null);
+        try testing.expectEqualStrings("", (try folder.get()).text);
+        try testing.expectEqualStrings("Pictures", r.find("kai.folder").?.def.kind.path.placeholder);
+        try folder.set(.{ .text = "C:\\shots" });
+        try testing.expectEqualStrings("C:\\shots", (try folder.get()).text);
 
         // Gone with the plugin, its value kept
         loaded.deinitForTest();

@@ -18,6 +18,15 @@ project_folder: []const u8 = "",
 
 tweaks: Tweaks = .{},
 
+/// How the tweak lists are laid out, by `TweakLayout`'s ids.
+tweak_layout: Layout = .{},
+
+pub const Layout = struct {
+    /// Each in the order it goes among the ones next to it.
+    order: []const u64 = &.{},
+    folded: []const u64 = &.{},
+};
+
 pub const Tweaks = struct {
     /// Which are on, by name.
     on: []const []const u8 = &.{},

@@ -17,7 +17,6 @@ const Text = @import("tuft_text").Text;
 
 const icons = @import("../fonts.zig").icons;
 const PluginLoader = @import("../../PluginLoader.zig");
-const ui_area = @import("../../host/ui_area.zig");
 const Manifest = @import("../../Manifest.zig");
 const Shell = @import("Shell.zig");
 
@@ -274,11 +273,11 @@ fn drawRow(self: *ModsWindow, shell: *Shell, row: Row) void {
     if (row.author().len > 0) ui.textDisabled("{s}  by {s}", .{ row.version(), row.author() }) else ui.textDisabled("{s}", .{row.version()});
     drawTags(row);
     // Like Dalamud's cog, right on the row
-    if (row.plugin) |p| if (p.state == .loaded and ui_area.hasSettings(row.id)) {
+    if (row.plugin) |p| if (p.state == .loaded and shell.pluginHasSettings(row.id, row.title())) {
         ui.sameLine();
         const clicked = ui.smallButton(icons.settings ++ "##settings");
         ui.tooltip("Its settings", .{});
-        if (clicked) _ = ui_area.openSettings(row.id);
+        if (clicked) shell.openPluginSettings(row.id, row.title());
     };
     if (row.summary().len > 0) ui.textWrapped("{s}", .{row.summary()});
     if (is_open) self.drawDetails(shell, row);
@@ -369,7 +368,7 @@ fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
         if (ui.button(icons.trash_2 ++ "  Uninstall")) self.startOn(shell, .remove, id);
         ui.sameLine();
     }
-    ui.raw("ImGui_NewLine")();
+    ui.newLine();
 }
 
 fn drawFooter(self: *ModsWindow, shell: *Shell, updates: usize) void {

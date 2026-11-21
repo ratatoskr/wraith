@@ -23,11 +23,11 @@ pub fn open(self: *Shortcuts) void {
 pub fn draw(self: *Shortcuts, wb: *Workbench) void {
     if (self.open_popup) {
         self.open_popup = false;
-        _ = ui.raw("ImGui_OpenPopup")(ui.str(popup), 0);
+        ui.openPopup(popup);
     }
-    ui.raw("ImGui_SetNextWindowSize")(.{ .x = ui.scaled(460), .y = 0 }, ui.c.ImGuiCond_Appearing);
-    if (!ui.raw("ImGui_BeginPopupModal")(ui.str(popup), null, 0)) return;
-    defer ui.raw("ImGui_EndPopup")();
+    ui.setNextWindowSize(.{ ui.scaled(460), 0 }, .appearing);
+    const modal = ui.modal(popup, .{ .auto_resize = false, .remember = true }) orelse return;
+    defer modal.end();
 
     const shell = wb.shell orelse {
         ui.textDisabled("No game", .{});
@@ -59,5 +59,5 @@ fn set(registry: *Registry, s: *Registry.Setting, v: Registry.Value) void {
 }
 
 fn closeButton() void {
-    if (ui.button("Close") or ui.isKeyPressed(.escape, false)) ui.raw("ImGui_CloseCurrentPopup")();
+    if (ui.button("Close") or ui.isKeyPressed(.escape, false)) ui.closePopup();
 }
