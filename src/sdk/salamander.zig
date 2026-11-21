@@ -18,6 +18,9 @@ const std = @import("std");
 
 const api = @import("wraith_api");
 pub const rt = @import("salamander_runtime");
+/// Through generated structs' pointers, like `follow(manager, "items.table.data")`. Null at a
+/// null one.
+pub const follow = rt.follow;
 
 pub const Error = error{SalamanderUnavailable};
 
