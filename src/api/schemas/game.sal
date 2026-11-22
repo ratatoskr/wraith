@@ -45,6 +45,10 @@ struct GameInfo {
     string wraith_version;
 }
 
+// Changes the game's speed a plugin's own way, like an engine's time scale. True if it did, else
+// Wraith hooks the clocks instead. Any thread, so keep it quick, and don't set the speed from it.
+fn bool SpeedHandler(f64 speed);
+
 trait Game {
     // Cheap. Taken once, it doesn't change, apart from the graphics API and window early on.
     GameInfo info();
@@ -53,8 +57,14 @@ trait Game {
     async string!GameError sha512();
     // How fast the game runs, where 1 is as it is and 2 twice as fast.
     f64 speed();
-    // Speeds up or slows down the clocks games time themselves with, like Cheat Engine's speedhack,
-    // from 0.01 to 100. Wraith and its plugins keep real time. Goes back to 1 when the plugin that
-    // set it goes. A few games keep time in ways that can't be hooked, and don't change.
+    // Speeds up or slows down the game, up to 100. A plugin that provides speed, like `unity` with
+    // Unity's time scale, gets it first. Otherwise Wraith speeds up or slows down the clocks games
+    // time themselves with, like Cheat Engine's speedhack, down to 0.01. Wraith and its plugins keep
+    // real time either way. 0 pauses, with a provider. Goes back to 1 when the plugin that set it
+    // goes. A few games keep time in ways the clocks can't change, and don't follow it.
     void!GameError setSpeed(f64 speed);
+    // For engine and game plugins: `handler` gets the speed from now on, ahead of the clocks, and
+    // straight away with what it is now. The newest provider wins. Once the plugin goes, the clocks
+    // carry on at the same speed.
+    void provideSpeed(keep SpeedHandler handler);
 }

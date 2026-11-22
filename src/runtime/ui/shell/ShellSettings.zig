@@ -13,7 +13,6 @@ const WorkbenchKeys = @import("../workbench/Settings.zig").Keys;
 const FrameStats = @import("../../FrameStats.zig");
 const Shell = @import("Shell.zig");
 const Keybinds = @import("tuft_input").Keybinds;
-const speed = @import("../../speed/root.zig");
 const game_area = @import("../../host/game_area.zig");
 const log = @import("wraith_core").log.scoped(.wraith_ui);
 
@@ -154,10 +153,10 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
     self.speed_amount = try registry.add(.{
         .id = "wraith.speed.amount",
         .name = "Speed",
-        .help = "How fast the key makes the game run. 2 is twice as fast, 0.5 half. Wraith keeps its own pace.",
+        .help = "How fast the key makes the game run. 2 is twice as fast, 0.5 half. 0 pauses in games whose plugin handles speed, like Unity's, and is as slow as it goes elsewhere. Wraith keeps its own pace.",
         .group = Settings.group,
         .section = "Game speed",
-        .kind = .{ .number = .{ .default = 2, .min = 0.1, .max = 10 } },
+        .kind = .{ .number = .{ .default = 2, .min = 0, .max = 10 } },
     }, .{ .changed = .{ .ctx = shell, .call = speedAmountChanged } });
     try added.append(shell.allocator, self.speed_amount);
     self.speed_key = try registry.add(.{
@@ -239,14 +238,14 @@ fn overlayGamepadChanged(ctx: *anyopaque, s: *Registry.Setting) void {
 fn speedKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
     if (phase != .pressed) return;
     const shell: *Shell = @ptrCast(@alignCast(ctx));
-    const to: f64 = if (speed.get() != 1) 1 else shell.registry.get(shell.own.speed_amount).number;
+    const to: f64 = if (game_area.currentSpeed() != 1) 1 else shell.registry.get(shell.own.speed_amount).number;
     setSpeed(shell, to);
 }
 
 /// Takes effect straight away if it's on.
 fn speedAmountChanged(ctx: *anyopaque, s: *Registry.Setting) void {
     const shell: *Shell = @ptrCast(@alignCast(ctx));
-    if (speed.get() == 1) return;
+    if (game_area.currentSpeed() == 1) return;
     setSpeed(shell, shell.registry.get(s).number);
 }
 
@@ -257,7 +256,8 @@ fn setSpeed(shell: *Shell, to: f64) void {
         return;
     };
     var buf: [32]u8 = undefined;
-    const text = if (to == 1) "Normal" else std.fmt.bufPrint(&buf, "{d}x", .{to}) catch "Changed";
+    const now = game_area.currentSpeed();
+    const text = if (now == 1) "Normal" else if (now == 0) "Paused" else std.fmt.bufPrint(&buf, "{d}x", .{now}) catch "Changed";
     _ = shell.overlay.host.toasts.push(.{ .kind = .info, .title = "Game speed", .text = text, .seconds = 2 });
 }
 

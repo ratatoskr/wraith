@@ -695,7 +695,7 @@ Lua 5.1's `unpack`, and every constant from CE's `defines.lua`, like `vtDword` a
 
 | Name | CE signature | Used | Status | Wraith, or why not |
 |---|---|---|---|---|
-| `speedhack_setSpeed` | `speedhack_setSpeed(speed)` | 10 (2) | implemented | `game:setSpeed`, from 0.01 to 100. Wraith and its scripts keep real time |
+| `speedhack_setSpeed` | `speedhack_setSpeed(speed)` | 10 (2) | implemented | `game:setSpeed`, through the engine's plugin where there is one, like Unity's time scale, else the clocks. Wraith and its scripts keep real time |
 | `speedhack_getSpeed` | `speedhack_getSpeed()` | 0 (0) | implemented | `game:speed()` |
 | `registerSpeedhackCallbacks` | `registerSpeedhackCallbacks()` | 0 (0) | stub (warns) | Does nothing and warns once, so the main script carries on |
 | `unregisterSpeedhackCallbacks` | `unregisterSpeedhackCallbacks(CallbackID)` | 0 (0) | stub (warns) | Does nothing and warns once, so the main script carries on |

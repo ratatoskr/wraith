@@ -26,25 +26,65 @@ const allocator = std.heap.page_allocator;
 const HashPromise = sal.Plain(Game, "sha512");
 const HashResolver = wraith.ResolverOf(HashPromise);
 
+/// The speed asked for, which `speed` gives. Under `speed_lock`, like the rest.
+var wanted: f64 = 1;
 /// Who set the speed last, so it goes back to 1 when they go. Null for the player.
 var setter: ?*Owner = null;
+/// A plugin's own way of changing the speed, asked first.
+const Provider = struct { owner: *Owner, handler: W.SpeedHandler };
+var provider: ?Provider = null;
 var speed_lock: tuft_sys.sync.RwLock = .{};
-var speed_cleanup: OnGone(.closing, speedSetterGone) = .{};
+var speed_cleanup: OnGone(.closing, speedOwnerGone) = .{};
 
-fn speedSetterGone(owner: *Owner) void {
+fn speedOwnerGone(owner: *Owner) void {
     speed_lock.lock();
     defer speed_lock.unlock();
-    if (setter != owner) return;
-    setter = null;
-    speed_.set(1) catch {};
+    var changed = false;
+    if (provider) |p| if (p.owner == owner) {
+        p.handler.release();
+        provider = null;
+        changed = true;
+    };
+    if (setter == owner) {
+        setter = null;
+        wanted = 1;
+        changed = true;
+    }
+    if (changed) apply() catch {};
+}
+
+/// The provider if it takes it, else the clocks, which can't go below their minimum. Needs `speed_lock`.
+fn apply() !void {
+    if (provider) |p| if (p.handler.invoke(.{wanted})) {
+        try speed_.set(1);
+        return;
+    };
+    wanted = @max(wanted, speed_.min);
+    try speed_.set(wanted);
+}
+
+fn setLocked(s: f64, owner: ?*Owner) !void {
+    const before = wanted;
+    wanted = std.math.clamp(s, 0, speed_.max);
+    apply() catch |err| {
+        wanted = before;
+        return err;
+    };
+    setter = owner;
 }
 
 /// For Wraith's own settings and keys, which are the player's rather than a plugin's.
 pub fn setSpeedForPlayer(s: f64) !void {
     speed_lock.lock();
     defer speed_lock.unlock();
-    try speed_.set(s);
-    setter = null;
+    try setLocked(s, null);
+}
+
+/// What it's at, as asked for.
+pub fn currentSpeed() f64 {
+    speed_lock.lockShared();
+    defer speed_lock.unlockShared();
+    return wanted;
 }
 
 pub const Impl = struct {
@@ -77,7 +117,7 @@ pub const Impl = struct {
     }
 
     pub fn speed(_: *Loaded) f64 {
-        return speed_.get();
+        return currentSpeed();
     }
 
     pub fn setSpeed(loaded: *Loaded, s: f64) sal.Plain(Game, "setSpeed") {
@@ -85,8 +125,17 @@ pub const Impl = struct {
         defer lease.end();
         speed_lock.lock();
         defer speed_lock.unlock();
-        speed_.set(s) catch return error.Failed;
-        setter = &loaded.owner;
+        setLocked(s, &loaded.owner) catch return error.Failed;
+    }
+
+    pub fn provideSpeed(loaded: *Loaded, handler: W.SpeedHandler) void {
+        const lease = speed_cleanup.lease(&loaded.owner) orelse return handler.release();
+        defer lease.end();
+        speed_lock.lock();
+        defer speed_lock.unlock();
+        if (provider) |old| old.handler.release();
+        provider = .{ .owner = &loaded.owner, .handler = handler };
+        apply() catch {};
     }
 
     pub fn sha512(loaded: *Loaded) HashPromise {
@@ -171,4 +220,53 @@ test "a plugin asks about the game" {
 
     loaded.deinitForTest();
     wraith.forget(&loaded);
+}
+
+test "a plugin that provides speed gets it first, and the clocks carry on once it's gone" {
+    const testing = std.testing;
+    const sdk = @import("wraith_sdk");
+    const tuft_hook = @import("tuft_hook");
+    try tuft_hook.init(testing.allocator);
+    defer tuft_hook.deinit();
+    defer speed_.stop();
+    var loaded: Loaded = undefined;
+    loaded.initForTest(testing.allocator, "engine");
+    sdk.Owner.attach(loaded.root());
+    defer sdk.Owner.detach();
+
+    const State = struct {
+        got: f64 = -1,
+        takes: bool = true,
+        fn handle(self: *@This(), s: f64) bool {
+            self.got = s;
+            return self.takes;
+        }
+    };
+    var state: State = .{};
+    const game = sdk.wraith.root().?.game();
+    game.provideSpeed(W.SpeedHandler.init(&state, State.handle));
+    // Told straight away
+    try testing.expectEqual(1, state.got);
+
+    // It pauses, and the clocks aren't touched
+    try game.setSpeed(0);
+    try testing.expectEqual(0, state.got);
+    try testing.expectEqual(0, game.speed());
+    try testing.expectEqual(1, speed_.get());
+
+    // One it won't do goes to the clocks
+    state.takes = false;
+    try game.setSpeed(0.5);
+    try testing.expectEqual(0.5, speed_.get());
+    state.takes = true;
+
+    // The player's speed stays once the provider's gone, on the clocks now
+    try setSpeedForPlayer(3);
+    try testing.expectEqual(3, state.got);
+    try testing.expectEqual(1, speed_.get());
+    loaded.deinitForTest();
+    wraith.forget(&loaded);
+    try testing.expectEqual(3, speed_.get());
+    try testing.expectEqual(3, currentSpeed());
+    try setSpeedForPlayer(1);
 }
