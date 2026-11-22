@@ -111,7 +111,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
 
     var manifest: Manifest = .{
         .id = id,
-        .version = "0.1.0",
+        .version = "0.0.0",
         .title = title,
         .summary = options.summary orelse try std.fmt.allocPrint(arena, "{s}, a Wraith plugin", .{title}),
         .author = if (author.len > 0) author else null,
@@ -124,7 +124,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
             .lua => "lua",
         },
         .library = options.library,
-        // Only a Zig plugin's built per arch. Scripts run in either
+        // Only a native plugin is built per arch. Scripts run in either
         .arches = if (language == .zig) if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null else null,
     };
     if (manifest.arches != null) log.printLn("It's {s}, so it builds for {t} only. Take arches out of wraith.json to build both", .{ if (target.arch.? == .x64) "64-bit" else "32-bit", target.arch.? });

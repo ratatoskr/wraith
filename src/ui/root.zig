@@ -72,6 +72,7 @@ pub const textWrapped = tuft_ui.textWrapped;
 pub const labelText = tuft_ui.labelText;
 pub const bulletText = tuft_ui.bulletText;
 pub const tooltip = tuft_ui.tooltip;
+pub const mouseTooltip = tuft_ui.mouseTooltip;
 pub const button = tuft_ui.button;
 pub const smallButton = tuft_ui.smallButton;
 pub const buttonSized = tuft_ui.buttonSized;
