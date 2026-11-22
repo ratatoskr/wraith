@@ -144,7 +144,7 @@ pub fn start(self: *PluginLoader, skip: []const []const u8) !void {
             // Something that needed it loaded it already
             error.AlreadyLoaded => {},
             // Already logged by `loadNow`
-            error.UnsupportedGame, error.UnsupportedArch, error.NeedsNewerWraith, error.Revoked, error.KindNotFound => {},
+            error.UnsupportedGame, error.UnsupportedArch, error.NeedsNewerWraith, error.Revoked, error.BuiltIntoWraith, error.KindNotFound => {},
             error.MissingDependency, error.DependencyOff, error.DependencyFailed, error.DependencyTooOld, error.DependencyCycle => {},
             else => log.err("Couldn't load plugin {s}: {t}", .{ name, err }),
         };

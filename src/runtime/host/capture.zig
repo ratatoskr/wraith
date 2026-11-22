@@ -29,6 +29,24 @@ var bus: Bus = .init(std.heap.page_allocator);
 /// Waiting requests per point, so the overlay knows what to copy.
 var wanted: [2]Atomic(u32) = @splat(.init(0));
 
+pub const Subscription = Bus.Subscription;
+
+/// For Wraith's own captures, like screenshots, which aren't a plugin's. `fire` gets every event,
+/// on the render thread.
+pub fn watch(ctx: anytype, comptime fire: fn (@TypeOf(ctx), *const Event) void) !Subscription {
+    return bus.subscribeUnscoped(ctx, fire);
+}
+
+/// Has the overlay copy the next frame at `point`, for a watcher. Take it back with `unwant` once
+/// it's `started`, or if it's not wanted after all.
+pub fn want(point: Point) void {
+    _ = wanted[@backingInt(point)].fetchAdd(1, .acq_rel);
+}
+
+pub fn unwant(point: Point) void {
+    _ = wanted[@backingInt(point)].fetchSub(1, .acq_rel);
+}
+
 /// Render thread, from the overlay.
 pub fn wants(point: Point) bool {
     return wanted[@backingInt(point)].load(.acquire) != 0;

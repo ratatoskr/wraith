@@ -380,6 +380,19 @@ pub fn reset(self: *Registry, s: *Setting) !void {
     try self.set(s, defaultOf(s.def.kind));
 }
 
+/// Moves what's saved under `from` to `to`, like when a plugin's setting becomes Wraith's own.
+/// Leaves it if `to` has one already. Call it before `to` is added.
+pub fn rename(self: *Registry, scope: Scope, from: []const u8, to: []const u8) !void {
+    self.lock.lock();
+    defer self.lock.unlock();
+    const store = &self.stores[@backingInt(scope)];
+    if (store.values.contains(to)) return;
+    const v = store.values.get(from) orelse return;
+    try self.keep(store, to, v);
+    if (store.values.fetchSwapRemove(from)) |gone| self.allocator.free(gone.key);
+    try self.save(store);
+}
+
 pub fn isDefault(self: *Registry, s: *const Setting) bool {
     return self.get(s).eql(defaultOf(s.def.kind));
 }
@@ -567,6 +580,35 @@ const tests = struct {
         const k = try r.add(.{ .id = "kai.go", .name = "Go", .group = "Kai", .scope = .game, .kind = .{ .key = .{ .default = .{ .key = .f8 } } } }, .{});
         defer r.remove(k);
         try testing.expect(r.get(k).key.?.eql(.one(.{ .key = .f9, .mods = .{ .ctrl = true } })));
+    }
+
+    test "a renamed setting keeps what was saved, unless the new one has its own" {
+        const a = testing.allocator;
+        const io = testing.io;
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(io, .{ .sub_path = "global.zon", .data = ".{ .values = .{ .{ .id = \"shot.folder\", .value = .{ .path = \"D:\\\\Shots\" } }, .{ .id = \"shot.exr\", .value = .{ .toggle = false } }, .{ .id = \"wraith.exr\", .value = .{ .toggle = true } } } }\n" });
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        defer a.free(root);
+        const global_path = try std.fs.path.join(a, &.{ root, "global.zon" });
+        defer a.free(global_path);
+        {
+            const r = try Registry.create(a, .{ .io = io, .global_path = global_path });
+            defer r.destroy();
+            try r.rename(.global, "shot.folder", "wraith.folder");
+            try r.rename(.global, "shot.exr", "wraith.exr");
+            try r.rename(.global, "shot.nothing", "wraith.nothing");
+            const folder = try r.add(.{ .id = "wraith.folder", .name = "Folder", .group = "Wraith", .kind = .{ .path = .{} } }, .{});
+            defer r.remove(folder);
+            try testing.expectEqualStrings("D:\\Shots", r.get(folder).path);
+            try testing.expectEqual(null, r.stores[0].values.get("shot.folder"));
+            try testing.expect(r.stores[0].values.get("wraith.exr").?.toggle);
+            try testing.expectEqual(null, r.stores[0].values.get("wraith.nothing"));
+        }
+        const text = try tmp.dir.readFileAlloc(io, "global.zon", a, .limited(4096));
+        defer a.free(text);
+        try testing.expect(std.mem.indexOf(u8, text, "wraith.folder") != null);
+        try testing.expect(std.mem.indexOf(u8, text, "shot.folder") == null);
     }
 
     test "saved to its scope's file, and back next time" {

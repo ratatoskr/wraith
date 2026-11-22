@@ -105,4 +105,5 @@ test {
     _ = @import("Game.zig");
     _ = @import("crash/root.zig");
     _ = @import("speed/root.zig");
+    _ = @import("Screenshot.zig");
 }

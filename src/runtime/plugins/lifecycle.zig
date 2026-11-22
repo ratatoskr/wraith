@@ -55,6 +55,7 @@ pub fn loadNow(loader: *PluginLoader, name: []const u8) !*Loaded {
             .other_arch => log.info("Not loading plugin {s}: it isn't built for {t} games", .{ known.name, Manifest.native_arch }),
             .newer_wraith => log.info("Not loading plugin {s}: it needs Wraith {s} (this is {s})", .{ known.name, known.about.wraith.get(), build_info.version }),
             .revoked => log.warn("Not loading plugin {s}: the hub pulled this version. Update or remove it", .{known.name}),
+            .built_in => log.info("Not loading plugin {s}: Wraith does this itself now, so it can go", .{known.name}),
         }
         return reason;
     }

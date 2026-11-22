@@ -199,6 +199,8 @@ pub const Support = enum {
     newer_wraith,
     /// The hub pulled the copy that's installed.
     revoked,
+    /// Wraith does what it did itself now.
+    built_in,
 
     pub fn reason(self: Support) ?anyerror {
         return switch (self) {
@@ -207,9 +209,13 @@ pub const Support = enum {
             .other_arch => error.UnsupportedArch,
             .newer_wraith => error.NeedsNewerWraith,
             .revoked => error.Revoked,
+            .built_in => error.BuiltIntoWraith,
         };
     }
 };
+
+/// Plugins Wraith took in, which would clash with it, like on the same key. Tests swap it.
+pub var built_in: []const []const u8 = &.{@import("../Screenshot.zig").old_plugin};
 
 /// Needs `op_lock` held so `known` stays put.
 pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
@@ -238,6 +244,7 @@ pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
     if (known.dir) |old| loader.allocator.free(old);
     known.dir = source_dir;
     keep_dir = true;
+    if (isListed(built_in, manifest.value.id)) return .built_in;
     if (!manifest.value.isFor(loader.here())) return .other_game;
     if (!manifest.value.builtFor(Manifest.native_arch)) return .other_arch;
     if (!manifest.value.runsOn(build_info.version)) return .newer_wraith;
@@ -398,6 +405,22 @@ const tests = struct {
         try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/fixture/" ++ registry.installed_name, .data = ".{ .id = \"fixture\", .version = \"1.0.1\", .sha256 = \"abd\" }" });
         try (try loader.load("fixture")).wait();
         try testing.expectEqual(1, loader.count());
+    }
+
+    test "a plugin Wraith took in isn't loaded" {
+        const options = @import("test_options");
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "fixture", options.fixture_plugin }} });
+        defer install.deinit();
+        const loader = &install.loader;
+        const saved_list = built_in;
+        built_in = &.{"fixture"};
+        defer built_in = saved_list;
+
+        try loader.start(&.{});
+        try testing.expectEqual(0, loader.count());
+        try testing.expectEqual(.unsupported, install.info("fixture").?.state);
+        try testing.expectError(error.BuiltIntoWraith, (try loader.load("fixture")).wait());
     }
 
     test "no manifest, no load" {

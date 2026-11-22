@@ -69,6 +69,8 @@ pub const PixelsError = tuft_image.Error;
 pub const decodePixels = tuft_image.decode;
 /// A PNG file from pixels. Free it with the same allocator.
 pub const encodePng = tuft_image.encodePng;
+/// An EXR file from a `Linear`, keeping HDR's full range. Free it with the same allocator.
+pub const encodeExr = tuft_image.encodeExr;
 /// A frame as linear light, before it's made SDR or written as HDR.
 pub const Linear = tuft_image.Linear;
 /// A capture, with its pixels as bytes, as linear light.

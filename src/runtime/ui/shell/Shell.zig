@@ -33,6 +33,7 @@ const ui_area = @import("../../host/ui_area.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
 const AboutWindow = @import("AboutWindow.zig");
 const ShellSettings = @import("ShellSettings.zig");
+const Screenshot = @import("../../Screenshot.zig");
 pub const DevPlugins = @import("DevPlugins.zig");
 pub const Registry = @import("../../settings/Registry.zig");
 const Chord = wraith_platform.input.Chord;
@@ -68,6 +69,8 @@ workbench_key: *Registry.Setting = undefined,
 dev_plugins: DevPlugins = .{},
 /// Its settings in the registry.
 own: ShellSettings = undefined,
+/// Screenshots on a key. Null without files, like in tests.
+screenshot: ?*Screenshot = null,
 /// What the overlay key brings up. Render thread.
 hub: Hub = .{},
 /// Wraith's own windows, which the bar opens. Render thread.
@@ -151,6 +154,16 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
     inline for (.{ "mods", "tweaks", "settings", "about" }) |name| try self.windows.system.add(&@field(self.windows, name));
     self.own = try ShellSettings.add(self, registry);
     errdefer self.own.remove();
+    if (options.io) |io| {
+        const shot = try allocator.create(Screenshot);
+        errdefer allocator.destroy(shot);
+        try shot.init(allocator, io, registry, &overlay.host.toasts);
+        self.screenshot = shot;
+    }
+    errdefer if (self.screenshot) |s| {
+        s.deinit();
+        allocator.destroy(s);
+    };
     self.applyFrameSettings(self.own.frameStats());
     self.applyThemeSetting();
     Workbench.keys.apply(self.own.workbenchKeys());
@@ -215,6 +228,11 @@ pub fn destroy(self: *Shell) void {
     self.registry.remove(self.overlay_key);
     self.registry.remove(self.workbench_key);
     self.own.remove();
+    // Waits for one saving
+    if (self.screenshot) |s| {
+        s.deinit();
+        self.allocator.destroy(s);
+    }
     self.clashes_told.deinit(self.allocator);
     self.welcome.deinit(self.overlay);
     self.hub.deinit(self);
