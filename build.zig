@@ -494,6 +494,7 @@ const Modules = struct {
             .{ .name = "tuft_asm", .module = tuft.module("tuft_asm") },
             .{ .name = "tuft_sys", .module = tuft.module("tuft_sys") },
             .{ .name = "tuft_image", .module = tuft.module("tuft_image") },
+            .{ .name = "tuft_math", .module = tuft.module("tuft_math") },
         }, false);
 
         const game = f.module("game", "src/game/root.zig", &.{
