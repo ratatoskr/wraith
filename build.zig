@@ -91,15 +91,24 @@ pub const Plugin = struct {
         for (picturesOf(b)) |path| b.getInstallStep().dependOn(&b.addInstallFile(b.path(path), path).step);
     }
 
-    /// `manifest` without its `devDepends`, which only mean something in your checkout.
+    /// `manifest` as it goes in a package: without its `devDepends`, which only mean something in your
+    /// checkout, and with its `descriptionFile` put in `description`.
     fn packaged(b: *std.Build, manifest: std.Build.LazyPath) std.Build.LazyPath {
         if (manifest != .src_path) return manifest;
         const sp = manifest.src_path;
         const io = b.graph.io;
-        var root = sp.owner.root.openDir(io, ".", .{}) catch return manifest;
-        defer root.close(io);
-        const text = root.readFileAlloc(io, sp.sub_path, b.allocator, .limited(1 << 20)) catch return manifest;
-        const stripped = (core_manifest.withoutDev(b.allocator, text) catch |err| std.debug.panic("invalid wraith.json: {t}", .{err})) orelse return manifest;
+        var dir = sp.owner.root.openDir(io, std.fs.path.dirname(sp.sub_path) orelse ".", .{}) catch return manifest;
+        defer dir.close(io);
+        const text = dir.readFileAlloc(io, std.fs.path.basename(sp.sub_path), b.allocator, .limited(1 << 20)) catch return manifest;
+        // Configure runs again when they change, as this reads them then
+        sp.owner.dependOnFileContents(manifest);
+        const m = core_manifest.parse(b.allocator, text, null) catch |err| std.debug.panic("invalid wraith.json: {t}", .{err});
+        if (m.descriptionFile) |file| sp.owner.dependOnFileContents(sp.owner.path(sp.owner.pathJoin(&.{ std.fs.path.dirname(sp.sub_path) orelse ".", file })));
+        const stripped = (core_manifest.packaged(b.allocator, io, dir, text) catch |err| switch (err) {
+            error.BothDescriptions => std.debug.panic("wraith.json has description and descriptionFile. Keep one", .{}),
+            error.DescriptionFile => std.debug.panic("wraith.json's descriptionFile {s} can't be read", .{m.descriptionFile.?}),
+            else => std.debug.panic("invalid wraith.json: {t}", .{err}),
+        }) orelse return manifest;
         return b.addWriteFiles().add("wraith.json", stripped);
     }
 

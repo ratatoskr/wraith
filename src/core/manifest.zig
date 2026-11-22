@@ -105,8 +105,11 @@ pub const Manifest = struct {
     library: bool = false,
     depends: []const []const u8 = &.{},
     /// For building against plugins you're working on: a name from `depends` to its folder, or
-    /// its wraith.json, relative to this one. Left out of packages, see `withoutDev`.
+    /// its wraith.json, relative to this one. Left out of packages, see `packaged`.
     devDepends: std.json.ArrayHashMap([]const u8) = .{},
+    /// A Markdown file relative to this one, instead of `description`. Packages have it put in
+    /// `description`, see `packaged`.
+    descriptionFile: ?[]const u8 = null,
 
     pub fn isFor(self: Manifest, here: Here) bool {
         if (self.game) |game| return game.matches(here);
@@ -157,6 +160,7 @@ pub const Manifest = struct {
             library: ?bool = null,
             depends: ?[]const []const u8 = null,
             devDepends: ?std.json.ArrayHashMap([]const u8) = null,
+            descriptionFile: ?[]const u8 = null,
         };
         const out: Out = .{
             .id = self.id,
@@ -181,6 +185,7 @@ pub const Manifest = struct {
             .library = if (self.library) true else null,
             .depends = list(self.depends),
             .devDepends = if (self.devDepends.map.count() > 0) self.devDepends else null,
+            .descriptionFile = text(self.descriptionFile),
         };
         try std.json.Stringify.value(out, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, w);
         try w.writeByte('\n');
@@ -258,15 +263,33 @@ pub fn validImage(path: []const u8) bool {
 
 pub const ParseError = error{ OutOfMemory, BadManifest, BadId };
 
+pub const PackageError = error{ OutOfMemory, BadManifest, BothDescriptions, DescriptionFile };
+
+/// Bytes of a description file. The hub takes up to 20000 characters.
+const description_limit = 64 << 10;
+
 /// The file as it goes in a package: without `devDepends`, which only means something in your
-/// checkout. Everything else stays, fields this doesn't know included. Null if there was none.
-pub fn withoutDev(arena: std.mem.Allocator, text: []const u8) error{ OutOfMemory, BadManifest }!?[]u8 {
+/// checkout, and with `descriptionFile`'s text as `description`. `dir` is the manifest's folder.
+/// Everything else stays, fields this doesn't know included. Null if it's already that.
+pub fn packaged(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, text: []const u8) PackageError!?[]u8 {
     var value = std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimStart(u8, text, "\xEF\xBB\xBF"), .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.BadManifest,
     };
     if (value != .object) return error.BadManifest;
-    if (!value.object.orderedRemove("devDepends")) return null;
+    var changed = value.object.orderedRemove("devDepends");
+    if (value.object.fetchOrderedRemove("descriptionFile")) |entry| {
+        if (entry.value != .string) return error.BadManifest;
+        if (value.object.contains("description")) return error.BothDescriptions;
+        const markdown = dir.readFileAlloc(io, entry.value.string, arena, .limited(description_limit)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.DescriptionFile,
+        };
+        const trimmed = std.mem.trim(u8, std.mem.trimStart(u8, markdown, "\xEF\xBB\xBF"), " \t\r\n");
+        try value.object.put(arena, "description", .{ .string = trimmed });
+        changed = true;
+    }
+    if (!changed) return null;
     var out: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(value, .{ .whitespace = .indent_2 }, &out.writer) catch return error.OutOfMemory;
     out.writer.writeByte('\n') catch return error.OutOfMemory;
@@ -466,11 +489,37 @@ test "devDepends is kept, but left out of packages" {
     try std.testing.expectEqualStrings("../../libs/freecam", m.devDepends.map.get("freecam").?);
     try std.testing.expect(std.mem.indexOf(u8, try m.toJson(a), "\"devDepends\": {") != null);
 
-    const packed_text = (try withoutDev(a, text)).?;
+    const here = std.Io.Dir.cwd();
+    const packed_text = (try packaged(a, std.testing.io, here, text)).?;
     try std.testing.expect(std.mem.indexOf(u8, packed_text, "devDepends") == null);
     try std.testing.expect(std.mem.indexOf(u8, packed_text, "from_the_future") != null);
     try std.testing.expectEqualStrings("freecam", (try parse(a, packed_text, null)).depends[0]);
-    try std.testing.expectEqual(null, try withoutDev(a, packed_text));
+    try std.testing.expectEqual(null, try packaged(a, std.testing.io, here, packed_text));
+}
+
+test "a description file goes into packages as the description" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "about.md", .data = "\xEF\xBB\xBF# Camera\n\nFlies.\n\n" });
+
+    const text =
+        \\{ "id": "camera", "descriptionFile": "about.md" }
+    ;
+    try std.testing.expectEqualStrings("about.md", (try parse(a, text, null)).descriptionFile.?);
+    const m = try parse(a, (try packaged(a, io, tmp.dir, text)).?, null);
+    try std.testing.expectEqualStrings("# Camera\n\nFlies.", m.description.?);
+    try std.testing.expectEqual(null, m.descriptionFile);
+
+    try std.testing.expectError(error.BothDescriptions, packaged(a, io, tmp.dir,
+        \\{ "id": "camera", "description": "Flies", "descriptionFile": "about.md" }
+    ));
+    try std.testing.expectError(error.DescriptionFile, packaged(a, io, tmp.dir,
+        \\{ "id": "camera", "descriptionFile": "gone.md" }
+    ));
 }
 
 test "version comparing" {
