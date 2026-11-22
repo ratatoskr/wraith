@@ -72,7 +72,7 @@ pub fn find(arena: std.mem.Allocator, io: std.Io, places: Places, list: Listed, 
 }
 
 /// The folder a `devDepends` path means, which can name its wraith.json.
-fn devFolder(arena: std.mem.Allocator, root: []const u8, path: []const u8) ![]const u8 {
+pub fn devFolder(arena: std.mem.Allocator, root: []const u8, path: []const u8) ![]const u8 {
     const folder = if (std.ascii.eqlIgnoreCase(std.fs.path.basename(path), manifest.file_name)) std.fs.path.dirname(path) orelse "." else path;
     return std.fs.path.resolve(arena, &.{ root, folder });
 }

@@ -10,7 +10,8 @@ const log = core.log.scoped(.wraith_cli);
 
 pub const usage =
     \\  dev list                             plugins you're building: the folders Wraith loads them
-    \\                                       from, besides the installed ones
+    \\                                       from, besides the installed ones, and the builds of what
+    \\                                       their devDepends name, which load from there too
     \\  dev add <folder>                     load the plugin in <folder>, a build's output with its
     \\                                       wraith.json (zig-out\plugins\kai, dist)
     \\  dev rm <folder>                      stop loading it from there
@@ -32,6 +33,8 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
                 log.printLn("{s}  {s}", .{ name, f });
             } else |err| log.printLn("?  {s}  ({s})", .{ f, problem(err) });
         }
+        const followed = core.dev_plugins.followed(arena, io, folders) catch &.{};
+        for (followed) |f| log.printLn("{s}  {s}  (devDepends of {s})", .{ f.name, f.dir, f.by });
         return 0;
     }
 

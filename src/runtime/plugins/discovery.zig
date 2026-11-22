@@ -65,6 +65,19 @@ fn findDev(loader: *PluginLoader) !void {
         errdefer loader.allocator.free(owned_name);
         loader.dev.appendAssumeCapacity(.{ .name = owned_name, .dir = try loader.allocator.dupe(u8, folder) });
     }
+    // What they're built against with devDepends, so those don't need adding too
+    const extra = core.dev_plugins.followed(arena.allocator(), loader.io, folders) catch |err| {
+        log.warn("Couldn't follow the dev plugins' devDepends: {t}", .{err});
+        return;
+    };
+    for (extra) |f| {
+        if (devDir(loader, f.name) != null) continue;
+        log.info("Dev plugin {s} is {s}'s devDepends", .{ f.name, f.by });
+        try loader.dev.ensureUnusedCapacity(loader.allocator, 1);
+        const owned_name = try loader.allocator.dupe(u8, f.name);
+        errdefer loader.allocator.free(owned_name);
+        loader.dev.appendAssumeCapacity(.{ .name = owned_name, .dir = try loader.allocator.dupe(u8, f.dir) });
+    }
 }
 
 fn devDir(loader: *const PluginLoader, name: []const u8) ?[]const u8 {
