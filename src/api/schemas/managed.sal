@@ -110,6 +110,13 @@ trait Managed {
     // methods need. Anywhere else it runs on Wraith's own thread. If it throws, it fails with
     // `Threw`, saying what. Structs come back as their boxed object.
     ManagedValue!ManagedError invoke(string class_name, string method, usize target, []ManagedValue args);
+    // Keeps the C# object at `object` from being collected till `release`. The garbage collector
+    // doesn't see what a plugin keeps in its own memory, so hold anything kept past the call it came
+    // from, like Unity objects kept between frames. Any thread, straight away. They're released
+    // when the plugin goes.
+    u32!ManagedError hold(usize object);
+    // Lets go of a `hold`. Fine to call twice.
+    void release(u32 handle);
     // The full name of the class of the object at `object`
     string!ManagedError classOf(usize object);
     // The `System.String` at `address`, as UTF-8

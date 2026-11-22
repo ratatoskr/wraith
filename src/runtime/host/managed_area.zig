@@ -8,6 +8,9 @@ const api = @import("wraith_api");
 const mem = @import("tuft_mem");
 
 const ManagedRuntime = @import("../Managed.zig");
+const Owner = @import("tuft_event").Owner;
+const RwLock = @import("tuft_sys").sync.RwLock;
+const OnGone = @import("Owned.zig").OnGone;
 const scratch = @import("scratch.zig");
 const wraith = @import("wraith.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
@@ -25,6 +28,22 @@ pub const Managed = W.Managed;
 
 fn global() *ManagedRuntime {
     return &ManagedRuntime.global;
+}
+
+/// Handles from `hold`, and whose they are, so they're released when their plugin goes.
+var held_lock: RwLock = .{};
+var held: std.AutoHashMapUnmanaged(u32, *Owner) = .empty;
+var held_cleanup: OnGone(.closing, heldGone) = .{};
+
+fn heldGone(owner: *Owner) void {
+    held_lock.lock();
+    defer held_lock.unlock();
+    const g = global();
+    var it = held.iterator();
+    while (it.next()) |kv| if (kv.value_ptr.* == owner) {
+        if (g.running()) g.rt.freeHandle(kv.key_ptr.*);
+        held.removeByPtr(kv.key_ptr);
+    };
 }
 
 /// Runs `func` on the attached thread, which fails the same way as it not running.
@@ -123,6 +142,33 @@ pub const Impl = struct {
             .value => |v| v,
             .threw => |why| sal.host().explain(error.Threw, "{s}", .{why}),
         };
+    }
+
+    pub fn hold(loaded: *Loaded, object: usize) sal.Plain(Managed, "hold") {
+        if (object == 0) return error.NotFound;
+        const g = global();
+        if (!g.running()) return error.NotRunning;
+        const lease = held_cleanup.lease(&loaded.owner) orelse return error.Failed;
+        defer lease.end();
+        const handle = g.rt.newHandle(@ptrFromInt(object), false);
+        if (handle == 0) return error.Failed;
+        held_lock.lock();
+        defer held_lock.unlock();
+        held.put(std.heap.smp_allocator, handle, &loaded.owner) catch {
+            g.rt.freeHandle(handle);
+            return error.Failed;
+        };
+        return handle;
+    }
+
+    pub fn release(loaded: *Loaded, handle: u32) void {
+        held_lock.lock();
+        defer held_lock.unlock();
+        const owner = held.get(handle) orelse return;
+        // Only its own
+        if (owner != &loaded.owner) return;
+        _ = held.remove(handle);
+        global().rt.freeHandle(handle);
     }
 
     pub fn classOf(_: *Loaded, object: usize) sal.Plain(Managed, "classOf") {
@@ -593,6 +639,14 @@ test "a real game's C#, through the API" {
     }.f, .{});
     try testing.expectEqualStrings("System.String", try m.classOf(made));
     try testing.expectEqualStrings("Velvet ✦", try m.readString(made));
+
+    // Held past where it came from, and let go, which is fine twice
+    const handle = try m.hold(made);
+    try testing.expect(handle != 0);
+    try testing.expectEqualStrings("Velvet ✦", try m.readString(made));
+    m.release(handle);
+    m.release(handle);
+    try testing.expectError(error.NotFound, m.hold(0));
 
     // Calling C#, picking the overload that fits
     const parsed = try m.invoke("System.Int32", "Parse", 0, &.{.{ .kind = .text, .text = "42" }});

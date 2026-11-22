@@ -62,13 +62,16 @@ pub fn FnHook(comptime T: type) type {
         pub const Original = *const meta.FnType(T);
 
         object: HookObject,
+        /// Kept from when it was made, since asking the hook stops working once the plugin's
+        /// going, while a game thread can still be in the detour.
+        original_address: usize = 0,
 
         pub const enable = Common(Self).enable;
         pub const disable = Common(Self).disable;
         pub const destroy = Common(Self).destroy;
 
         pub fn original(self: Self) Original {
-            return @ptrFromInt(self.object.original());
+            return @ptrFromInt(if (self.original_address != 0) self.original_address else self.object.original());
         }
     };
 }
@@ -123,12 +126,14 @@ pub fn createFn(comptime T: type, target: anytype, comptime callback: anytype, c
 
 pub fn createFnWith(comptime T: type, target: anytype, comptime callback: anytype, context: anytype, options: Options) !FnHook(T) {
     const Bridge = FnBridge(T, callback, @TypeOf(context));
-    return .{ .object = try native(false, try Address.from(target).unwrap(), @intFromPtr(&Bridge.detour), meta.addressFromAny(context), options) };
+    const h = try native(false, try Address.from(target).unwrap(), @intFromPtr(&Bridge.detour), meta.addressFromAny(context), options);
+    return .{ .object = h, .original_address = h.original() };
 }
 
 pub fn createSlot(comptime T: type, slot: anytype, comptime callback: anytype, context: anytype) !FnHook(T) {
     const Bridge = FnBridge(T, callback, @TypeOf(context));
-    return .{ .object = try native(true, try Address.from(slot).unwrap(), @intFromPtr(&Bridge.detour), meta.addressFromAny(context), .{}) };
+    const h = try native(true, try Address.from(slot).unwrap(), @intFromPtr(&Bridge.detour), meta.addressFromAny(context), .{});
+    return .{ .object = h, .original_address = h.original() };
 }
 
 fn native(slot: bool, target: usize, detour: usize, context: usize, options: Options) Error!HookObject {
@@ -189,9 +194,9 @@ fn CallbackArgs(comptime callback: anytype) type {
     return std.meta.ArgsTuple(meta.FnType(@TypeOf(callback)));
 }
 
-inline fn inject(comptime P: type, comptime Context: type, comptime Handle: type, hook: usize, user_data: usize) P {
-    if (comptime hasContext(Context) and P == Context) return @ptrFromInt(user_data);
-    if (P == Handle) return .{ .object = .{ .data = hook, .table = hook_table } };
+inline fn inject(comptime P: type, comptime Context: type, comptime Handle: type, call: HookCall) P {
+    if (comptime hasContext(Context) and P == Context) return @ptrFromInt(call.context);
+    if (P == Handle) return .{ .object = .{ .data = call.hook, .table = hook_table }, .original_address = call.original };
     @compileError("Callback parameter of type '" ++ @typeName(P) ++ "' can't be injected; expected " ++ @typeName(Handle) ++
         (if (hasContext(Context)) " or the context type '" ++ @typeName(Context) ++ "'" else " (no context was provided)"));
 }
@@ -219,7 +224,7 @@ fn FnBridge(comptime T: type, comptime callback: anytype, comptime Context: type
             defer leave(call.hook);
 
             var cb_args: CallbackArgs(callback) = undefined;
-            inline for (0..extra) |i| cb_args[i] = inject(cb_params[i].?, Context, FnHook(T), call.hook, call.context);
+            inline for (0..extra) |i| cb_args[i] = inject(cb_params[i].?, Context, FnHook(T), call);
             inline for (0..params.len) |i| cb_args[extra + i] = args[i];
             return @call(.auto, callback, cb_args);
         }
