@@ -54,7 +54,7 @@
         .frame_bg_active = .{ 0.345, 0.357, 0.439, 0.90 }, // Surface2
 
         .title_bg = .{ 0.094, 0.094, 0.145, 1.00 }, // Mantle
-        .title_bg_active = .{ 0.094, 0.094, 0.145, 1.00 },
+        .title_bg_active = .{ 0.235, 0.205, 0.310, 1.00 }, // Mantle + Mauve
         .title_bg_collapsed = .{ 0.067, 0.067, 0.106, 1.00 },
 
         .scrollbar_bg = .{ 0.000, 0.000, 0.000, 0.00 },
