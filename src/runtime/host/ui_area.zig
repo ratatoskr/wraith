@@ -273,6 +273,15 @@ pub const UiImpl = struct {
         return host.ui.inputTaken(loaded, deviceOf(device) orelse return false);
     }
 
+    pub fn holdMouse(loaded: *Loaded, hold: bool) void {
+        host.ui.holdMouse(loaded, hold);
+    }
+
+    pub fn mouseMotion(_: *Loaded) W.Point {
+        const p = host.ui.mouseMotion();
+        return .{ .x = p.x, .y = p.y };
+    }
+
     pub fn imguiProc(_: *Loaded, name: []const u8) usize {
         return @intFromPtr(host.ui.getProc(name));
     }

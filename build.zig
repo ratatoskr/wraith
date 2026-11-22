@@ -5,6 +5,9 @@ const Salamander = @import("salamander");
 const Import = std.Build.Module.Import;
 
 const proxy_info = @import("src/proxy/info.zig");
+const core_deps = @import("src/core/deps.zig");
+const core_manifest = @import("src/core/manifest.zig");
+const Locations = @import("src/core/Locations.zig");
 
 const wraith_build = @This();
 
@@ -78,7 +81,7 @@ pub const Plugin = struct {
             .dest_dir = .{ .override = .prefix },
             .implib_dir = .disabled,
         }).step);
-        b.getInstallStep().dependOn(&b.addInstallFile(self.manifest, "wraith.json").step);
+        b.getInstallStep().dependOn(&b.addInstallFile(packaged(b, self.manifest), "wraith.json").step);
         if (self.schemas) |dir| b.getInstallStep().dependOn(&b.addInstallDirectory(.{
             .source_dir = dir,
             .install_dir = .prefix,
@@ -86,6 +89,18 @@ pub const Plugin = struct {
             .include_extensions = &.{".sal"},
         }).step);
         for (picturesOf(b)) |path| b.getInstallStep().dependOn(&b.addInstallFile(b.path(path), path).step);
+    }
+
+    /// `manifest` without its `devDepends`, which only mean something in your checkout.
+    fn packaged(b: *std.Build, manifest: std.Build.LazyPath) std.Build.LazyPath {
+        if (manifest != .src_path) return manifest;
+        const sp = manifest.src_path;
+        const io = b.graph.io;
+        var root = sp.owner.root.openDir(io, ".", .{}) catch return manifest;
+        defer root.close(io);
+        const text = root.readFileAlloc(io, sp.sub_path, b.allocator, .limited(1 << 20)) catch return manifest;
+        const stripped = (core_manifest.withoutDev(b.allocator, text) catch |err| std.debug.panic("invalid wraith.json: {t}", .{err})) orelse return manifest;
+        return b.addWriteFiles().add("wraith.json", stripped);
     }
 
     /// The icon and images its wraith.json names, beside it, so they're in the package for the hub.
@@ -105,32 +120,43 @@ pub const Plugin = struct {
         return out.items;
     }
 
-    /// The plugins its wraith.json depends on, each a package in build.zig.zon by the same name, like
-    /// `zig fetch --save=freecam https://dist.wraith.io/hub/p/freecam/1.2.0.zip`, or a path to it.
-    /// Their schemas go in its `schema` import.
+    /// The plugins its wraith.json depends on, found like `wraith sdk deps` finds them: in its
+    /// `devDepends`, as a package by that name in build.zig.zon, next to it, installed, or the
+    /// hub's copy that `wraith sdk deps` downloaded. Their schemas go in its `schema` import.
     fn dependsOf(b: *std.Build) []const Salamander.ZigOptions.With {
         const io = b.graph.io;
-        var root = b.root.openDir(io, ".", .{}) catch return &.{};
-        defer root.close(io);
-        const source = root.readFileAlloc(io, "wraith.json", b.allocator, .limited(64 << 10)) catch return &.{};
-        const manifest = std.json.parseFromSliceLeaky(struct {
-            depends: []const []const u8 = &.{},
-        }, b.allocator, source, .{ .ignore_unknown_fields = true }) catch |err| std.debug.panic("invalid wraith.json: {t}", .{err});
+        const root = b.root.joinString(b.allocator, ".") catch @panic("OOM");
+        const list = core_deps.listed(b.allocator, io, root) catch |err| std.debug.panic("invalid wraith.json: {t}", .{err});
+        const env = &b.graph.environ_map;
+        const locations: ?Locations = Locations.init(b.allocator, .{ .root_override = env.get("WRAITH_ROOT"), .local_app_data = env.get("LOCALAPPDATA") }) catch null;
+        const places: core_deps.Places = .{
+            .root = root,
+            .mods = if (locations) |l| l.mods else null,
+            .cache = if (locations) |l| std.fs.path.join(b.allocator, &.{ l.root, "cache", "deps" }) catch @panic("OOM") else null,
+        };
         var out: std.ArrayList(Salamander.ZigOptions.With) = .empty;
-        for (manifest.depends) |text| {
-            const name = if (std.mem.indexOfScalar(u8, text, '@')) |at| text[0..at] else text;
-            const listed = for (b.available_deps) |d| {
-                if (std.mem.eql(u8, d[0], name)) break true;
+        for (list.depends) |dep| {
+            const pinned = !list.paths.map.contains(dep.name) and for (b.available_deps) |d| {
+                if (std.mem.eql(u8, d[0], dep.name)) break true;
             } else false;
-            if (!listed) std.debug.panic(
-                \\wraith.json depends on {s}, but build.zig.zon doesn't have it. Add it with
-                \\  zig fetch --save={s} https://dist.wraith.io/hub/p/{s}/<version>.zip
-                \\or `.{s} = .{{ .path = "../{s}" }}` for one next to this.
-            , .{ name, name, name, name, name });
-            const dep = b.dependency(name, .{});
-            var dir = dep.builder.root.openDir(io, "schemas", .{}) catch continue;
+            if (pinned) {
+                const pkg = b.dependency(dep.name, .{});
+                var dir = pkg.builder.root.openDir(io, "schemas", .{}) catch continue;
+                dir.close(io);
+                out.append(b.allocator, .{ .name = dep.name, .folder = pkg.path("schemas") }) catch @panic("OOM");
+                continue;
+            }
+            const found = (core_deps.find(b.allocator, io, places, list, dep) catch @panic("OOM")) orelse std.debug.panic(
+                \\wraith.json depends on {s}{s}{s}, but there's no copy that'll do. For one you're working on, point
+                \\  "devDepends": {{ "{s}": "../{s}" }}
+                \\at its folder. Otherwise `wraith sdk deps` downloads it from the hub.
+            , .{ dep.name, if (dep.min != null) " " else "", dep.min orelse "", dep.name, dep.name });
+            // Configure runs again when it changes, like a new version
+            b.dependOnFileContents(.{ .cwd_relative = std.fs.path.join(b.allocator, &.{ found.dir, "wraith.json" }) catch @panic("OOM") });
+            const schemas = std.fs.path.join(b.allocator, &.{ found.dir, "schemas" }) catch @panic("OOM");
+            var dir = std.Io.Dir.cwd().openDir(io, schemas, .{}) catch continue;
             dir.close(io);
-            out.append(b.allocator, .{ .name = name, .folder = dep.path("schemas") }) catch @panic("OOM");
+            out.append(b.allocator, .{ .name = dep.name, .folder = .{ .cwd_relative = schemas } }) catch @panic("OOM");
         }
         return out.items;
     }

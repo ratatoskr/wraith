@@ -104,6 +104,9 @@ pub const Manifest = struct {
     autoLoad: bool = true,
     library: bool = false,
     depends: []const []const u8 = &.{},
+    /// For building against plugins you're working on: a name from `depends` to its folder, or
+    /// its wraith.json, relative to this one. Left out of packages, see `withoutDev`.
+    devDepends: std.json.ArrayHashMap([]const u8) = .{},
 
     pub fn isFor(self: Manifest, here: Here) bool {
         if (self.game) |game| return game.matches(here);
@@ -153,6 +156,7 @@ pub const Manifest = struct {
             autoLoad: ?bool = null,
             library: ?bool = null,
             depends: ?[]const []const u8 = null,
+            devDepends: ?std.json.ArrayHashMap([]const u8) = null,
         };
         const out: Out = .{
             .id = self.id,
@@ -176,6 +180,7 @@ pub const Manifest = struct {
             .autoLoad = if (self.autoLoad) null else false,
             .library = if (self.library) true else null,
             .depends = list(self.depends),
+            .devDepends = if (self.devDepends.map.count() > 0) self.devDepends else null,
         };
         try std.json.Stringify.value(out, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, w);
         try w.writeByte('\n');
@@ -252,6 +257,21 @@ pub fn validImage(path: []const u8) bool {
 }
 
 pub const ParseError = error{ OutOfMemory, BadManifest, BadId };
+
+/// The file as it goes in a package: without `devDepends`, which only means something in your
+/// checkout. Everything else stays, fields this doesn't know included. Null if there was none.
+pub fn withoutDev(arena: std.mem.Allocator, text: []const u8) error{ OutOfMemory, BadManifest }!?[]u8 {
+    var value = std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimStart(u8, text, "\xEF\xBB\xBF"), .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.BadManifest,
+    };
+    if (value != .object) return error.BadManifest;
+    if (!value.object.orderedRemove("devDepends")) return null;
+    var out: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(value, .{ .whitespace = .indent_2 }, &out.writer) catch return error.OutOfMemory;
+    out.writer.writeByte('\n') catch return error.OutOfMemory;
+    return out.written();
+}
 
 /// Unknown fields are skipped, so newer manifests still load. The hub checks the rest.
 pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: ?*[]const u8) ParseError!Manifest {
@@ -433,6 +453,24 @@ test "dependencies" {
     try std.testing.expect(min.fits("1.2.0") and min.fits("1.10.0"));
     try std.testing.expect(!min.fits("1.1.9"));
     try std.testing.expect(min.fits(""));
+}
+
+test "devDepends is kept, but left out of packages" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const text =
+        \\{ "id": "kai", "depends": ["freecam"], "devDepends": { "freecam": "../../libs/freecam" }, "from_the_future": [1] }
+    ;
+    const m = try parse(a, text, null);
+    try std.testing.expectEqualStrings("../../libs/freecam", m.devDepends.map.get("freecam").?);
+    try std.testing.expect(std.mem.indexOf(u8, try m.toJson(a), "\"devDepends\": {") != null);
+
+    const packed_text = (try withoutDev(a, text)).?;
+    try std.testing.expect(std.mem.indexOf(u8, packed_text, "devDepends") == null);
+    try std.testing.expect(std.mem.indexOf(u8, packed_text, "from_the_future") != null);
+    try std.testing.expectEqualStrings("freecam", (try parse(a, packed_text, null)).depends[0]);
+    try std.testing.expectEqual(null, try withoutDev(a, packed_text));
 }
 
 test "version comparing" {

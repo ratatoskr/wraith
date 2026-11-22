@@ -20,6 +20,7 @@ pub const manifest = @import("manifest.zig");
 pub const Manifest = manifest.Manifest;
 pub const Locations = @import("Locations.zig");
 pub const dev_plugins = @import("dev_plugins.zig");
+pub const deps = @import("deps.zig");
 pub const timing = @import("timing.zig");
 pub const heap = @import("heap.zig");
 

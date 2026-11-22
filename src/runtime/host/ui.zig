@@ -190,6 +190,20 @@ pub fn takeInput(loaded: *Loaded, device: api.InputDevice, take: bool) void {
     if (r.takes.getPtr(device).swap(take, .acq_rel) != take) o.take(deviceOf(device), take);
 }
 
+pub fn holdMouse(loaded: *Loaded, hold: bool) void {
+    const o = overlay orelse return;
+    const lease = requests.lease(&loaded.owner) orelse return;
+    defer lease.end();
+    const r = Requests.of(loaded) orelse return;
+    if (r.holds_mouse.swap(hold, .acq_rel) != hold) o.holdMouse(hold);
+}
+
+/// Render thread.
+pub fn mouseMotion() @import("tuft_input").Point {
+    const o = overlay orelse return .{ .x = 0, .y = 0 };
+    return o.mouseMotion();
+}
+
 pub fn toast(loaded: *Loaded, t: api.Toast) api.ToastId {
     const o = overlay orelse return 0;
     return o.host.toasts.push(toTuft(loaded, t));
@@ -244,6 +258,7 @@ fn toTuft(loaded: *Loaded, t: api.Toast) ui.Toasts.Toast {
 const Requests = struct {
     loaded: *Loaded,
     shows_cursor: Atomic(bool) = .init(false),
+    holds_mouse: Atomic(bool) = .init(false),
     takes: std.EnumArray(api.InputDevice, Atomic(bool)) = .initFill(.init(false)),
 
     fn of(loaded: *Loaded) ?*Requests {
@@ -265,6 +280,9 @@ const Requests = struct {
         }
         if (self.shows_cursor.swap(false, .acq_rel)) {
             if (overlay) |o| o.requestCursor(false);
+        }
+        if (self.holds_mouse.swap(false, .acq_rel)) {
+            if (overlay) |o| o.holdMouse(false);
         }
         for (std.enums.values(api.InputDevice)) |device| {
             if (self.takes.getPtr(device).swap(false, .acq_rel)) {
@@ -480,6 +498,7 @@ const tests = struct {
         try testing.expectEqual(.visible, rig.overlay.cursor_hint.load(.acquire));
         try testing.expectEqual(1, rig.overlay.cursor_requests.load(.acquire)); // per plugin
         for (std.enums.values(Overlay.Device)) |device| try testing.expectEqual(1, rig.overlay.takes.getPtrConst(device).load(.acquire));
+        try testing.expectEqual(1, rig.overlay.holds.load(.acquire)); // per plugin too
 
         for (0..3) |_| rig.present();
         try testing.expectEqual(3, try drawsOf(loaded));
@@ -498,6 +517,7 @@ const tests = struct {
         try testing.expectEqual(.auto, rig.overlay.cursor_hint.load(.acquire));
         try testing.expectEqual(0, rig.overlay.cursor_requests.load(.acquire));
         for (std.enums.values(Overlay.Device)) |device| try testing.expectEqual(0, rig.overlay.takes.getPtrConst(device).load(.acquire));
+        try testing.expectEqual(0, rig.overlay.holds.load(.acquire));
     }
 };
 

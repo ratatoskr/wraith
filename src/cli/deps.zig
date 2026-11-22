@@ -1,6 +1,5 @@
-//! Finds the plugins a plugin depends on, for its typings and its editor. Each is the first of: one of
-//! your dev plugins, a folder by its name next to this one, the installed one, or else the hub's,
-//! downloaded into the cache. Only versions its `depends` allows count.
+//! Finds the plugins a plugin depends on, for its typings and its editor, as `core.deps` does, or
+//! else downloads the hub's into the cache.
 
 const std = @import("std");
 
@@ -14,27 +13,16 @@ const mods = @import("mods.zig");
 const log = core.log.scoped(.wraith_cli);
 const manifest = core.manifest;
 
-pub const From = enum { dev, beside, installed, hub };
+pub const From = core.deps.From;
+pub const Found = core.deps.Found;
+pub const Listed = core.deps.Listed;
 
-pub const Found = struct {
-    name: []const u8,
-    /// Its folder, with its wraith.json and schemas.
-    dir: []const u8,
-    from: From,
-    version: []const u8,
-};
-
-/// What `wraith.json` here depends on, by name. None without one.
-pub fn listed(arena: std.mem.Allocator, io: std.Io) ![]const manifest.Dependency {
-    const text = std.Io.Dir.cwd().readFileAlloc(io, manifest.file_name, arena, .limited(1 << 20)) catch |err| switch (err) {
-        error.FileNotFound => return &.{},
-        else => return err,
+/// What `wraith.json` here depends on. Nothing without one.
+pub fn listed(arena: std.mem.Allocator, io: std.Io) !Listed {
+    return core.deps.listed(arena, io, ".") catch |err| switch (err) {
+        error.BadManifest => .{},
+        else => err,
     };
-    const M = struct { depends: []const []const u8 = &.{} };
-    const m = std.json.parseFromSliceLeaky(M, arena, text, .{ .ignore_unknown_fields = true }) catch return &.{};
-    const out = try arena.alloc(manifest.Dependency, m.depends.len);
-    for (m.depends, out) |d, *o| o.* = .parse(d);
-    return out;
 }
 
 /// Where to look, and the hub to download from. Null doesn't download.
@@ -43,10 +31,12 @@ pub const Where = struct {
     cache: []const u8,
     dev: []const []const u8 = &.{},
     hub: ?registry.Source = null,
+    /// The plugin's folder
+    root: []const u8 = ".",
 };
 
-/// Each of `depends`, or a warning for one that can't be had. `hub` says whether to download.
-pub fn resolve(ctx: ops.Context, arena: std.mem.Allocator, depends: []const manifest.Dependency, hub: bool) ![]const Found {
+/// Each of `list`, or a warning for one that can't be had. `hub` says whether to download.
+pub fn resolve(ctx: ops.Context, arena: std.mem.Allocator, list: Listed, hub: bool) ![]const Found {
     const locations = try ops.locations(arena);
     const dev_file = try core.dev_plugins.pathAlloc(arena, locations);
     return resolveIn(arena, ctx.io, .{
@@ -54,16 +44,16 @@ pub fn resolve(ctx: ops.Context, arena: std.mem.Allocator, depends: []const mani
         .cache = try std.fs.path.join(arena, &.{ locations.root, "cache", "deps" }),
         .dev = core.dev_plugins.load(arena, ctx.io, dev_file) catch &.{},
         .hub = if (hub) (try mods.setup(ctx, arena)).source else null,
-    }, depends);
+    }, list);
 }
 
-pub fn resolveIn(arena: std.mem.Allocator, io: std.Io, where: Where, depends: []const manifest.Dependency) ![]const Found {
+pub fn resolveIn(arena: std.mem.Allocator, io: std.Io, where: Where, list: Listed) ![]const Found {
     var out: std.ArrayList(Found) = .empty;
-    for (depends) |dep| {
-        if (try find(arena, io, where, dep)) |f| {
+    for (list.depends) |dep| {
+        if (try find(arena, io, where, list, dep)) |f| {
             try out.append(arena, f);
         } else {
-            log.warn("Couldn't find {s}{s}{s} as a dev plugin, next to this one, installed{s}", .{
+            log.warn("Couldn't find {s}{s}{s} in devDepends, as a dev plugin, next to this one, installed{s}", .{
                 dep.name,
                 if (dep.min != null) " " else "",
                 dep.min orelse "",
@@ -74,19 +64,10 @@ pub fn resolveIn(arena: std.mem.Allocator, io: std.Io, where: Where, depends: []
     return out.items;
 }
 
-fn find(arena: std.mem.Allocator, io: std.Io, where: Where, dep: manifest.Dependency) !?Found {
-    for (where.dev) |folder| {
-        const id = core.dev_plugins.nameOf(arena, io, folder) catch continue;
-        if (!std.ascii.eqlIgnoreCase(id, dep.name)) continue;
-        if (try fitting(arena, io, folder, dep, .dev)) |f| return f;
-    }
-    const beside = try std.fs.path.join(arena, &.{ "..", dep.name });
-    if (try fitting(arena, io, beside, dep, .beside)) |f| return f;
-    const installed = try std.fs.path.join(arena, &.{ where.mods, dep.name });
-    if (try fitting(arena, io, installed, dep, .installed)) |f| return f;
-
-    const cached = try std.fs.path.join(arena, &.{ where.cache, dep.name });
-    if (try fitting(arena, io, cached, dep, .hub)) |f| return f;
+fn find(arena: std.mem.Allocator, io: std.Io, where: Where, list: Listed, dep: manifest.Dependency) !?Found {
+    const cache = try std.fs.path.join(arena, &.{ where.cache, dep.name });
+    const places: core.deps.Places = .{ .root = where.root, .dev = where.dev, .mods = where.mods, .cache = where.cache };
+    if (try core.deps.find(arena, io, places, list, dep)) |f| return f;
     const source = where.hub orelse return null;
 
     const pkg = (registry.package(arena, io, source, dep.name) catch |err| {
@@ -100,19 +81,7 @@ fn find(arena: std.mem.Allocator, io: std.Io, where: Where, dep: manifest.Depend
         log.warn("Couldn't download {s}: {t}", .{ dep.name, err });
         return null;
     };
-    return fitting(arena, io, cached, dep, .hub);
-}
-
-/// `dir` if it's the plugin and its version will do.
-fn fitting(arena: std.mem.Allocator, io: std.Io, dir: []const u8, dep: manifest.Dependency, from: From) !?Found {
-    const path = try std.fs.path.join(arena, &.{ dir, manifest.file_name });
-    const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch return null;
-    const M = struct { id: []const u8 = "", version: []const u8 = "" };
-    const m = std.json.parseFromSliceLeaky(M, arena, text, .{ .ignore_unknown_fields = true }) catch return null;
-    if (!std.ascii.eqlIgnoreCase(m.id, dep.name)) return null;
-    // A dev build's version is whatever it says, so only released ones get checked
-    if (from != .dev and !dep.fits(m.version)) return null;
-    return .{ .name = dep.name, .dir = dir, .from = from, .version = m.version };
+    return core.deps.fitting(arena, io, cache, dep, .hub);
 }
 
 test "downloads from the hub once, then uses the cache" {
@@ -147,7 +116,7 @@ test "downloads from the hub once, then uses the cache" {
         .cache = try std.fs.path.join(a, &.{ root, "deps" }),
         .hub = .{ .location = try std.fs.path.join(a, &.{ root, "site" }), .key = &key, .cache_dir = try std.fs.path.join(a, &.{ root, "cache" }) },
     };
-    const got = try resolveIn(a, io, where, &.{.parse("hello@1")});
+    const got = try resolveIn(a, io, where, .{ .depends = &.{.parse("hello@1")} });
     try testing.expectEqual(1, got.len);
     try testing.expectEqual(From.hub, got[0].from);
     try testing.expectEqualStrings("1.0.0", got[0].version);
@@ -156,10 +125,10 @@ test "downloads from the hub once, then uses the cache" {
     // The hub's gone, so this one's from the cache
     var offline = where;
     offline.hub = null;
-    const again = try resolveIn(a, io, offline, &.{.parse("hello")});
+    const again = try resolveIn(a, io, offline, .{ .depends = &.{.parse("hello")} });
     try testing.expectEqual(From.hub, again[0].from);
     // Too old, and nothing newer to get. It says so, which isn't news here
     const saved = core.log.mute(&.{.cli});
     defer core.log.setFilter(saved);
-    try testing.expectEqual(0, (try resolveIn(a, io, offline, &.{.parse("hello@2")})).len);
+    try testing.expectEqual(0, (try resolveIn(a, io, offline, .{ .depends = &.{.parse("hello@2")} })).len);
 }

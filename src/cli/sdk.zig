@@ -98,7 +98,7 @@ fn depsCommand(ctx: ops.Context, arena: std.mem.Allocator, args: anytype) !u8 {
     } else {
         for (found) |f| log.printLn("{s} {s} ({t}): {s}", .{ f.name, f.version, f.from, f.dir });
     }
-    return if (found.len == listed.len) 0 else 1;
+    return if (found.len == listed.depends.len) 0 else 1;
 }
 
 fn info(ctx: ops.Context, arena: std.mem.Allocator) !u8 {

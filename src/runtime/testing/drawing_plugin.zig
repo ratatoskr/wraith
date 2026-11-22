@@ -40,6 +40,8 @@ pub const Plugin = struct {
         area.takeInput(.keyboard, true);
         area.takeInput(.mouse, true);
         area.takeInput(.gamepad, true);
+        area.holdMouse(true);
+        area.holdMouse(true);
     }
 
     /// Carries on each frame on the render thread, so it can draw.

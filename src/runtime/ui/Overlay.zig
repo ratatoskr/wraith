@@ -101,6 +101,10 @@ cursor_hint: Atomic(CursorHint) = .init(.auto),
 cursor_requests: Atomic(u32) = .init(0),
 /// Counted, so a device stays taken till every request is dropped.
 takes: std.EnumArray(Device, Atomic(u32)) = .initFill(.init(0)),
+/// Holds the cursor still and hidden, for looking around with the mouse. Counted like `takes`.
+holds: Atomic(u32) = .init(0),
+/// Whether it's held right now. Written each frame, read on the window thread.
+holding: Atomic(bool) = .init(false),
 /// Off leaves a device with the game, whoever takes it and whatever ImGui wants.
 enabled: std.EnumArray(Device, Atomic(bool)) = .initFill(.init(true)),
 /// What ImGui is using right now. Written after each frame, read on the window thread.
@@ -131,6 +135,11 @@ headless: ?*c.ImGuiContext = null,
 headless_failed: bool = false,
 /// Set before frames start.
 captures: ?Captures = null,
+/// While the cursor's held: where it goes back to each frame, and where it was before, both in
+/// screen coords.
+held: ?struct { anchor: input.Point, home: input.Point } = null,
+/// How far it was pushed since last frame, while held.
+mouse_motion: input.Point = .{ .x = 0, .y = 0 },
 default_style: c.ImGuiStyle = undefined,
 ui_scale: f32 = 1,
 theme: ?*const Themes.Theme = null,
@@ -264,6 +273,17 @@ pub fn taken(self: *const Overlay, device: Device) bool {
     return self.enabled.getPtrConst(device).load(.acquire) and self.takes.getPtrConst(device).load(.acquire) != 0;
 }
 
+/// Keeps the cursor still and hidden while the game window's in front, from the next frame, so
+/// the mouse can turn something forever. `mouseMotion` says how far. Counted like `take`. Any thread.
+pub fn holdMouse(self: *Overlay, on: bool) void {
+    count(&self.holds, on);
+}
+
+/// How far the mouse was pushed since last frame while it's held, in pixels. Render thread.
+pub fn mouseMotion(self: *const Overlay) input.Point {
+    return self.mouse_motion;
+}
+
 /// From the user's settings. Any thread.
 pub fn setEnabled(self: *Overlay, device: Device, on: bool) void {
     self.enabled.getPtr(device).store(on, .release);
@@ -338,6 +358,8 @@ fn onFrame(self: *Overlay, frame: *const Graphics.Frame) void {
     self.render_thread.store(std.Thread.getCurrentId(), .release);
     self.api.store(@backingInt(frame.api), .release);
     self.last_frame_ms.store(self.nowMs(), .release);
+    // Before plugins' frames, even headless ones, so they see this frame's motion
+    self.moveHeldMouse(frame.window);
     if (self.close_viewports.load(.acquire) and !self.viewports_closed.load(.acquire)) self.stopViewports();
     // Runs our windows' messages too, so their input lands in the queue
     if (!self.prepare(frame)) {
@@ -348,8 +370,9 @@ fn onFrame(self: *Overlay, frame: *const Graphics.Frame) void {
     if (self.theme_request.swap(null, .acq_rel)) |theme| self.applyTheme(theme);
 
     const io = c.ImGui_GetIO();
-    // Over one of ImGui's own windows the mouse is ImGui's
-    const mouse_ours = self.mouseIsOurs() or (if (self.host.platform) |p| p.hoveringViewport() else false);
+    // Over one of ImGui's own windows the mouse is ImGui's. Never while it's held, as it's pulled
+    // back to the middle every frame
+    const mouse_ours = self.held == null and (self.mouseIsOurs() or (if (self.host.platform) |p| p.hoveringViewport() else false));
     var pending: [InputQueue.capacity]Queued = undefined;
     if (self.queue_overflowed.swap(false, .monotonic)) log.warn("Overlay input queue full; dropped events", .{});
     var focus_changed = false;
@@ -373,7 +396,7 @@ fn onFrame(self: *Overlay, frame: *const Graphics.Frame) void {
     if (focus_changed) c.ImGuiIO_AddFocusEvent(io, self.host.platform.?.appFocused());
     if (!mouse_ours) releaseMouse(io);
 
-    io.*.MouseDrawCursor = self.cursorRequested();
+    io.*.MouseDrawCursor = self.cursorRequested() and self.held == null;
     // Keyboard nav grabs the keyboard whenever an ImGui window has focus, so only while it's taken
     setFlag(io, c.ImGuiConfigFlags_NavEnableKeyboard, self.taken(.keyboard));
     setFlag(io, c.ImGuiConfigFlags_NavEnableGamepad, self.taken(.gamepad));
@@ -409,6 +432,31 @@ fn setFlag(io: *c.ImGuiIO, flag: c.ImGuiConfigFlags, on: bool) void {
     } else {
         io.*.ConfigFlags &= ~flag;
     }
+}
+
+/// Measures how far the held cursor went and puts it back in the middle of the window. Lets go
+/// where it was held from. Inside a `Blocker.Bypass`, so these are the real cursor's moves.
+fn moveHeldMouse(self: *Overlay, window: tuft_window.Handle) void {
+    const hold = self.holds.load(.acquire) != 0 and tuft_window.isForeground(window);
+    if (!hold) {
+        if (self.held) |h| input.moveCursor(h.home);
+        self.held = null;
+        self.holding.store(false, .release);
+        self.mouse_motion = .{ .x = 0, .y = 0 };
+        return;
+    }
+    const now = input.screenCursorPosition() orelse return;
+    // The window can move, so it's worked out each time
+    const middle = input.clientCenter(window) orelse return;
+    if (self.held) |*h| {
+        self.mouse_motion = .{ .x = now.x - h.anchor.x, .y = now.y - h.anchor.y };
+        h.anchor = middle;
+    } else {
+        self.held = .{ .anchor = middle, .home = now };
+        self.mouse_motion = .{ .x = 0, .y = 0 };
+    }
+    self.holding.store(true, .release);
+    input.moveCursor(middle);
 }
 
 fn requestCaptures(self: *Overlay) void {
@@ -603,6 +651,11 @@ fn onMessage(self: *Overlay, m: *const Window.Message) ?isize {
     if (self.options.viewports and Win32.changesMonitors(m.raw)) self.monitors_changed.store(true, .release);
     const event = m.event orelse return null;
     if (event == .cursor) {
+        // Held for looking around, so no cursor at all
+        if (self.holding.load(.acquire) and self.framesLive()) {
+            input.hideCursor();
+            return input.handledResult(event);
+        }
         // Only while frames are drawing ImGui's cursor instead
         if (!self.cursorRequested() or !self.framesLive()) return null;
         // ImGui draws the cursor, so stop the game setting its own

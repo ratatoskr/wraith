@@ -106,6 +106,12 @@ trait Ui {
     // Keeps the game from seeing it while any plugin asks
     void takeInput(InputDevice device, bool take);
     bool inputTaken(InputDevice device);
+    // Keeps the cursor still and hidden in the middle of the game window while any plugin asks,
+    // from the next frame, for turning something with the mouse. Lets go where it was.
+    void holdMouse(bool hold);
+    // How far the mouse was pushed since last frame while it's held, in pixels. Right and down are
+    // positive. In a frame callback.
+    Point mouseMotion();
 
     // Wraith's own UI
 
