@@ -551,6 +551,7 @@ const Modules = struct {
             .{ .name = "tuft_text", .module = tuft.module("tuft_text") },
             .{ .name = "tuft_image", .module = tuft.module("tuft_image") },
             .{ .name = "tuft_vfs", .module = tuft.module("tuft_vfs") },
+            .{ .name = "tuft_managed", .module = tuft.module("tuft_managed") },
         }, true);
         // The fixture plugin's schema as generated Zig, so loader tests can call into it
         runtime.addImport("wraith_test_fixture", @import("salamander").zigModule(salamander_dep, .{ .source = b.path("src/runtime/testing/schemas/fixture.sal"), .target = target, .uses = &.{"wraith"}, .instances = &.{instance_tag} }));

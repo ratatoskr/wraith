@@ -158,18 +158,30 @@ const tests = struct {
         const root = try tmp.dir.realPathFileAlloc(io, ".", a);
         const files = [_][2][]const u8{
             // The game plugin's source, and its build without devDepends, which is what's added
-            .{ "games/kai/wraith.json", \\{ "id": "kai", "depends": ["posing"], "devDepends": { "posing": "../../libs/posing/wraith.json" } }
+            .{
+                "games/kai/wraith.json",
+                \\{ "id": "kai", "depends": ["posing"], "devDepends": { "posing": "../../libs/posing/wraith.json" } }
             },
-            .{ "games/kai/zig-out/wraith.json", \\{ "id": "kai", "depends": ["posing"] }
+            .{
+                "games/kai/zig-out/wraith.json",
+                \\{ "id": "kai", "depends": ["posing"] }
             },
             // Posing's build, and its own devDepends on camera, built to dist
-            .{ "libs/posing/wraith.json", \\{ "id": "posing", "depends": ["camera"], "devDepends": { "camera": "../camera" } }
+            .{
+                "libs/posing/wraith.json",
+                \\{ "id": "posing", "depends": ["camera"], "devDepends": { "camera": "../camera" } }
             },
-            .{ "libs/posing/zig-out/wraith.json", \\{ "id": "posing" }
+            .{
+                "libs/posing/zig-out/wraith.json",
+                \\{ "id": "posing" }
             },
-            .{ "libs/camera/wraith.json", \\{ "id": "camera" }
+            .{
+                "libs/camera/wraith.json",
+                \\{ "id": "camera" }
             },
-            .{ "libs/camera/dist/wraith.json", \\{ "id": "camera" }
+            .{
+                "libs/camera/dist/wraith.json",
+                \\{ "id": "camera" }
             },
         };
         for (files) |f| {

@@ -9,6 +9,7 @@ const sdk = @import("wraith_sdk");
 const tuft_sys = @import("tuft_sys");
 
 const host = @import("../host/root.zig");
+const speed = @import("../speed/root.zig");
 const Loaded = @import("Loaded.zig");
 
 const sal = api.salamander;
@@ -69,6 +70,8 @@ fn load(loaded: *Loaded) !*Instance {
         return err;
     };
     instance.* = .{ .library = library };
+    // It gets the real time when the game's sped up
+    speed.own.add(library, tuft_sys.module.imageSize(library) catch 0);
     errdefer free(instance);
 
     const addr = tuft_sys.module.findExport(library, sdk.plugin_symbol) orelse {
@@ -86,6 +89,7 @@ fn load(loaded: *Loaded) !*Instance {
 }
 
 fn free(instance: *Instance) void {
+    speed.own.remove(instance.library);
     if (!tuft_sys.module.unload(instance.library)) log.warn("A thread was still running in a plugin's code, so it's left loaded", .{});
     allocator.destroy(instance);
 }

@@ -28,6 +28,8 @@ pub const hooks = @import("hooks.zig");
 pub const overlay = @import("overlay.zig");
 pub const frame = @import("frame.zig");
 pub const tasks = @import("tasks.zig");
+/// A lock that tasks wait for by parking. See `sync.Mutex`.
+pub const sync = @import("sync.zig");
 pub const keybinds = @import("keybinds.zig");
 pub const tweaks = @import("tweaks.zig");
 pub const timing = @import("timing.zig");

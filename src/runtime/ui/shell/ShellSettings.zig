@@ -1,6 +1,6 @@
 //! The shell's own settings in the registry, applied as they change. That's the theme, where the
 //! overlay's bar goes, frame stats, whether the overlay takes controllers, the workbench's command
-//! keys, the pinned tweaks list and toasts, and whether the welcome's been seen.
+//! keys, the pinned tweaks list and toasts, the game speed key, and whether the welcome's been seen.
 
 const ShellSettings = @This();
 
@@ -12,6 +12,10 @@ const Themes = @import("../Themes.zig");
 const WorkbenchKeys = @import("../workbench/Settings.zig").Keys;
 const FrameStats = @import("../../FrameStats.zig");
 const Shell = @import("Shell.zig");
+const Keybinds = @import("tuft_input").Keybinds;
+const speed = @import("../../speed/root.zig");
+const game_area = @import("../../host/game_area.zig");
+const log = @import("wraith_core").log.scoped(.wraith_ui);
 
 pub const match_windows = "Match Windows";
 const bar_places = [_][]const u8{ "Bottom", "Top" };
@@ -31,6 +35,9 @@ tweaks_toasts: *Registry.Setting,
 export_author: *Registry.Setting,
 /// The order of the overlay bar's tiles, as `Reorder.Arrangement` ids in hex.
 hub_order: *Registry.Setting,
+/// What the speed key switches to, and the key
+speed_amount: *Registry.Setting,
+speed_key: *Registry.Setting,
 workbench_keys: [key_names.len]*Registry.Setting,
 
 pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
@@ -144,6 +151,25 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
     }, .{});
     try added.append(shell.allocator, self.hub_order);
 
+    self.speed_amount = try registry.add(.{
+        .id = "wraith.speed.amount",
+        .name = "Speed",
+        .help = "How fast the key makes the game run. 2 is twice as fast, 0.5 half. Wraith keeps its own pace.",
+        .group = Settings.group,
+        .section = "Game speed",
+        .kind = .{ .number = .{ .default = 2, .min = 0.1, .max = 10 } },
+    }, .{ .changed = .{ .ctx = shell, .call = speedAmountChanged } });
+    try added.append(shell.allocator, self.speed_amount);
+    self.speed_key = try registry.add(.{
+        .id = "wraith.speed.toggle",
+        .name = "Switch the game's speed",
+        .help = "Between normal and the speed above. Most games follow it, a few keep their own time.",
+        .group = Settings.group,
+        .section = "Game speed",
+        .kind = .{ .key = .{ .default = null } },
+    }, .{ .key = .{ .ctx = shell, .call = speedKeyPressed } });
+    try added.append(shell.allocator, self.speed_key);
+
     const key_defaults: WorkbenchKeys = .{};
     inline for (key_names, 0..) |field, i| {
         var name_buf: [64]u8 = undefined;
@@ -164,7 +190,7 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
 
 pub fn remove(self: *const ShellSettings) void {
     const r = self.registry;
-    inline for (.{ "theme", "bar_place", "welcome_seen", "frame_window", "frame_hitch", "overlay_gamepad", "tweaks_on_screen", "tweaks_toasts", "export_author", "hub_order" }) |name| r.remove(@field(self, name));
+    inline for (.{ "theme", "bar_place", "welcome_seen", "frame_window", "frame_hitch", "overlay_gamepad", "tweaks_on_screen", "tweaks_toasts", "export_author", "hub_order", "speed_amount", "speed_key" }) |name| r.remove(@field(self, name));
     for (self.workbench_keys) |s| r.remove(s);
 }
 
@@ -207,6 +233,32 @@ fn frameStatsChanged(ctx: *anyopaque, _: *Registry.Setting) void {
 fn overlayGamepadChanged(ctx: *anyopaque, s: *Registry.Setting) void {
     const shell: *Shell = @ptrCast(@alignCast(ctx));
     shell.overlay.ui_takes_gamepad.store(shell.registry.get(s).toggle, .release);
+}
+
+/// Normal, or the speed picked.
+fn speedKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
+    if (phase != .pressed) return;
+    const shell: *Shell = @ptrCast(@alignCast(ctx));
+    const to: f64 = if (speed.get() != 1) 1 else shell.registry.get(shell.own.speed_amount).number;
+    setSpeed(shell, to);
+}
+
+/// Takes effect straight away if it's on.
+fn speedAmountChanged(ctx: *anyopaque, s: *Registry.Setting) void {
+    const shell: *Shell = @ptrCast(@alignCast(ctx));
+    if (speed.get() == 1) return;
+    setSpeed(shell, shell.registry.get(s).number);
+}
+
+fn setSpeed(shell: *Shell, to: f64) void {
+    game_area.setSpeedForPlayer(to) catch |err| {
+        log.warn("Couldn't change the game's speed: {t}", .{err});
+        _ = shell.overlay.host.toasts.push(.{ .kind = .@"error", .title = "Game speed", .text = "This game's clocks couldn't be changed.", .seconds = 3 });
+        return;
+    };
+    var buf: [32]u8 = undefined;
+    const text = if (to == 1) "Normal" else std.fmt.bufPrint(&buf, "{d}x", .{to}) catch "Changed";
+    _ = shell.overlay.host.toasts.push(.{ .kind = .info, .title = "Game speed", .text = text, .seconds = 2 });
 }
 
 fn workbenchKeyChanged(ctx: *anyopaque, _: *Registry.Setting) void {

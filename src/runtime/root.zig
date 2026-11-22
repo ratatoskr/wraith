@@ -79,6 +79,7 @@ test {
     _ = @import("Manifest.zig");
     _ = @import("GameInfo.zig");
     _ = @import("Names.zig");
+    _ = @import("Managed.zig");
     _ = @import("Libraries.zig");
     _ = @import("OriginalCode.zig");
     _ = @import("graphics/Graphics.zig");
@@ -103,4 +104,5 @@ test {
     _ = Runtime;
     _ = @import("Game.zig");
     _ = @import("crash/root.zig");
+    _ = @import("speed/root.zig");
 }

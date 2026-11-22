@@ -122,10 +122,14 @@ test "default layout" {
         labels[n] = e.window.label();
         n += 1;
     }
-    try testing.expectEqual(8, n);
+    try testing.expectEqual(9, n);
     try testing.expectEqualStrings("Addresses", labels[1]);
     try testing.expectEqualStrings("Names", labels[2]);
-    try testing.expectEqualStrings("Tweaks", labels[3]);
+    try testing.expectEqualStrings("Classes", labels[3]);
+    try testing.expectEqualStrings("Tweaks", labels[4]);
+    // Most games have no C#, so it waits closed in the bottom spot
+    try testing.expect(!p.classes.window.open);
+    try testing.expectEqual(names_spot, tuft_imgui.dock.of(p.classes.window.title).?);
 
     // ImGui keeps Search's empty spot and shows it again right there
     wb.toggleSearch();
@@ -995,6 +999,45 @@ test "names panel" {
     const code = &wb.active_code.?.body.code;
     try testing.expectEqual(text.start, code.code.selection().?.start);
     try testing.expectEqual(text.start, code.bar.current());
+}
+
+// Off unless `WRAITH_MANAGED_GAME` names a Unity game's folder. See testing/managed_game.zig.
+test "classes panel on a real game's C#" {
+    const Managed = @import("../../Managed.zig");
+    _ = try @import("../../testing/managed_game.zig").start();
+    defer Managed.global.stop();
+    var frames = try Frames.init();
+    defer frames.deinit();
+    const wb = try Workbench.create(testing.allocator, .{});
+    defer wb.destroy();
+    const panel = &wb.panels.classes;
+    panel.window.open = true;
+    panel.window.focus();
+    frames.run(wb, 3);
+    try testing.expect(panel.all.len > 1000);
+    try testing.expect(panel.images > 10);
+    try testing.expectEqual(panel.all.len, panel.shown.items.len);
+
+    @memcpy(panel.search[0..13], "System.String");
+    panel.refresh();
+    const string = for (panel.shown.items) |e| {
+        if (std.mem.eql(u8, e.name, "System.String")) break e;
+    } else return error.NoString;
+    try testing.expect(panel.shown.items.len < panel.all.len);
+    panel.picked.only(@intFromPtr(string.class));
+    // Addresses comes to the front as the workbench starts
+    panel.window.focus();
+    frames.run(wb, 3);
+    try testing.expectEqual(string.class, panel.members_of.?);
+    const empty = for (panel.fields) |f| {
+        if (std.mem.eql(u8, f.name, "Empty")) break f;
+    } else return error.NoEmpty;
+    try testing.expect(empty.is_static);
+    const concat = for (panel.methods) |m| {
+        if (std.mem.eql(u8, m.name, "Concat") and std.mem.startsWith(u8, m.signature, "(System.String, System.String) ")) break m;
+    } else return error.NoConcat;
+    try testing.expectEqualStrings("(System.String, System.String) System.String", concat.signature);
+    try testing.expect(panel.codeOf(concat.method) != null);
 }
 
 test "log clear from its menu" {

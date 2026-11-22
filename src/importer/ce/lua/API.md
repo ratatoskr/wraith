@@ -164,11 +164,11 @@ Statuses:
 
 | | Globals | Used in the tables |
 |---|---|---|
-| implemented | 121 | 37 |
+| implemented | 123 | 38 |
 | partial | 40 | 20 |
 | stub (quiet) | 10 | 3 |
 | stub (warns) | 38 | 6 |
-| stub | 206 | 14 |
+| stub | 204 | 13 |
 | n/a | 106 | 7 |
 | **all** | 521 | 87 |
 
@@ -695,11 +695,11 @@ Lua 5.1's `unpack`, and every constant from CE's `defines.lua`, like `vtDword` a
 
 | Name | CE signature | Used | Status | Wraith, or why not |
 |---|---|---|---|---|
-| `speedhack_setSpeed` | `speedhack_setSpeed(speed)` | 10 (2) | stub | No speedhack yet |
-| `speedhack_getSpeed` | `speedhack_getSpeed()` | 0 (0) | stub | No speedhack yet |
+| `speedhack_setSpeed` | `speedhack_setSpeed(speed)` | 10 (2) | implemented | `game:setSpeed`, from 0.01 to 100. Wraith and its scripts keep real time |
+| `speedhack_getSpeed` | `speedhack_getSpeed()` | 0 (0) | implemented | `game:speed()` |
 | `registerSpeedhackCallbacks` | `registerSpeedhackCallbacks()` | 0 (0) | stub (warns) | Does nothing and warns once, so the main script carries on |
 | `unregisterSpeedhackCallbacks` | `unregisterSpeedhackCallbacks(CallbackID)` | 0 (0) | stub (warns) | Does nothing and warns once, so the main script carries on |
-| `dbvm_speedhack_setSpeed` | `dbvm_speedhack_setSpeed(speed)` | 0 (0) | stub | No speedhack yet |
+| `dbvm_speedhack_setSpeed` | `dbvm_speedhack_setSpeed(speed)` | 0 (0) | stub | There's no DBVM, use `speedhack_setSpeed` |
 
 ### Structures and dissecting
 

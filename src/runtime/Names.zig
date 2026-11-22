@@ -13,6 +13,7 @@ const memory = @import("tuft_mem");
 const devtools = @import("tuft_devtools");
 const Schema = @import("salamander_schema").Schema;
 const Owner = @import("tuft_event").Owner;
+const Managed = @import("Managed.zig");
 
 const Text = @import("tuft_text").Text;
 const Outcome = memory.scans.Outcome;
@@ -326,11 +327,11 @@ fn of(context: ?*anyopaque) *Names {
 }
 
 fn resolveFull(context: ?*anyopaque, name: []const u8) ?usize {
-    return (of(context).find(name, .full) catch null) orelse Symbols.local.resolve(name);
+    return (of(context).find(name, .full) catch null) orelse Symbols.local.resolve(name) orelse Managed.global.methodAddress(name);
 }
 
 fn resolveCheap(context: ?*anyopaque, name: []const u8) ?usize {
-    return (of(context).find(name, .cheap) catch null) orelse Symbols.local.resolve(name);
+    return (of(context).find(name, .cheap) catch null) orelse Symbols.local.resolve(name) orelse Managed.global.cachedMethodAddress(name);
 }
 
 fn describeThunk(context: ?*anyopaque, address: usize, buf: []u8) ?[]const u8 {
@@ -338,7 +339,11 @@ fn describeThunk(context: ?*anyopaque, address: usize, buf: []u8) ?[]const u8 {
 }
 
 fn whyThunk(context: ?*anyopaque, name: []const u8, buf: []u8) ?Symbols.Miss {
-    return of(context).why(name, buf);
+    if (of(context).why(name, buf)) |miss| return miss;
+    const message = Managed.global.whyMissing(name) orelse return null;
+    const n = @min(message.len, buf.len);
+    @memcpy(buf[0..n], message[0..n]);
+    return .{ .err = error.NotFound, .message = buf[0..n] };
 }
 
 fn extentThunk(_: ?*anyopaque, name: []const u8) ?Symbols.Extent {

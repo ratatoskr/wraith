@@ -1,0 +1,117 @@
+// The game's C# runtime, Mono or IL2CPP, which Unity games and some others run their code on.
+// Classes go by their C# names, like `Game.Player`, `Player` with no namespace, or
+// `Game.Player/Stats` for one nested in another. The first image with it wins. Any thread, but each
+// call waits its turn on Wraith's one thread that's attached to the runtime, so look things up once
+// rather than every frame. What they find doesn't move. Text and slices it gives are good till the
+// thread's next call into Wraith.
+//
+// Address text takes `Class:Method` too, like `Game.Player:Update+0x3a`, for the method's code.
+
+error ManagedError {
+    // The game has none, or hasn't started it yet
+    NotRunning = 1,
+    NotFound,
+    // Not an object or a string
+    Unreadable,
+    Failed,
+    // `invoke`'s method threw, and what it says is the error's message
+    Threw,
+}
+
+enum ManagedKind : u8 { none, mono, il2cpp }
+
+// Which of `ManagedValue`'s fields it is.
+enum ManagedValueKind : u8 { none, flag, integer, number, text, object }
+
+// An argument to `invoke`, or what it gives back. Integers go for any whole number type or enum,
+// numbers for floats, text for strings, and objects for everything else, as their address. A struct
+// or a `ref` parameter is an object too, the address of its bytes.
+struct ManagedValue {
+    ManagedValueKind kind;
+    bool flag;
+    i64 integer;
+    f64 number;
+    string text;
+    usize object;
+}
+
+struct ManagedClass {
+    // Like `Game.Player`, or `Game.Player/Stats` nested
+    string full_name;
+    // Like `Player`
+    string name;
+    // Like `Assembly-CSharp.dll`
+    string image;
+    // Its parent's full name. Empty for none.
+    string parent;
+    // Bytes in one, object header and all
+    u32 size;
+    bool value_type;
+}
+
+struct ManagedField {
+    string name;
+    // Like `System.Int32` or `System.Collections.Generic.List<Game.Item>`
+    string type;
+    // From the start of the object, header and all, even in value types. For statics, from where
+    // the class keeps them, which `staticAddress` adds in.
+    usize offset;
+    bool is_static;
+    // A `const`, with no storage
+    bool literal;
+}
+
+struct ManagedMethod {
+    string name;
+    string return_type;
+    // Each parameter's type
+    []string params;
+    bool is_static;
+}
+
+trait Managed {
+    // Which runtime it is, `none` till it's running
+    ManagedKind kind();
+    // Waits till the game's started its runtime, which is after plugins load. Fails with
+    // `NotRunning` if this game has none Wraith can use.
+    async void!ManagedError running();
+    // Loaded images, like `Assembly-CSharp.dll`
+    []string!ManagedError images();
+    // An image's classes by full name, nested ones too
+    []string!ManagedError classes(string image);
+    ManagedClass!ManagedError find(string class_name);
+    // Its own fields, not its parents'
+    []ManagedField!ManagedError fields(string class_name);
+    // Its own methods, not its parents'
+    []ManagedMethod!ManagedError methods(string class_name);
+    // Looks in parents too
+    usize!ManagedError fieldOffset(string class_name, string field);
+    // Where a static field is now. May run its class's static constructor. `Unsupported` for
+    // thread statics, which each thread has its own of, and IL2CPP before Unity 2019 or so.
+    usize!ManagedError staticAddress(string class_name, string field);
+    // A method's code, to hook or call, with `params` parameters or any number if it's -1. Looks in
+    // parents too. Under Mono this compiles it if nothing's run it yet.
+    usize!ManagedError method(string class_name, string name, i32 params);
+    // The native function behind an `extern` method, like Unity's engine calls such as
+    // `UnityEngine.Transform` `get_position_Injected`. They're the same functions under both
+    // runtimes, so a plugin can call them directly with their C signature, `this` first. Only on the
+    // game's main thread for Unity's.
+    usize!ManagedError icall(string class_name, string method);
+    // The `System.Type` object for a class, for C# that takes one, like Unity's `FindObjectsOfType`.
+    usize!ManagedError typeObject(string class_name);
+    // Calls the native function at `function`, which takes nothing and gives a pointer-sized value,
+    // on Wraith's thread attached to the runtime. For engine calls that make C# objects, which
+    // need a thread the runtime knows. Not for Unity's main-thread ones.
+    usize!ManagedError callNative(usize function);
+    // Calls a C# method by name, like `invoke("System.Int32", "Parse", 0, [text "42"])`, picking
+    // the overload with as many parameters whose types fit the arguments best. `target` is the
+    // object for an instance method, or 0 for a static one. It runs right here on a thread the
+    // runtime knows, like Unity's main thread in the `unity` service's frames, which Unity's own
+    // methods need. Anywhere else it runs on Wraith's own thread. If it throws, it fails with
+    // `Threw`, saying what. Structs come back as their boxed object.
+    ManagedValue!ManagedError invoke(string class_name, string method, usize target, []ManagedValue args);
+    // The full name of the class of the object at `object`
+    string!ManagedError classOf(usize object);
+    // The `System.String` at `address`, as UTF-8
+    string!ManagedError readString(usize address);
+}

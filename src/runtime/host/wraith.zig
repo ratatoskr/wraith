@@ -19,6 +19,8 @@ const code_area = @import("code_area.zig");
 const files_area = @import("files_area.zig");
 const game_area = @import("game_area.zig");
 const hooks_area = @import("hooks_area.zig");
+const managed_area = @import("managed_area.zig");
+const sync_area = @import("sync_area.zig");
 const ui_area = @import("ui_area.zig");
 const scans = @import("scans.zig");
 const scratch = @import("scratch.zig");
@@ -39,6 +41,9 @@ pub const Input = W.Input;
 pub const Keybind = W.Keybind;
 pub const Library = W.Libraries;
 pub const Log = W.Log;
+pub const Managed = managed_area.Managed;
+pub const Sync = sync_area.Sync;
+pub const Lock = sync_area.Lock;
 pub const Memory = memory_area.Memory;
 pub const MemoryScan = memory_area.MemoryScan;
 pub const Addresses = code_area.Addresses;
@@ -93,6 +98,9 @@ pub const Tables = struct {
     keybind: *const sal.Table(Keybind),
     libraries: *const sal.Table(Library),
     log: *const sal.Table(Log),
+    managed: *const sal.Table(Managed),
+    sync: *const sal.Table(Sync),
+    lock: *const sal.Table(Lock),
     sound: *const sal.Table(Sound),
     memory: *const sal.Table(Memory),
     memory_scan: *const sal.Table(MemoryScan),
@@ -160,6 +168,9 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .keybind = h.adopt(Keybind, sal.implement(Keybind, KeybindImpl), o) catch return null,
         .libraries = h.adopt(Library, sal.implement(Library, LibrariesImpl), o) catch return null,
         .log = h.adopt(Log, sal.implement(Log, LogImpl), o) catch return null,
+        .managed = h.adopt(Managed, sal.implement(Managed, managed_area.Impl), o) catch return null,
+        .sync = h.adopt(Sync, sal.implement(Sync, sync_area.SyncImpl), o) catch return null,
+        .lock = h.adopt(Lock, sal.implement(Lock, sync_area.LockImpl), o) catch return null,
         .sound = h.adopt(Sound, sal.implement(Sound, SoundImpl), o) catch return null,
         .memory = h.adopt(Memory, sal.implement(Memory, memory_area.Impl), o) catch return null,
         .memory_scan = h.adopt(MemoryScan, sal.implement(MemoryScan, memory_area.ScanImpl), o) catch return null,
@@ -281,6 +292,14 @@ const Root = struct {
 
     pub fn log(loaded: *Loaded) sal.Object(Log) {
         return area(loaded, Log, "log");
+    }
+
+    pub fn managed(loaded: *Loaded) sal.Object(Managed) {
+        return area(loaded, Managed, "managed");
+    }
+
+    pub fn sync(loaded: *Loaded) sal.Object(Sync) {
+        return area(loaded, Sync, "sync");
     }
 
     pub fn settings(loaded: *Loaded) sal.Object(Settings) {

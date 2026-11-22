@@ -17,9 +17,13 @@ trait Wraith {
     Input input();
     Libraries libraries();
     Log log();
+    // The game's C# runtime, Mono or IL2CPP, for Unity games and others
+    Managed managed();
     Memory memory();
     Settings settings();
     Sound sound();
+    // Locks to share between plugins, threads and tasks
+    Sync sync();
     Tweaks tweaks();
     // The overlay: draw lists, toasts, the cursor and the game's input
     Ui ui();

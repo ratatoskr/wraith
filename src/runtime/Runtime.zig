@@ -15,6 +15,7 @@ const GameSettings = @import("GameSettings.zig");
 const GameSettingsFile = core.config.Lifecycle(GameSettings);
 const Game = @import("Game.zig");
 const GameInfo = @import("GameInfo.zig");
+const speed = @import("speed/root.zig");
 const Registry = @import("settings/Registry.zig");
 const host = @import("host/root.zig");
 const LogFile = @import("LogFile.zig");
@@ -26,6 +27,7 @@ const Libraries = @import("Libraries.zig");
 const Images = @import("Images.zig");
 const OriginalCode = @import("OriginalCode.zig");
 const Files = @import("Files.zig");
+const Managed = @import("Managed.zig");
 const crash = @import("crash/root.zig");
 const memory = @import("tuft_mem");
 
@@ -122,6 +124,9 @@ pub fn create(allocator: std.mem.Allocator, info: *const RuntimeInfo) !*Runtime 
     errdefer Images.global.deinit();
     self.previous_recorder = memory.scans.setRecorder(Names.recordOwn);
     errdefer _ = memory.scans.setRecorder(self.previous_recorder);
+    // Before plugins, so they find the game's C# as soon as it's running
+    Managed.global.start();
+    errdefer Managed.global.stop();
 
     const before_rendering = info.flagsOf() & RuntimeInfo.flag_before_rendering != 0;
     self.game = Game.create(allocator, io, self.game_settings, config_root, .{ .before_rendering = before_rendering, .handover = info.handoverOf(), .registry = self.registry, .ime = self.own.usesIme() }) catch |err| blk: {
@@ -159,6 +164,8 @@ pub fn destroy(self: *Runtime) void {
     // After plugins and the game, which may still hold its listeners
     Files.global.stop();
     host.sound.stop();
+    // After plugins, which may be waiting on it
+    Managed.global.stop();
     Names.global.deinit();
     SharedSchemas.global.deinit();
     Libraries.global.deinit();
@@ -166,6 +173,7 @@ pub fn destroy(self: *Runtime) void {
     OriginalCode.global.release();
     // Its hook goes with the rest
     crash.uninstall();
+    speed.stop();
     hook.deinit();
     memory.Claims.disable();
     GameSettingsFile.close(self.game_settings);

@@ -1,13 +1,16 @@
 //! The `game` area: what Wraith knows about the game it's in, from `GameInfo`, the overlay and the
-//! build. Nothing here reads files, so it's cheap from any thread.
+//! build, and how fast it runs. Nothing here reads files, so it's cheap from any thread.
 
 const std = @import("std");
 
 const api = @import("wraith_api");
 const build_info = @import("build_info");
 const tuft_sys = @import("tuft_sys");
+const Owner = @import("tuft_event").Owner;
 
 const GameInfo = @import("../GameInfo.zig");
+const speed_ = @import("../speed/root.zig");
+const OnGone = @import("Owned.zig").OnGone;
 const host = @import("root.zig");
 const scratch = @import("scratch.zig");
 const wraith = @import("wraith.zig");
@@ -22,6 +25,27 @@ const allocator = std.heap.page_allocator;
 
 const HashPromise = sal.Plain(Game, "sha512");
 const HashResolver = wraith.ResolverOf(HashPromise);
+
+/// Who set the speed last, so it goes back to 1 when they go. Null for the player.
+var setter: ?*Owner = null;
+var speed_lock: tuft_sys.sync.RwLock = .{};
+var speed_cleanup: OnGone(.closing, speedSetterGone) = .{};
+
+fn speedSetterGone(owner: *Owner) void {
+    speed_lock.lock();
+    defer speed_lock.unlock();
+    if (setter != owner) return;
+    setter = null;
+    speed_.set(1) catch {};
+}
+
+/// For Wraith's own settings and keys, which are the player's rather than a plugin's.
+pub fn setSpeedForPlayer(s: f64) !void {
+    speed_lock.lock();
+    defer speed_lock.unlock();
+    try speed_.set(s);
+    setter = null;
+}
 
 pub const Impl = struct {
     pub fn info(_: *Loaded) W.GameInfo {
@@ -50,6 +74,19 @@ pub const Impl = struct {
         for (list, found) |*item, product| item.* = .{ .id = @tagName(product), .name = product.label() };
         out.anticheat = list;
         return out;
+    }
+
+    pub fn speed(_: *Loaded) f64 {
+        return speed_.get();
+    }
+
+    pub fn setSpeed(loaded: *Loaded, s: f64) sal.Plain(Game, "setSpeed") {
+        const lease = speed_cleanup.lease(&loaded.owner) orelse return error.Failed;
+        defer lease.end();
+        speed_lock.lock();
+        defer speed_lock.unlock();
+        speed_.set(s) catch return error.Failed;
+        setter = &loaded.owner;
     }
 
     pub fn sha512(loaded: *Loaded) HashPromise {

@@ -47,6 +47,7 @@ const Addresses = @import("panels/Addresses.zig");
 const Accesses = @import("panels/Accesses.zig");
 const Search = @import("panels/Search.zig");
 pub const NamesPanel = @import("panels/Names.zig");
+pub const Classes = @import("panels/Classes.zig");
 pub const Hooks = @import("panels/Hooks.zig");
 pub const Claims = @import("panels/Claims.zig");
 pub const FileIo = @import("panels/FileIo.zig");
@@ -114,6 +115,7 @@ pub const Panels = struct {
     accesses: Accesses,
     search: Search,
     names: NamesPanel,
+    classes: Classes,
     hooks: Hooks,
     claims: Claims,
     file_io: FileIo,
@@ -131,10 +133,10 @@ pub const Panels = struct {
 };
 
 /// Docked on their own, not in a `Group`.
-const alone = .{ "search", "addresses", "names", "tweaks", "log" };
+const alone = .{ "search", "addresses", "names", "classes", "tweaks", "log" };
 /// `alone` and `Groups` in View menu order, which is also the order they're docked in. These need a
 /// spot in `defaultLayout`.
-const docked = .{ "search", "addresses", "names", "tweaks", "diagnostics", "debug", "scripts", "log" };
+const docked = .{ "search", "addresses", "names", "classes", "tweaks", "diagnostics", "debug", "scripts", "log" };
 
 /// So the dock's a few tabs and not a row of them.
 pub const Groups = struct {
@@ -145,7 +147,8 @@ pub const Groups = struct {
     diagnostics: Group,
 };
 
-const open_at_start = docked;
+/// Not Classes, since most games have no C#.
+const open_at_start = .{ "search", "addresses", "names", "tweaks", "diagnostics", "debug", "scripts", "log" };
 
 pub const Options = struct {
     /// The address list is only kept with it.
@@ -166,7 +169,7 @@ const ui_scale = 1.0;
 const font_size = 15;
 const dockspace_name = "wraith.workbench";
 /// Bump when `defaultLayout` changes.
-const layout_version = "12";
+const layout_version = "13";
 
 allocator: std.mem.Allocator,
 io: ?std.Io,
@@ -286,6 +289,7 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
             .accesses = .{ .wb = self },
             .search = .{ .wb = self, .view = .{ .memory = .local, .symbols = Names.global_symbols } },
             .names = .{ .nav = self.navigator(), .allocator = allocator, .wb = self },
+            .classes = .{ .nav = self.navigator(), .allocator = allocator },
             .hooks = .{ .nav = self.navigator() },
             .claims = .{ .nav = self.navigator() },
             .file_io = .{ .allocator = allocator },
@@ -349,7 +353,7 @@ pub fn destroy(self: *Workbench) void {
     self.panels.search.deinit();
     self.panels.accesses.deinit();
     self.panels.addresses.deinit();
-    inline for (.{ "names", "hooks", "claims", "file_io", "log", "timings", "console", "sessions", "stopped", "registers", "breakpoints", "tweaks" }) |name| @field(self.panels, name).deinit();
+    inline for (.{ "names", "classes", "hooks", "claims", "file_io", "log", "timings", "console", "sessions", "stopped", "registers", "breakpoints", "tweaks" }) |name| @field(self.panels, name).deinit();
     for (self.documents.items) |d| Documents.freeDocument(self, d);
     self.project_menu.deinit();
     self.sig_maker.deinit();

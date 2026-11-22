@@ -51,4 +51,10 @@ trait Game {
     // The exe's SHA-512 in hex, as a manifest's `hashes` lists it. Worked out in the background as
     // the game starts, so this waits for it.
     async string!GameError sha512();
+    // How fast the game runs, where 1 is as it is and 2 twice as fast.
+    f64 speed();
+    // Speeds up or slows down the clocks games time themselves with, like Cheat Engine's speedhack,
+    // from 0.01 to 100. Wraith and its plugins keep real time. Goes back to 1 when the plugin that
+    // set it goes. A few games keep time in ways that can't be hooked, and don't change.
+    void!GameError setSpeed(f64 speed);
 }

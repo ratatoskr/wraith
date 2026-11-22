@@ -1270,6 +1270,9 @@ function M.install(env, options)
   end
   def("sleep", sleep)
   def("getTickCount", function() return floor(frame:now()) end)
+  -- Wraith's game speed, which keeps Wraith and its scripts on real time like CE's does
+  def("speedhack_setSpeed", function(speed) w.game:setSpeed(tonumber(speed) or 1) end)
+  def("speedhack_getSpeed", function() return w.game:speed() end)
   def("inMainThread", function() return true end)
   def("synchronize", function(f, ...) return f(...) end)
   def("queue", function(f, ...)
@@ -2478,8 +2481,6 @@ function M.install(env, options)
     saveTable = "the importer turns tables into Wraith projects instead",
     shellExecute = "scripts can't run programs in Wraith",
     runCommand = "scripts can't run programs in Wraith",
-    speedhack_setSpeed = "Wraith has no speedhack",
-    speedhack_getSpeed = "Wraith has no speedhack",
     debugProcess = "Wraith has no debugger, use its hooks instead",
     getMemoryViewForm = "there's no CE window in Wraith",
     createForm = "use Wraith's ui instead",
@@ -2588,8 +2589,7 @@ function M.install(env, options)
     "runCommand", "saveOpenedFile", "saveTable", "sendMessage", "setAPIPointer", "setAssemblerMode",
     "setComment", "setHeader", "setMethodProperty", "setMousePos", "setPointerSize", "setProperty",
     "setSQLiteLibraryName", "setUserRegistryEnvironmentVariable", "setXBox360ControllerVibration",
-    "shellExecute", "shortCutToText", "signTable", "speak", "speakEnglish", "speedhack_getSpeed",
-    "speedhack_setSpeed", "stringToMD5String", "supportCheatEngine", "textToShortCut",
+    "shellExecute", "shortCutToText", "signTable", "speak", "speakEnglish", "stringToMD5String", "supportCheatEngine", "textToShortCut",
     "unhideMainCEwindow", "unhookWndProc", "unloadLoadedFont", "unmapMemory", "unMapViewOfSection",
     "unpause", "userDataToInteger", "writeProcessMemoryCR3", "writeRegionToFile",
   }

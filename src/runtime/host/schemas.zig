@@ -14,6 +14,7 @@ const bind = @import("salamander_bind");
 
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const Names = @import("../Names.zig");
+const managed_area = @import("managed_area.zig");
 
 const SalSchema = salamander_schema.Schema;
 const sal = api.salamander;
@@ -113,9 +114,15 @@ pub const Schemas = struct {
         }
         const s = self.schema();
         const a = if (s.findStatic(name)) |v|
-            try locate(v.static.annotations, "Sig", name)
+            if (managedOf(v.static.annotations, v.owner, v.static.name)) |m|
+                try findManaged(m, .static, name)
+            else
+                try locate(v.static.annotations, "Sig", name)
         else if (s.findFunction(name)) |f| blk: {
             if (f.method.virtual) |_| break :blk try readSlot(try self.slot(name));
+            if (managedOf(f.method.annotations, f.owner, f.method.name)) |m| {
+                break :blk try findManaged(m, if (m.icall) .icall else .{ .method = @intCast(f.method.signature.params.len) }, name);
+            }
             break :blk try locate(f.method.annotations, "Sig", name);
         } else if (s.findType(name)) |t|
             try self.vtable(t)
@@ -175,6 +182,49 @@ fn readSlot(at: usize) Schemas.Error!usize {
     return value;
 }
 
+/// A schema member that's in the game's C#, from its `[Managed]` or `[Icall]`.
+const ManagedName = struct {
+    class: []const u8,
+    member: []const u8,
+    icall: bool,
+};
+
+/// `[Managed]`, `[Managed("Name")]` or `[Managed("Ns.Class:Name")]`, the same for `[Icall]`, with
+/// the class from its struct's `[Managed("Ns.Class")]`, else the struct's name. Null if it has
+/// neither, or can't name a class, which `checkAnnotations` stops.
+fn managedOf(annotations: []const SalSchema.Annotation, owner: ?*const SalSchema.Type, own_name: []const u8) ?ManagedName {
+    const icall = SalSchema.findAnnotation(annotations, "wraith", "Icall");
+    const a = SalSchema.findAnnotation(annotations, "wraith", "Managed") orelse icall orelse return null;
+    const given: ?[]const u8 = if (a.args.len > 0 and a.args[0] == .string) a.args[0].string else null;
+    if (given) |g| if (splitMember(g)) |parts| return .{ .class = parts[0], .member = parts[1], .icall = icall != null };
+    const t = owner orelse return null;
+    return .{ .class = classOf(t), .member = given orelse own_name, .icall = icall != null };
+}
+
+/// The C# class a struct stands for, from `[Managed("Ns.Class")]`, else its own name.
+fn classOf(t: *const SalSchema.Type) []const u8 {
+    const a = SalSchema.findAnnotation(t.annotations, "wraith", "Managed") orelse return t.name;
+    return if (a.args.len > 0 and a.args[0] == .string) a.args[0].string else t.name;
+}
+
+/// `Ns.Class:Name`, or `Ns.Class::Name` as engine calls are written.
+fn splitMember(text: []const u8) ?[2][]const u8 {
+    const colon = std.mem.lastIndexOfScalar(u8, text, ':') orelse return null;
+    const class = std.mem.trimEnd(u8, text[0..colon], ":");
+    if (class.len == 0 or colon + 1 == text.len) return null;
+    return .{ class, text[colon + 1 ..] };
+}
+
+fn findManaged(m: ManagedName, member: managed_area.Member, name: []const u8) Schemas.Error!usize {
+    const sep = if (m.icall) "::" else ":";
+    return managed_area.memberAddress(m.class, m.member, member) catch |err| sal.host().explain(error.NotFound, "{s} is {s}{s}{s} in the game's C#, which {s}", .{ name, m.class, sep, m.member, switch (err) {
+        error.NotRunning => "isn't running yet",
+        error.Unsupported => "can't say where it is, like a thread static",
+        error.NotFound => "doesn't have it",
+        else => "couldn't find it",
+    } });
+}
+
 /// Runs the `[Sig]` or `[VirtualTable]` in `annotations`, with any `[Module]` and `[Section]` next to it.
 /// Through `Names`, so an earlier scan of it is used and it's listed with the rest.
 fn locate(annotations: []const SalSchema.Annotation, which: []const u8, name: []const u8) Schemas.Error!usize {
@@ -197,9 +247,29 @@ fn checkAnnotations(s: SalSchema, source: []const u8, diag: *SalSchema.Diagnosti
         for (st.fields) |f| try checkField(s, f, source, diag);
         for (st.methods) |m| try checkOne(m.annotations, "Sig", source, diag);
         for (st.statics) |v| try checkOne(v.annotations, "Sig", source, diag);
+        if (SalSchema.findAnnotation(t.annotations, "wraith", "Managed")) |a| {
+            if (a.args.len != 1 or a.args[0] != .string) return diag.fail(source, a.at, "[Managed] on a struct takes its C# class, like [Managed(\"Game.Player\")]", .{});
+        }
+        for (st.methods) |m| try checkManaged(m.annotations, true, false, source, diag);
+        for (st.statics) |v| try checkManaged(v.annotations, true, true, source, diag);
     }
     for (s.functions) |f| try checkOne(f.annotations, "Sig", source, diag);
     for (s.statics) |v| try checkOne(v.annotations, "Sig", source, diag);
+    for (s.functions) |f| try checkManaged(f.annotations, false, false, source, diag);
+    for (s.statics) |v| try checkManaged(v.annotations, false, true, source, diag);
+}
+
+fn checkManaged(annotations: []const SalSchema.Annotation, in_struct: bool, is_static: bool, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
+    const icall = SalSchema.findAnnotation(annotations, "wraith", "Icall");
+    const managed = SalSchema.findAnnotation(annotations, "wraith", "Managed");
+    const a = managed orelse icall orelse return;
+    const which = if (managed != null) "Managed" else "Icall";
+    if (managed != null and icall != null) return diag.fail(source, a.at, "it's [Managed] or [Icall], not both", .{});
+    if (SalSchema.findAnnotation(annotations, "wraith", "Sig") != null) return diag.fail(source, a.at, "[{s}] finds it by name, so it can't have a [Sig] too", .{which});
+    if (icall != null and is_static) return diag.fail(source, a.at, "[Icall] is for functions. Statics are [Managed]", .{});
+    if (a.args.len > 1 or (a.args.len == 1 and a.args[0] != .string)) return diag.fail(source, a.at, "[{s}] takes nothing, its C# name, or its class and name like \"Game.Player:Update\"", .{which});
+    const full = a.args.len == 1 and splitMember(a.args[0].string) != null;
+    if (!in_struct and !full) return diag.fail(source, a.at, "[{s}] outside a struct needs its class too, like [{s}(\"Game.Player:Update\")]", .{ which, which });
 }
 
 /// `[Tweak("..")]` goes on a struct Wraith can find, so one with `[Instance]`.
@@ -429,3 +499,46 @@ pub const SchemaImpl = struct {
         return s.method(object, name);
     }
 };
+
+test "[Managed] and [Icall] are checked as the schemas load" {
+    const testing = std.testing;
+    const bad = [_][2][]const u8{
+        .{ "[Managed] i32 update();", "[Managed] outside a struct needs its class too, like [Managed(\"Game.Player:Update\")]" },
+        .{ "[Managed] struct Player { i32 hp; }", "[Managed] on a struct takes its C# class, like [Managed(\"Game.Player\")]" },
+        .{ "struct Player { [Managed] [Sig(\"90\")] void update(); }", "[Managed] finds it by name, so it can't have a [Sig] too" },
+        .{ "struct Player { [Icall] static i32 count; }", "[Icall] is for functions. Statics are [Managed]" },
+        .{ "struct Player { [Managed(1)] void update(); }", "[Managed] takes nothing, its C# name, or its class and name like \"Game.Player:Update\"" },
+        .{ "struct Player { [Managed] [Icall] void update(); }", "it's [Managed] or [Icall], not both" },
+    };
+    for (bad) |case| {
+        var diag: SalSchema.Diagnostic = .{};
+        try testing.expectError(error.InvalidSchema, fromFilesWhy(&.{.{ .name = "kai/game.sal", .text = case[0] }}, &diag));
+        try testing.expect(std.mem.indexOf(u8, diag.message(), case[1]) != null);
+    }
+
+    const good = try fromFiles(&.{.{ .name = "kai/game.sal", .text =
+        \\[Managed("Game.Player")]
+        \\struct Player {
+        \\    [Managed] void Update();
+        \\    [Managed("get_Health")] f32 health();
+        \\    [Managed] static Player* s_main;
+        \\}
+        \\struct Spawner { [Managed] void Spawn(); }
+        \\[Icall("UnityEngine.Time::get_deltaTime")] f32 deltaTime();
+    }});
+    defer good.destroy();
+    const s = good.schema();
+    const update = managedOf(s.findFunction("Player.Update").?.method.annotations, s.findFunction("Player.Update").?.owner, "Update").?;
+    try testing.expectEqualStrings("Game.Player", update.class);
+    try testing.expectEqualStrings("Update", update.member);
+    try testing.expectEqualStrings("get_Health", managedOf(s.findFunction("Player.health").?.method.annotations, s.findFunction("Player.health").?.owner, "health").?.member);
+    // No [Managed] on the struct means it's named like the C# class
+    try testing.expectEqualStrings("Spawner", managedOf(s.findFunction("Spawner.Spawn").?.method.annotations, s.findFunction("Spawner.Spawn").?.owner, "Spawn").?.class);
+    const delta = managedOf(s.findFunction("deltaTime").?.method.annotations, null, "deltaTime").?;
+    try testing.expectEqualStrings("UnityEngine.Time", delta.class);
+    try testing.expectEqualStrings("get_deltaTime", delta.member);
+    try testing.expect(delta.icall);
+    // Not running here, which isn't kept, so it's found once the game's started its runtime
+    try testing.expectError(error.NotFound, good.address("Player.Update"));
+    try testing.expectEqual(0, good.found.count());
+}

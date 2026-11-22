@@ -1,0 +1,27 @@
+// Locks to share between plugins and their threads, tasks and scripts. Waiting never blocks: `lock`
+// settles once the lock's yours, and a let go lock goes straight to whoever's waited longest. A
+// lock goes when the plugin that made it does, and what a plugin holds or waits for goes with it.
+// Any thread.
+
+error SyncError {
+    // This plugin has it already. Locks aren't reentrant.
+    AlreadyHeld = 1,
+    Failed,
+}
+
+// Hand it to other plugins through a service. They lock it through their own `sync`.
+trait Lock {
+    // Whether anyone has it, for showing. It may change straight after.
+    bool held();
+}
+
+trait Sync {
+    // A new lock, which goes when this plugin does.
+    Lock newLock();
+    // Settles once it's this plugin's. Fails with `Gone` if the lock goes first.
+    async void!SyncError lock(Lock lock);
+    // Takes it if nobody has it.
+    bool tryLock(Lock lock);
+    // Hands it to whoever's waited longest. Nothing if this plugin doesn't have it.
+    void unlock(Lock lock);
+}
