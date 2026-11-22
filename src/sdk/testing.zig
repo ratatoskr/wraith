@@ -57,6 +57,9 @@ pub const Fake = struct {
 
     ticks: [16]Tick = undefined,
     ticks_len: usize = 0,
+    /// Like a plugin driving ticks: `runFrame` leaves them to `runTick`.
+    driven: bool = false,
+    game_thread: std.Thread.Id = 0,
     lock: std.Io.Mutex = .init,
     nexts: std.ArrayList(NextResolver) = .empty,
 
@@ -72,7 +75,7 @@ pub const Fake = struct {
     }
 
     const Tick = struct {
-        tick: W.FrameTick,
+        tick: union(enum) { frame: W.FrameTick, game: W.GameTick },
         live: bool,
     };
 
@@ -101,8 +104,10 @@ pub const Fake = struct {
         return self.last_message_buf[0..self.last_message_len];
     }
 
-    /// Settles what's posted, then ticks, like the runtime's frames.
+    /// Ticks unless `driven`, settles what's posted, then runs frame callbacks, like the runtime's
+    /// frames.
     pub fn runFrame(self: *Fake) void {
+        if (!self.driven) self.runTick();
         var due: std.ArrayList(NextResolver) = .empty;
         defer due.deinit(gpa);
         {
@@ -113,7 +118,24 @@ pub const Fake = struct {
         for (due.items) |r| r.resolve({});
         var i: usize = 0;
         while (i < self.ticks_len) : (i += 1) {
-            if (self.ticks[i].live) self.ticks[i].tick.invoke(.{});
+            if (!self.ticks[i].live) continue;
+            switch (self.ticks[i].tick) {
+                .frame => |t| t.invoke(.{}),
+                .game => {},
+            }
+        }
+    }
+
+    /// Runs `onTick` callbacks, with this as the game thread.
+    pub fn runTick(self: *Fake) void {
+        @atomicStore(std.Thread.Id, &self.game_thread, std.Thread.getCurrentId(), .monotonic);
+        var i: usize = 0;
+        while (i < self.ticks_len) : (i += 1) {
+            if (!self.ticks[i].live) continue;
+            switch (self.ticks[i].tick) {
+                .game => |t| t.invoke(.{}),
+                .frame => {},
+            }
         }
     }
 
@@ -151,9 +173,21 @@ pub const Fake = struct {
         pub fn onFrame(self: *Fake, tick: W.FrameTick) sal.Plain(W.Frame, "onFrame") {
             if (self.no_frames) return error.NoFrames;
             if (self.ticks_len == self.ticks.len) return error.Failed;
-            self.ticks[self.ticks_len] = .{ .tick = tick, .live = true };
+            self.ticks[self.ticks_len] = .{ .tick = .{ .frame = tick }, .live = true };
             self.ticks_len += 1;
             return .init(&self.ticks[self.ticks_len - 1], partial(W.FrameSubscription, Subscription));
+        }
+
+        pub fn onTick(self: *Fake, tick: W.GameTick) sal.Plain(W.Frame, "onTick") {
+            if (self.ticks_len == self.ticks.len) return error.Failed;
+            self.ticks[self.ticks_len] = .{ .tick = .{ .game = tick }, .live = true };
+            self.ticks_len += 1;
+            return .init(&self.ticks[self.ticks_len - 1], partial(W.FrameSubscription, Subscription));
+        }
+
+        pub fn onGameThread(self: *Fake) bool {
+            const id = @atomicLoad(std.Thread.Id, &self.game_thread, .monotonic);
+            return id != 0 and id == std.Thread.getCurrentId();
         }
 
         pub fn next(self: *Fake) Next {

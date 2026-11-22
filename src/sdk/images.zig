@@ -26,17 +26,24 @@ pub const LoadError = frame.MoveError || std.Io.Dir.ReadFileAllocError || error{
     Cancelled,
     /// Not in a task, and on the render thread where reading would stall the game.
     OnRenderThread,
+    /// Not in a task, and on the game thread, where it'd stall the game too.
+    OnGameThread,
 };
 
 /// Reads and decodes a file on a worker. A task goes back where it was after. Elsewhere it runs right
-/// there, so not on the render thread.
+/// there, so not on the render or game thread.
 pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) LoadError!Image {
     const task = tasks.current();
     const was = if (task) |t| t.where else null;
     if (task == null and frame.onRenderThread()) return error.OnRenderThread;
+    if (task == null and frame.onGameThread()) return error.OnGameThread;
     const owner = Owner.current() orelse return error.Gone;
     if (task != null) try frame.toWorker(io);
-    defer if (was == .render) frame.toRender(io) catch {};
+    defer if (was) |w| switch (w) {
+        .render => frame.toRender(io) catch {},
+        .game => frame.toGame(io) catch {},
+        .worker => {},
+    };
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_file));
     defer allocator.free(bytes);
     return owner.root.images().decode(bytes);

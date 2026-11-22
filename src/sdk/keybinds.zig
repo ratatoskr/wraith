@@ -72,8 +72,8 @@ pub const Presses = struct {
 
     /// Waits for a press since the last `next` returned, so ones while you were busy aren't lost.
     /// From one task at a time. A task carries on on the render thread at the frame of the press.
-    /// Other threads block, so never the render thread, where presses come in.
-    pub fn next(self: *Presses, io: std.Io) (std.Io.Cancelable || error{OnRenderThread})!void {
+    /// Other threads block, so never the render thread, where presses come in, or the game thread.
+    pub fn next(self: *Presses, io: std.Io) (std.Io.Cancelable || error{ OnRenderThread, OnGameThread })!void {
         if (tasks.current()) |t| {
             while (true) {
                 const now = self.count.load(.acquire);
@@ -92,6 +92,7 @@ pub const Presses = struct {
             }
         }
         if (frame.onRenderThread()) return error.OnRenderThread;
+        if (frame.onGameThread()) return error.OnGameThread;
         while (true) {
             const now = self.count.load(.acquire);
             if (now != self.seen) {

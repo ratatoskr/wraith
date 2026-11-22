@@ -3,7 +3,8 @@
 //! `import { settings } from "wraith"` or `require("wraith").settings`.
 //!
 //! Each runs its main file as it starts, then gets pumped once a frame on the render thread, which
-//! never waits for it. Other threads calling in wait their turn.
+//! never waits for it, and neither does the game thread. A tick that finds the script busy skips
+//! it. Other threads calling in wait their turn.
 
 const std = @import("std");
 
@@ -232,9 +233,9 @@ pub fn readLibrary(gpa: std.mem.Allocator, name: []const u8, language: []const u
     }
 }
 
-/// The render thread never waits on a script. Others do.
+/// Neither frame thread waits on a script, so a script never holds up the game. Others do.
 pub fn policy(_: ?*anyopaque) engine.Gate.How {
-    return if (host.frame.onRenderThread()) .try_ else .block;
+    return if (host.frame.onRenderThread() or host.frame.onGameThread()) .try_ else .block;
 }
 
 const RunningImpl = struct {

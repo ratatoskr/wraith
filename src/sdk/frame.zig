@@ -1,11 +1,16 @@
-//! Per-frame callbacks and posts on the render thread, and waits for tasks.
+//! Per-frame callbacks and posts on the render thread, per-tick callbacks on the game thread, and
+//! waits for tasks.
 //!
 //! In a task from `ctx.spawn`, waits like `try frame.next(io)` carry on at the same point in a later
 //! frame, on the render thread, so the code after them can draw. `frame.toWorker` moves the task to a
-//! worker for slow or blocking work and `frame.toRender` brings it back.
+//! worker for slow or blocking work, `frame.toGame` to the game thread, and `frame.toRender` brings
+//! it back.
+//!
+//! Ticks run on the game thread. That's the render thread just before each frame, unless a game
+//! engine or game plugin drives them from the game's own thread with `driveTicks`.
 //!
 //! On any other thread, like from `io.concurrent`, waits block that thread. So never wait on the
-//! render thread or in hooks there.
+//! render thread, the game thread or in hooks there.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -35,6 +40,8 @@ fn frameError(err: anyerror) Error {
 pub const WaitError = Error || std.Io.Cancelable || error{
     /// It'd wait for a frame that can't come till it returns.
     OnRenderThread,
+    /// It'd hold up the game, maybe for good if the render thread's waiting on it.
+    OnGameThread,
 };
 
 /// The last thread a frame ran on. 0 till the first.
@@ -75,6 +82,56 @@ pub fn onFrame(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!
     const tick = W.FrameTick.init(target, Wrap.call);
     const sub = owner.root.frame().onFrame(tick) catch |err| return frameError(err);
     return .{ .object = sub };
+}
+
+/// Whether this is the game thread, where ticks run. False everywhere till the first tick, and
+/// while a new driver's waiting for its first.
+pub fn onGameThread() bool {
+    const owner = Owner.current() orelse return false;
+    return owner.root.frame().onGameThread();
+}
+
+/// Calls `func(target)` once a tick on the game thread, where the game's own code runs, like a
+/// game engine's main thread. No drawing. That's the render thread just before each frame unless a
+/// plugin drives ticks.
+pub fn onTick(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!FrameSubscription {
+    const T = @TypeOf(target);
+    if (@typeInfo(T) != .pointer) @compileError("onTick expects a pointer, found " ++ @typeName(T));
+    const owner = Owner.current() orelse return error.OwnerGone;
+    const tick = W.GameTick.init(target, func);
+    const sub = owner.root.frame().onTick(tick) catch |err| return frameError(err);
+    return .{ .object = sub };
+}
+
+/// Ticks from the game's own thread, from `driveTicks`.
+pub const TickDriver = struct {
+    object: W.TickDriver,
+
+    /// Once a game frame, on the game's thread. Runs every `onTick`, and tasks waiting for one.
+    /// Does nothing unless it's active.
+    pub fn tick(self: TickDriver) void {
+        self.object.tick();
+    }
+
+    /// Whether its ticks count. A game's plugin wins over a game engine's, which wins over the
+    /// rest, and the first to ask wins a tie.
+    pub fn active(self: TickDriver) bool {
+        return self.object.active();
+    }
+
+    /// Hands ticks to the next driver, or back to the render thread. Fine to call twice. It
+    /// happens anyway when the plugin goes.
+    pub fn release(self: TickDriver) void {
+        self.object.release();
+    }
+};
+
+/// Takes over ticks, for a game engine or game plugin that knows the game's own thread. Ticks wait
+/// for its first `tick`, so ask in `start`, before anything subscribes.
+pub fn driveTicks() Error!TickDriver {
+    const owner = Owner.current() orelse return error.OwnerGone;
+    const d = owner.root.frame().driveTicks() catch |err| return frameError(err);
+    return .{ .object = d };
 }
 
 /// Runs once next frame, from any thread, or with `.cancelled` if the plugin's going first.
@@ -129,10 +186,15 @@ pub fn onRender(io: std.Io, comptime func: anytype, args: std.meta.ArgsTuple(@Ty
         const was = t.where;
         try t.park(.render, .{ .frame = t.scheduler.frameCount() + 1 });
         const result = @call(.auto, func, args);
-        if (was == .worker) toWorker(io) catch {};
+        switch (was) {
+            .worker => toWorker(io) catch {},
+            .game => toGame(io) catch {},
+            .render => {},
+        }
         return result;
     }
     if (onRenderThread()) return error.OnRenderThread;
+    if (onGameThread()) return error.OnGameThread;
     const R = ReturnOf(func);
     const Args = @TypeOf(args);
 
@@ -227,6 +289,23 @@ pub fn toRender(io: std.Io) MoveError!void {
     const t = tasks.current() orelse return error.NotInTask;
     if (t.where == .render) return;
     try t.park(.render, .{ .now = true });
+}
+
+/// Moves the task to the game thread, where the game's own code runs, at its next tick. Engine
+/// calls that need the game's main thread work there. Drawing doesn't, and never block there.
+/// Frame waits like `next` carry on on the render thread, so come back after them.
+pub fn toGame(io: std.Io) MoveError!void {
+    _ = io;
+    const t = tasks.current() orelse return error.NotInTask;
+    if (t.where == .game) return;
+    try t.park(.game, .{ .now = true });
+}
+
+/// Waits for the next tick. A task carries on there on the game thread.
+pub fn nextTick(io: std.Io) MoveError!void {
+    _ = io;
+    const t = tasks.current() orelse return error.NotInTask;
+    try t.park(.game, .{ .now = true });
 }
 
 pub const UntilOptions = struct {

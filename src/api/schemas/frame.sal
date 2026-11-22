@@ -1,4 +1,5 @@
-// The render thread's frames.
+// The render thread's frames, and the game thread's ticks. Unless a plugin drives ticks from the
+// game's own thread, they're the same thread, and each tick runs just before its frame.
 
 error FrameError { NoFrames = 1, Failed }
 
@@ -64,9 +65,23 @@ fn void FrameTick();
 // Once, on the render thread at the start of the next frame, before the frame ticks.
 fn void FrameTask();
 
+// Once a tick on the game thread, where the game's own code runs. No drawing here.
+fn void GameTick();
+
 trait FrameSubscription {
     // No more ticks. Fine to call twice, or from inside one.
     void cancel();
+}
+
+// Ticks from the game's own thread, for games that don't run it on the render thread.
+trait TickDriver {
+    // Once a game frame, on the game's thread. Runs every `onTick`. Does nothing unless it's active.
+    void tick();
+    // Whether its ticks are the ones that count. A game's plugin wins over a game engine's, which
+    // wins over the rest, and the first to ask wins a tie. The next one takes over when it goes.
+    bool active();
+    // Hands ticks to the next driver, or back to the render thread. Fine to call twice.
+    void release();
 }
 
 struct FrameStats {
@@ -97,6 +112,14 @@ struct FrameStats {
 trait Frame {
     // Gone with the plugin.
     FrameSubscription!FrameError onFrame(keep FrameTick tick);
+    // On the game thread once a tick. That's the render thread just before each frame, unless a
+    // plugin drives ticks. Gone with the plugin.
+    FrameSubscription!FrameError onTick(keep GameTick tick);
+    // Takes over ticks, for a game engine or game plugin that knows the game's own thread. Ticks
+    // wait for its first `tick`, so ask in `start`. Gone with the plugin.
+    TickDriver!FrameError driveTicks();
+    // Whether this is the thread ticks run on. False everywhere till the first tick.
+    bool onGameThread();
     // Any thread. Posted from inside a task, it waits a frame.
     void!FrameError post(keep FrameTask task);
     // The next frame drawn at `point`, copied only because someone asked. Any thread.

@@ -1,7 +1,8 @@
 //! Plugin tasks as fibers. A task starts on the render thread at the next frame. Waiting for a frame,
 //! a message, a key or a capture parks it, and it carries on at the same point in a later frame, still
-//! able to draw. `frame.toWorker` moves it to a worker thread for slow or blocking work and
-//! `frame.toRender` brings it back. Code on the render thread holds up the game, so never block there.
+//! able to draw. `frame.toWorker` moves it to a worker thread for slow or blocking work,
+//! `frame.toGame` to the game thread at its next tick, and `frame.toRender` brings it back. Code on
+//! the render and game threads holds up the game, so never block there.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -16,7 +17,7 @@ const timing = @import("timing.zig");
 
 const log = @import("log.zig").scoped(.wraith_sdk);
 
-pub const Where = enum(u8) { render, worker };
+pub const Where = enum(u8) { render, worker, game };
 
 pub const SpawnError = error{ OutOfMemory, FiberFailed, Canceled, OwnerGone };
 
@@ -115,10 +116,17 @@ pub const Scheduler = struct {
     tasks: std.ArrayList(*Task) = .empty,
     /// Render thread.
     batch: std.ArrayList(*Task) = .empty,
+    /// Game thread.
+    tick_batch: std.ArrayList(*Task) = .empty,
+    /// Pumps with a batch out, under `lock`. Done tasks are only freed when it's 0, since a batch
+    /// on the other thread could still point at them.
+    pumping: u32 = 0,
     /// Frames run so far.
     frames: atomic.Value(u64) = .init(0),
     /// Under `lock`.
     subscription: ?frame.FrameSubscription = null,
+    /// Under `lock`.
+    tick_subscription: ?frame.FrameSubscription = null,
     /// No frames here, so tasks start on workers and render waits only end by cancelling.
     no_frames: bool = false,
     canceled: Atomic(bool) = .init(false),
@@ -136,6 +144,7 @@ pub const Scheduler = struct {
     pub fn deinit(self: *Scheduler) void {
         self.tasks.deinit(self.allocator);
         self.batch.deinit(self.allocator);
+        self.tick_batch.deinit(self.allocator);
     }
 
     pub fn frameCount(self: *const Scheduler) u64 {
@@ -199,6 +208,8 @@ pub const Scheduler = struct {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.OwnerGone => return error.OwnerGone,
                 };
+                // Without ticks, like an older Wraith, `toGame` waits till it's cancelled
+                self.tick_subscription = frame.onTick(self, pumpTicks) catch null;
             }
             try self.tasks.append(self.allocator, &c.task);
             break :blk self.no_frames;
@@ -209,18 +220,35 @@ pub const Scheduler = struct {
     /// Render thread, once a frame, as the owner.
     fn pump(self: *Scheduler) void {
         const frames = self.frames.fetchAdd(1, .acq_rel) + 1;
+        self.runDue(&self.batch, .render, frames);
+    }
+
+    /// Game thread, once a tick.
+    fn pumpTicks(self: *Scheduler) void {
+        const acting = self.owner.enter();
+        defer acting.end();
+        self.runDue(&self.tick_batch, .game, self.frameCount());
+    }
+
+    fn runDue(self: *Scheduler, batch: *std.ArrayList(*Task), where: Where, frames: u64) void {
         const now = timing.now();
         {
-            self.lock.lockShared();
-            defer self.lock.unlockShared();
-            self.batch.clearRetainingCapacity();
-            self.batch.appendSlice(self.allocator, self.tasks.items) catch return;
+            self.lock.lock();
+            defer self.lock.unlock();
+            batch.clearRetainingCapacity();
+            batch.appendSlice(self.allocator, self.tasks.items) catch return;
+            self.pumping += 1;
         }
-        // Ones resumed here and parked again wait for the next frame
-        for (self.batch.items) |task| {
-            if (task.state.load(.acquire) != .parked or task.where != .render) continue;
-            const woke = task.due(now, frames) orelse continue;
-            task.timed_out = woke == .timed_out;
+        // Ones resumed here and parked again wait for the next frame or tick
+        for (batch.items) |task| {
+            // Claimed first, since the other pump can pick it up the moment it parks there
+            if (task.state.cmpxchgStrong(.parked, .running, .acq_rel, .acquire) != null) continue;
+            const woke = if (task.where == where) task.due(now, frames) else null;
+            if (woke == null) {
+                task.state.store(.parked, .release);
+                continue;
+            }
+            task.timed_out = woke.? == .timed_out;
             const timed = self.resumed_zone.begin();
             defer timed.end();
             self.step(task);
@@ -276,15 +304,18 @@ pub const Scheduler = struct {
             }
             // Asked for a worker again while on one, so keep it here
             if (task.where == .worker and !self.canceled.load(.acquire)) continue;
-            task.where = .render;
+            if (task.where == .worker) task.where = .render;
             task.state.store(.parked, .release);
             return;
         }
     }
 
+    /// Ends a pump's batch, and frees what's done if no other pump has one out.
     fn reap(self: *Scheduler) void {
         self.lock.lock();
         defer self.lock.unlock();
+        self.pumping -= 1;
+        if (self.pumping > 0) return;
         var i: usize = 0;
         while (i < self.tasks.items.len) {
             const task = self.tasks.items[i];
@@ -304,15 +335,17 @@ pub const Scheduler = struct {
         if (self.canceled.swap(true, .acq_rel)) return;
         const acting = self.owner.enter();
         defer acting.end();
-        // Waits for a frame in flight
-        const subscription = blk: {
+        // Waits for a frame or tick in flight
+        const subscription, const tick_subscription = blk: {
             self.lock.lock();
             defer self.lock.unlock();
-            const s = self.subscription;
+            const s = .{ self.subscription, self.tick_subscription };
             self.subscription = null;
+            self.tick_subscription = null;
             break :blk s;
         };
         if (subscription) |s| s.unsubscribe();
+        if (tick_subscription) |s| s.unsubscribe();
         // Workers too, with their blocking calls cancelled
         self.group.cancel(self.io);
         if (self.zones_listed) {
@@ -345,7 +378,7 @@ pub const Scheduler = struct {
 
 /// What `wait` gives: the promise's result, or that the wait was given up.
 pub fn Waited(comptime P: type) type {
-    const Extra = error{ Canceled, OnRenderThread };
+    const Extra = error{ Canceled, OnRenderThread, OnGameThread };
     const A = rt.Awaited(P.Value);
     return switch (@typeInfo(A)) {
         .error_union => |eu| (eu.error_set || Extra)!eu.payload,
@@ -354,12 +387,14 @@ pub fn Waited(comptime P: type) type {
 }
 
 /// Waits for an `async` call into Wraith, like `try sdk.tasks.wait(w.frame().next())`. A task parks
-/// and carries on on the render thread at the frame after it settles. Elsewhere it blocks, so never
-/// on the render thread. A task that's cancelled lets go of it.
+/// and carries on at the frame after it settles, on the game thread if it was there, otherwise on the
+/// render thread. Elsewhere it blocks, so never on the render or game thread. A task that's
+/// cancelled lets go of it.
 pub fn wait(promise: anytype) Waited(@TypeOf(promise)) {
     if (promise.table == null) return promise.take().?;
     const t = current() orelse {
         if (frame.onRenderThread()) return error.OnRenderThread;
+        if (frame.onGameThread()) return error.OnGameThread;
         return promise.wait();
     };
     if (!promise.isSettled()) {
@@ -382,7 +417,7 @@ pub fn wait(promise: anytype) Waited(@TypeOf(promise)) {
         waiter.* = .{ .task = t };
         t.prepareSignal();
         promise.then(waiter, Waiter.settled, .now);
-        const parked = t.park(.render, .{ .signal = true });
+        const parked = t.park(if (t.where == .game) .game else .render, .{ .signal = true });
         waiter.release();
         parked catch |err| {
             promise.cancel();
@@ -501,6 +536,63 @@ const tests = struct {
         // Resumes show in Timings, apart from the frame
         try testing.expect(rig.scheduler.resumed_zone.figures().calls >= 6);
         try testing.expect(rig.scheduler.worker_zone.figures().calls >= 1);
+    }
+
+    const GameHop = struct {
+        threads: [4]u32 = @splat(0),
+        on_game: [4]bool = @splat(false),
+        n: usize = 0,
+        done: Atomic(bool) = .init(false),
+
+        fn note(self: *GameHop) void {
+            self.threads[self.n] = threadId();
+            self.on_game[self.n] = frame.onGameThread();
+            self.n += 1;
+        }
+
+        fn run(self: *GameHop, io: std.Io) !void {
+            defer self.done.store(true, .release);
+            try frame.toGame(io);
+            self.note();
+            // Frame waits carry on on the render thread
+            try frame.next(io);
+            self.note();
+            try frame.toGame(io);
+            try frame.nextTick(io);
+            self.note();
+            try frame.toRender(io);
+            self.note();
+        }
+
+        fn ticks(self: *GameHop, fake: *Fake) void {
+            while (!self.done.load(.acquire)) {
+                fake.runTick();
+                testing.io.sleep(.fromMilliseconds(1), .awake) catch {};
+            }
+        }
+    };
+
+    test "tasks move to the game thread and back" {
+        var rig: Rig = .{};
+        rig.fake.driven = true;
+        rig.init();
+        defer rig.deinit();
+        var hop: GameHop = .{};
+        try rig.scheduler.spawn(GameHop.run, .{ &hop, testing.io });
+        // Its own thread, like a game engine's main thread
+        const ticker = try std.Thread.spawn(.{}, GameHop.ticks, .{ &hop, &rig.fake });
+        defer ticker.join();
+        try rig.runUntil(&hop.done);
+
+        const me = threadId();
+        try testing.expectEqual(4, hop.n);
+        try testing.expect(hop.threads[0] != me);
+        try testing.expect(hop.on_game[0]);
+        try testing.expectEqual(me, hop.threads[1]);
+        try testing.expect(!hop.on_game[1]);
+        try testing.expectEqual(hop.threads[0], hop.threads[2]);
+        try testing.expect(hop.on_game[2]);
+        try testing.expectEqual(me, hop.threads[3]);
     }
 
     test "worker fibers have room for large stack frames" {

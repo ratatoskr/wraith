@@ -37,6 +37,7 @@ pub const Frame = W.Frame;
 pub const Game = game_area.Game;
 pub const SchemaArea = host.schemas.Area;
 pub const FrameSubscription = W.FrameSubscription;
+pub const TickDriver = W.TickDriver;
 pub const Input = W.Input;
 pub const Keybind = W.Keybind;
 pub const Library = W.Libraries;
@@ -94,6 +95,7 @@ pub const Tables = struct {
     game: *const sal.Table(Game),
     schema: *const sal.Table(SchemaArea),
     frame_subscription: *const sal.Table(FrameSubscription),
+    tick_driver: *const sal.Table(TickDriver),
     input: *const sal.Table(Input),
     keybind: *const sal.Table(Keybind),
     libraries: *const sal.Table(Library),
@@ -164,6 +166,7 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .game = h.adopt(Game, sal.implement(Game, game_area.Impl), o) catch return null,
         .schema = h.adopt(SchemaArea, sal.implement(SchemaArea, host.schemas.SchemaImpl), o) catch return null,
         .frame_subscription = h.adopt(FrameSubscription, sal.implement(FrameSubscription, SubscriptionImpl), o) catch return null,
+        .tick_driver = h.adopt(TickDriver, sal.implement(TickDriver, TickDriverImpl), o) catch return null,
         .input = h.adopt(Input, sal.implement(Input, InputImpl), o) catch return null,
         .keybind = h.adopt(Keybind, sal.implement(Keybind, KeybindImpl), o) catch return null,
         .libraries = h.adopt(Library, sal.implement(Library, LibrariesImpl), o) catch return null,
@@ -503,6 +506,25 @@ const FrameImpl = struct {
         return .init(f, t.frame_subscription);
     }
 
+    pub fn onTick(loaded: *Loaded, tick: frame.GameTick) sal.Plain(Frame, "onTick") {
+        const t = tablesOf(loaded) orelse {
+            tick.release();
+            return error.Failed;
+        };
+        const f = frame.onTick(loaded, tick) catch |err| return frameError(err);
+        return .init(f, t.frame_subscription);
+    }
+
+    pub fn driveTicks(loaded: *Loaded) sal.Plain(Frame, "driveTicks") {
+        const t = tablesOf(loaded) orelse return error.Failed;
+        const d = frame.driveTicks(loaded) catch |err| return frameError(err);
+        return .init(d, t.tick_driver);
+    }
+
+    pub fn onGameThread(_: *Loaded) bool {
+        return frame.onGameThread();
+    }
+
     pub fn post(loaded: *Loaded, task: frame.Task) sal.Plain(Frame, "post") {
         frame.post(loaded, task) catch |err| return frameError(err);
     }
@@ -547,6 +569,20 @@ pub const NextResolver = ResolverOf(sal.Plain(Frame, "next"));
 const SubscriptionImpl = struct {
     pub fn cancel(f: *frame.Frame) void {
         f.stop();
+    }
+};
+
+const TickDriverImpl = struct {
+    pub fn tick(d: *frame.Driver) void {
+        d.tick();
+    }
+
+    pub fn active(d: *frame.Driver) bool {
+        return d.isActive();
+    }
+
+    pub fn release(d: *frame.Driver) void {
+        d.release();
     }
 };
 

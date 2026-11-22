@@ -106,9 +106,9 @@ trait Managed {
     // Calls a C# method by name, like `invoke("System.Int32", "Parse", 0, [text "42"])`, picking
     // the overload with as many parameters whose types fit the arguments best. `target` is the
     // object for an instance method, or 0 for a static one. It runs right here on a thread the
-    // runtime knows, like Unity's main thread in the `unity` service's frames, which Unity's own
-    // methods need. Anywhere else it runs on Wraith's own thread. If it throws, it fails with
-    // `Threw`, saying what. Structs come back as their boxed object.
+    // runtime knows, like Unity's main thread in `frame.onTick` with the `unity` plugin, which
+    // Unity's own methods need. Anywhere else it runs on Wraith's own thread. If it throws, it fails
+    // with `Threw`, saying what. Structs come back as their boxed object.
     ManagedValue!ManagedError invoke(string class_name, string method, usize target, []ManagedValue args);
     // Keeps the C# object at `object` from being collected till `release`. The garbage collector
     // doesn't see what a plugin keeps in its own memory, so hold anything kept past the call it came
