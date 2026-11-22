@@ -11,6 +11,7 @@ const std = @import("std");
 const core = @import("wraith_core");
 const ui = @import("wraith_ui");
 const Chord = @import("wraith_platform").input.Chord;
+const Keys = @import("wraith_platform").input.Keys;
 const Keybinds = @import("tuft_input").Keybinds;
 const tuft_window = @import("tuft_window");
 const sync = @import("tuft_sys").sync;
@@ -36,6 +37,9 @@ restart_pending: bool = false,
 /// Keys on more than one thing, refreshed when the keys change.
 clashes: []Keybinds.Clash = &.{},
 seen_keys: u32 = std.math.maxInt(u32),
+/// A key setting getting another key, and whether that starts this frame.
+adding: ?*Setting = null,
+adding_starts: bool = false,
 /// What the sidebar has picked, named by `page_name`.
 page: PageKind = .wraith,
 page_name: [96]u8 = undefined,
@@ -531,19 +535,47 @@ fn takePicked(self: *SettingsWindow, shell: *Shell) void {
     self.apply(shell, s, .{ .path = path }, true);
 }
 
-fn keyRow(self: *SettingsWindow, shell: *Shell, s: *Setting, current: ?Chord) void {
-    var picked = current;
-    ui.setNextItemWidth(200);
+fn keyRow(self: *SettingsWindow, shell: *Shell, s: *Setting, current: ?Keys) void {
     const held = switch (s.def.kind) {
         .key => |k| k.held,
         else => false,
     };
-    if (ui.chordInput("##key", &picked, .{ .none = "No key", .held = held })) self.apply(shell, s, .{ .key = picked }, true);
-    if (current != null) {
+    var buf: [Keys.max]Chord = undefined;
+    const chords: []Chord = if (current) |k| k.slice(&buf) else buf[0..0];
+    const width = 150;
+    // Each key, with a minus to take it off
+    for (chords, 0..) |chord, i| {
+        const scope = ui.id(i);
+        defer scope.end();
+        if (i > 0) ui.sameLine();
+        var picked: ?Chord = chord;
+        ui.setNextItemWidth(width);
+        if (ui.chordInput("##key", &picked, .{ .none = "No key", .held = held })) if (picked) |p| self.apply(shell, s, .{ .key = current.?.replaced(i, p) }, true);
         ui.sameLine();
-        if (ui.iconButton(icons.x ++ "##clear", "No key")) self.apply(shell, s, .{ .key = null }, true);
+        if (ui.iconButton(icons.minus ++ "##remove", "Take this key off")) self.apply(shell, s, .{ .key = current.?.without(i) }, true);
     }
-    // Who else is on it, as it's bound now
+    // Another key, listening straight away, or the first
+    const adding = self.adding == s;
+    if (chords.len == 0 or adding) {
+        if (chords.len > 0) ui.sameLine();
+        var picked: ?Chord = null;
+        ui.setNextItemWidth(width);
+        if (ui.chordInput("##new", &picked, .{ .none = "No key", .held = held, .listen = adding and self.adding_starts })) {
+            if (picked) |p| self.apply(shell, s, .{ .key = if (current) |k| k.with(p) else .one(p) }, true);
+            self.adding = null;
+        } else if (adding and !self.adding_starts and !ui.listeningForKeys()) {
+            // Escape, or a click elsewhere
+            self.adding = null;
+        }
+        self.adding_starts = false;
+    } else if (chords.len < Keys.max) {
+        ui.sameLine();
+        if (ui.iconButton(icons.plus ++ "##add", "Add another key that does the same")) {
+            self.adding = s;
+            self.adding_starts = true;
+        }
+    }
+    // Who else is on them, as they're bound now
     for (self.clashes) |clash| {
         const mine = for (clash.ids) |id| {
             if (std.mem.eql(u8, id, s.def.id)) break true;
@@ -551,7 +583,8 @@ fn keyRow(self: *SettingsWindow, shell: *Shell, s: *Setting, current: ?Chord) vo
         if (!mine) continue;
         var text_buf: [256]u8 = undefined;
         var w: std.Io.Writer = .fixed(&text_buf);
-        w.writeAll(icons.triangle_alert ++ "  Also on this key: ") catch {};
+        var key_buf: [64]u8 = undefined;
+        w.print(icons.triangle_alert ++ "  Also on {s}: ", .{ui.chordName(&key_buf, clash.chord)}) catch {};
         var first = true;
         for (clash.ids) |id| {
             if (std.mem.eql(u8, id, s.def.id)) continue;

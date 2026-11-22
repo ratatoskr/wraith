@@ -41,9 +41,10 @@ pub fn draw(self: *Shortcuts, wb: *Workbench) void {
         ui.alignTextToFramePadding();
         ui.text("{s}", .{s.def.name});
         ui.sameLineWith(ui.scaled(170), -1);
-        var picked = current;
+        // Shortcuts in the workbench's own window take one key
+        var picked: ?Chord = if (current) |k| k.first() else null;
         ui.setNextItemWidth(ui.scaled(200));
-        if (ui.chordInput("##key", &picked, .{ .none = "No key" })) set(registry, s, .{ .key = picked });
+        if (ui.chordInput("##key", &picked, .{ .none = "No key" })) set(registry, s, .{ .key = if (picked) |p| .one(p) else null });
         const default = Registry.defaultOf(s.def.kind);
         if (!(Registry.Value{ .key = current }).eql(default)) {
             ui.sameLine();

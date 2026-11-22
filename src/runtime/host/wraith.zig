@@ -592,10 +592,20 @@ const InputImpl = struct {
             fired.release();
             return error.InvalidChord;
         };
+        var also_buf: [tuft_input.Keys.max - 1]tuft_input.Chord = undefined;
+        if (action.also.len > also_buf.len) {
+            fired.release();
+            return error.InvalidChord;
+        }
+        for (action.also, also_buf[0..action.also.len]) |c, *out| out.* = chordOf(c) orelse {
+            fired.release();
+            return error.InvalidChord;
+        };
         const record = keybinds.bind(loaded, .{
             .id = action.id,
             .name = action.name,
             .chord = chord,
+            .also = also_buf[0..action.also.len],
             .consume = !action.passthrough,
             .while_typing = action.while_typing,
             .held = action.held,
@@ -610,19 +620,29 @@ const InputImpl = struct {
     }
 };
 
+/// What `Keybind.chords` gives, good till the thread's next call.
+threadlocal var chords_out: [tuft_input.Keys.max]W.Chord = undefined;
+
 const KeybindImpl = struct {
-    pub fn rebind(record: *keybinds.Record, to: W.Chord) sal.Plain(Keybind, "rebind") {
-        keybinds.rebind(record, chordOf(to) orelse return error.InvalidChord) catch |err| return keybindError(err);
+    pub fn rebind(record: *keybinds.Record, to: []const W.Chord) sal.Plain(Keybind, "rebind") {
+        var buf: [tuft_input.Keys.max]tuft_input.Chord = undefined;
+        if (to.len > buf.len) return error.InvalidChord;
+        for (to, buf[0..to.len]) |c, *out| out.* = chordOf(c) orelse return error.InvalidChord;
+        keybinds.rebind(record, tuft_input.Keys.of(buf[0..to.len])) catch |err| return keybindError(err);
     }
 
     pub fn unbind(record: *keybinds.Record) void {
         record.stop();
     }
 
-    pub fn chord(record: *keybinds.Record) ?W.Chord {
-        const c = keybinds.chordOf(record) orelse return null;
-        const bits: u8 = @bitCast(c.mods);
-        return .{ .key = @fromBackingInt(@backingInt(c.key)), .mods = @bitCast(bits & 0xF) };
+    pub fn chords(record: *keybinds.Record) []const W.Chord {
+        const keys = keybinds.keysOf(record) orelse return &.{};
+        for (0..keys.count()) |i| {
+            const c = keys.get(i).?;
+            const bits: u8 = @bitCast(c.mods);
+            chords_out[i] = .{ .key = @fromBackingInt(@backingInt(c.key)), .mods = @bitCast(bits & 0xF) };
+        }
+        return chords_out[0..keys.count()];
     }
 };
 

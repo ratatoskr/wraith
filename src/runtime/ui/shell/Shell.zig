@@ -36,6 +36,7 @@ const ShellSettings = @import("ShellSettings.zig");
 pub const DevPlugins = @import("DevPlugins.zig");
 pub const Registry = @import("../../settings/Registry.zig");
 const Chord = wraith_platform.input.Chord;
+const Keys = wraith_platform.input.Keys;
 
 pub const overlay_key_default: Chord = .{ .key = .insert };
 pub const workbench_key_default: Chord = .{ .key = .home, .mods = .{ .ctrl = true } };
@@ -176,7 +177,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
         .name = "Open or close the Wraith overlay",
         .help = "Brings up Wraith over the game, and closes it again.",
         .group = Settings.group,
-        .kind = .{ .key = .{ .default = overlay_key_default, .while_typing = true } },
+        .kind = .{ .key = .{ .default = .one(overlay_key_default), .while_typing = true } },
     }, .{ .key = .{ .ctx = self, .call = overlayKeyPressed } });
     errdefer registry.remove(self.overlay_key);
     self.workbench_key = try registry.add(.{
@@ -185,7 +186,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
         .help = "Disassembly, memory, addresses, search and the other developer tools, in a window of their own.",
         .group = Settings.group,
         .section = "Developer",
-        .kind = .{ .key = .{ .default = workbench_key_default } },
+        .kind = .{ .key = .{ .default = .one(workbench_key_default) } },
     }, .{ .key = .{ .ctx = self, .call = workbenchKeyPressed } });
     errdefer registry.remove(self.workbench_key);
     self.welcome.choices = .{ .overlay_key = self.overlayKey() orelse overlay_key_default };
@@ -294,22 +295,31 @@ pub fn pluginCount(self: *Shell) usize {
     return loader.count();
 }
 
-/// Null if it's been cleared.
+/// Null if it's been cleared. The first, if there's more than one.
 pub fn overlayKey(self: *Shell) ?Chord {
-    return self.registry.get(self.overlay_key).key;
+    const keys = self.registry.get(self.overlay_key).key orelse return null;
+    return keys.first();
 }
 
-/// Null if it's been cleared.
+/// Null if it's been cleared. The first, if there's more than one.
 pub fn workbenchKey(self: *Shell) ?Chord {
-    return self.registry.get(self.workbench_key).key;
+    const keys = self.registry.get(self.workbench_key).key orelse return null;
+    return keys.first();
 }
 
+/// Its first key. Any more picked in Settings stay.
 pub fn setOverlayKey(self: *Shell, chord: ?Chord) !void {
-    try self.registry.set(self.overlay_key, .{ .key = chord });
+    try self.registry.set(self.overlay_key, .{ .key = firstReplaced(self.registry.get(self.overlay_key).key, chord) });
 }
 
+/// Its first key. Any more picked in Settings stay.
 pub fn setWorkbenchKey(self: *Shell, chord: ?Chord) !void {
-    try self.registry.set(self.workbench_key, .{ .key = chord });
+    try self.registry.set(self.workbench_key, .{ .key = firstReplaced(self.registry.get(self.workbench_key).key, chord) });
+}
+
+fn firstReplaced(now: ?Keys, chord: ?Chord) ?Keys {
+    const c = chord orelse return null;
+    return if (now) |n| n.replaced(0, c) else .one(c);
 }
 
 fn overlayKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
@@ -903,7 +913,7 @@ const tests = struct {
             if (std.mem.eql(u8, b.id, "wraith.toggle_overlay")) overlay_key = b.*;
             if (std.mem.eql(u8, b.id, "wraith.toggle_workbench")) workbench_bound = true;
         }
-        try testing.expectEqual(.f8, overlay_key.?.chord.key);
+        try testing.expectEqual(.f8, overlay_key.?.keys.key);
         try testing.expect(workbench_bound);
         // The scale only changes on a restart, which it says
         try testing.expect(page.restart_pending);
@@ -990,7 +1000,7 @@ const tests = struct {
         };
         var noop: Noop = .{};
         // On the overlay's own key
-        const clash = try rig.keybinds.bindUnscoped(.{ .id = "kai.toggle", .name = "Toggle", .chord = Shell.overlay_key_default }, &noop, Noop.call);
+        const clash = try rig.keybinds.bindUnscoped(.{ .id = "kai.toggle", .name = "Toggle", .keys = .one(Shell.overlay_key_default) }, &noop, Noop.call);
         defer clash.unbind();
         for (0..2) |_| rig.present();
         try testing.expectEqual(1, rig.overlay.host.toasts.count());
@@ -1023,11 +1033,11 @@ const tests = struct {
                 return null;
             }
         };
-        try testing.expectEqual(.insert, Find.binding(rig.keybinds, "wraith.toggle_overlay").?.chord.key);
+        try testing.expectEqual(.insert, Find.binding(rig.keybinds, "wraith.toggle_overlay").?.keys.key);
         try testing.expect(Find.binding(rig.keybinds, "wraith.toggle_workbench") != null);
 
         shell.finishWelcome(.{ .overlay_key = .{ .key = .f8 } });
-        try testing.expectEqual(.f8, Find.binding(rig.keybinds, "wraith.toggle_overlay").?.chord.key);
+        try testing.expectEqual(.f8, Find.binding(rig.keybinds, "wraith.toggle_overlay").?.keys.key);
     }
 
     test "Settings lists dev plugins" {

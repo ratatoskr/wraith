@@ -144,6 +144,8 @@ pub const Action = struct {
     name: []const u8,
     /// The default. Whoever plays can change it in Wraith's settings, and theirs wins.
     chord: input.Chord,
+    /// More that do the same by default, like a controller button.
+    also: []const input.Chord = &.{},
     consume: bool = true,
     while_typing: bool = false,
     /// Held, like a key to move with: it fires with any modifiers down and can be one, like Shift.

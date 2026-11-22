@@ -51,18 +51,19 @@ fn bind(tw: *Tweaks, setting: *?*Registry.Setting, default: *?input.Chord, key: 
         .group = group,
         .section = section,
         .scope = .game,
-        .kind = .{ .key = .{ .default = key } },
+        .kind = .{ .key = .{ .default = if (key) |k| .one(k) else null } },
     }, .{ .key = action }) catch |err| blk: {
         log.warn("Couldn't add the key for {s}, {s}: {t}", .{ section, label, err });
         break :blk null;
     };
 }
 
-/// What its key is now, picked or the project's.
+/// What its first key is now, picked or the project's.
 pub fn keyOf(tw: *Tweaks, setting: ?*Registry.Setting) ?input.Chord {
     const s = setting orelse return null;
     const registry = tw.registry orelse return null;
-    return registry.get(s).key;
+    const keys = registry.get(s).key orelse return null;
+    return keys.first();
 }
 
 /// `Kai / Combat / Max bravery`, from the groups it's in down.

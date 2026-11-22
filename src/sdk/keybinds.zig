@@ -48,9 +48,15 @@ pub const Presses = struct {
         self.keybind = null;
     }
 
-    /// Like `bind`, but if it's bound already it just moves to the action's chord.
+    /// Like `bind`, but if it's bound already it just moves to the action's keys.
     pub fn rebind(self: *Presses, action: W.Action) !void {
-        if (self.keybind) |k| return k.rebind(action.chord);
+        if (self.keybind) |k| {
+            var buf: [4]W.Chord = undefined;
+            buf[0] = action.chord;
+            const n = @min(action.also.len, buf.len - 1);
+            @memcpy(buf[1..][0..n], action.also[0..n]);
+            return k.rebind(buf[0 .. n + 1]);
+        }
         try self.bind(action);
     }
 

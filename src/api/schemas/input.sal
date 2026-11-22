@@ -37,8 +37,10 @@ struct Action {
     string id;
     // What Settings lists it as
     string name;
-    // The default. Whoever plays can pick another in Settings, and theirs wins.
+    // The default. Whoever plays can pick others in Settings, and theirs win.
     Chord chord;
+    // More that do the same by default, like a controller button. Up to 3.
+    []Chord also;
     // The game sees the key too
     bool passthrough;
     // Still fires while typing in a text box
@@ -67,12 +69,14 @@ error KeybindError { Unavailable = 1, AlreadyBound, InvalidChord, Failed }
 fn void KeybindFired(KeyPhase phase);
 
 trait Keybind {
-    // Counts from the next press. Saved, like picking it in Settings.
-    void!KeybindError rebind(Chord chord);
-    // Its key stays saved for next time.
+    // Its keys from now on, any of which does it. Saved, like picking them in Settings. Empty
+    // leaves it without one.
+    void!KeybindError rebind([]Chord chords);
+    // Its keys stay saved for next time.
     void unbind();
-    // What it's on now, the player's pick if they made one. Null without a key.
-    ?Chord chord();
+    // What it's on now, the player's picks if they made some. Empty without a key. Good till the
+    // thread's next call into Wraith.
+    []Chord chords();
 }
 
 trait Input {

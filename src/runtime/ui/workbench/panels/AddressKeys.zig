@@ -109,7 +109,7 @@ fn sync(self: *AddressKeys, list: *const AddressList) void {
             .group = "Address list",
             .section = b.entry,
             .scope = .game,
-            .kind = .{ .key = .{ .default = b.chord } },
+            .kind = .{ .key = .{ .default = .one(b.chord) } },
         }, .{ .key = .{ .ctx = slot, .call = Slot.pressed } }) catch |err| blk: {
             log.warn("Couldn't add the key for {s}: {t}", .{ b.label, err });
             break :blk null;

@@ -11,6 +11,7 @@ const core = @import("wraith_core");
 const tuft_sys = @import("tuft_sys");
 const tuft_input = @import("tuft_input");
 const Chord = tuft_input.Chord;
+const Keys = tuft_input.Keys;
 const Keybinds = tuft_input.Keybinds;
 
 const log = core.log.scoped(.wraith_runtime);
@@ -56,7 +57,7 @@ pub const Path = struct {
 
 pub const Key = struct {
     /// Null starts without one.
-    default: ?Chord,
+    default: ?Keys,
     /// Bound on the game's keys. Off for keys used inside Wraith's own windows, which the registry
     /// only keeps.
     in_game: bool = true,
@@ -74,8 +75,8 @@ pub const Value = union(Type) {
     choice: []const u8,
     text: []const u8,
     colour: [4]f32,
-    /// Null is no key.
-    key: ?Chord,
+    /// Null is no key. Any of them does it.
+    key: ?Keys,
     path: []const u8,
 
     pub fn eql(a: Value, b: Value) bool {
@@ -340,7 +341,7 @@ pub fn setWith(self: *Registry, s: *Setting, wanted: Value, options: SetOptions)
         .choice => |ch| for (ch.options) |o| {
             if (std.mem.eql(u8, o, v.choice)) break;
         } else return error.NotAnOption,
-        .key => |k| if (v.key) |chord| if (!(if (k.held) chord.isValidHeld() else chord.isValid())) return error.InvalidChord,
+        .key => |k| if (v.key) |keys| if (!keys.isValid(k.held)) return error.InvalidChord,
         else => {},
     }
     const hook = blk: {
@@ -418,9 +419,9 @@ fn bindKey(self: *Registry, s: *Setting) void {
         else => return,
     };
     if (!key.in_game) return;
-    const chord = self.get(s).key;
+    const keys = self.get(s).key;
     if (s.binding) |b| {
-        if (chord) |c| {
+        if (keys) |c| {
             b.rebind(c) catch |err| log.warn("Couldn't rebind {s}: {t}", .{ s.def.id, err });
             return;
         }
@@ -428,12 +429,12 @@ fn bindKey(self: *Registry, s: *Setting) void {
         s.binding = null;
         return;
     }
-    const c = chord orelse return;
+    const c = keys orelse return;
     // Named in full, like `Mira: set 999999`, since keys are listed without their headings
     var name_buf: [256]u8 = undefined;
     const name = if (s.def.section.len > 0) std.fmt.bufPrint(&name_buf, "{s}: {s}", .{ s.def.section, s.def.name }) catch s.def.name else s.def.name;
-    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = name, .chord = c, .consume = key.consume, .while_typing = key.while_typing, .held = key.held }, s, Setting.fire) catch |err| blk: {
-        log.warn("Couldn't bind {f} for {s}: {t}", .{ c, s.def.id, err });
+    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = name, .keys = c, .consume = key.consume, .while_typing = key.while_typing, .held = key.held }, s, Setting.fire) catch |err| blk: {
+        log.warn("Couldn't bind {f} for {s}: {t}", .{ c.first(), s.def.id, err });
         break :blk null;
     };
 }
@@ -550,6 +551,24 @@ const tests = struct {
         try testing.expectEqual(mode, r.find("kai.mode").?);
     }
 
+    test "a key saved before lists came still loads" {
+        const a = testing.allocator;
+        const io = testing.io;
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        // Like an older Wraith wrote it, with one chord
+        try tmp.dir.writeFile(io, .{ .sub_path = "game.zon", .data = ".{ .values = .{ .{ .id = \"kai.go\", .value = .{ .key = .{ .key = .f9, .mods = .{ .ctrl = true } } } } } }\n" });
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        defer a.free(root);
+        const game_path = try std.fs.path.join(a, &.{ root, "game.zon" });
+        defer a.free(game_path);
+        const r = try Registry.create(a, .{ .io = io, .game_path = game_path });
+        defer r.destroy();
+        const k = try r.add(.{ .id = "kai.go", .name = "Go", .group = "Kai", .scope = .game, .kind = .{ .key = .{ .default = .{ .key = .f8 } } } }, .{});
+        defer r.remove(k);
+        try testing.expect(r.get(k).key.?.eql(.one(.{ .key = .f9, .mods = .{ .ctrl = true } })));
+    }
+
     test "saved to its scope's file, and back next time" {
         const a = testing.allocator;
         const io = testing.io;
@@ -573,7 +592,7 @@ const tests = struct {
             const k = try r.add(hold, .{});
             defer r.remove(k);
             try r.set(t, .{ .text = "Light" });
-            try r.set(k, .{ .key = .{ .key = .f8 } });
+            try r.set(k, .{ .key = Keys.one(.{ .key = .f8 }).with(.{ .key = .gamepad_y }) });
             // One that's not registered now stays too
             try r.keep(&r.stores[0], "gone.plugin", .{ .toggle = true });
         }
@@ -593,6 +612,7 @@ const tests = struct {
         defer r.remove(k);
         try testing.expectEqualStrings("Light", r.get(t).text);
         try testing.expectEqual(.f8, r.get(k).key.?.key);
+        try testing.expectEqual(.gamepad_y, r.get(k).key.?.get(1).?.key);
         try testing.expect(r.stores[0].values.get("gone.plugin").?.toggle);
 
         // Back to the default isn't saved
@@ -629,7 +649,7 @@ const tests = struct {
         try testing.expectEqual(1, rig.keybinds.countPrefix("test.go"));
 
         try r.set(k, .{ .key = .{ .key = .f9 } });
-        try testing.expectEqual(.f9, k.binding.?.chord.key);
+        try testing.expectEqual(.f9, k.binding.?.keys.key);
         _ = rig.send(api.WM_KEYDOWN, 0x78, 1);
         _ = rig.send(api.WM_KEYUP, 0x78, @bitCast(@as(usize, 0xC000_0001)));
         rig.present();
@@ -640,7 +660,7 @@ const tests = struct {
         try testing.expectEqual(0, rig.keybinds.countPrefix("test.go"));
         try testing.expectError(error.InvalidChord, r.set(k, .{ .key = .{ .key = .left_shift } }));
         try r.reset(k);
-        try testing.expectEqual(.f8, k.binding.?.chord.key);
+        try testing.expectEqual(.f8, k.binding.?.keys.key);
     }
 };
 

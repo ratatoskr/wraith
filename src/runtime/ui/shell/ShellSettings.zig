@@ -155,7 +155,7 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
             // Set in the workbench's Keyboard shortcuts
             .hidden = true,
             // Inside the workbench's window, not the game's
-            .kind = .{ .key = .{ .default = @field(key_defaults, field), .in_game = false } },
+            .kind = .{ .key = .{ .default = .one(@field(key_defaults, field)), .in_game = false } },
         }, .{ .changed = .{ .ctx = shell, .call = workbenchKeyChanged } });
         try added.append(shell.allocator, self.workbench_keys[i]);
     }
@@ -189,7 +189,7 @@ pub fn frameStats(self: *const ShellSettings) Settings.FrameStats {
 pub fn workbenchKeys(self: *const ShellSettings) WorkbenchKeys {
     var keys: WorkbenchKeys = .{};
     inline for (key_names, 0..) |field, i| {
-        if (self.registry.get(self.workbench_keys[i]).key) |k| @field(keys, field) = k;
+        if (self.registry.get(self.workbench_keys[i]).key) |k| @field(keys, field) = k.first();
     }
     return keys;
 }

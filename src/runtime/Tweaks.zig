@@ -439,14 +439,16 @@ pub fn resetValue(self: *Tweaks, name: []const u8, field: []const u8) void {
 }
 
 /// Your own key for it, over the project's, saved in the registry for this game. Null means no
-/// key.
+/// key. Any more picked in Settings stay.
 pub fn setKey(self: *Tweaks, name: []const u8, key: ?input.Chord) void {
     self.lock.lock();
     defer self.lock.unlock();
     const t = definitions.find(self, name) orelse return;
     const s = t.setting orelse return;
     const r = self.registry orelse return;
-    r.set(s, .{ .key = key }) catch |err| log.warn("Couldn't set the key for {s}: {t}", .{ name, err });
+    const now = r.get(s).key;
+    const keys: ?input.Keys = if (key) |k| (if (now) |n| n.replaced(0, k) else .one(k)) else null;
+    r.set(s, .{ .key = keys }) catch |err| log.warn("Couldn't set the key for {s}: {t}", .{ name, err });
 }
 
 /// Back to the project's key.

@@ -119,7 +119,9 @@ pub fn bind(loaded: *Loaded, action: api.Action, fired: Fired) api.KeybindError!
 fn register(loaded: *Loaded, action: api.Action, fired: Fired) api.KeybindError!*Record {
     if (keybinds == null) return error.KeybindsUnavailable;
     const r = registry orelse return error.KeybindsUnavailable;
-    if (!(if (action.held) action.chord.isValidHeld() else action.chord.isValid())) return error.InvalidChord;
+    var defaults: tuft_input.Keys = .one(action.chord);
+    for (action.also) |c| defaults = defaults.with(c);
+    if (!defaults.isValid(action.held)) return error.InvalidChord;
     var id_buf: [256]u8 = undefined;
     const id = std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ loaded.name, action.id }) catch {
         log.warn("{s}'s keybind id is too long", .{loaded.name});
@@ -137,7 +139,7 @@ fn register(loaded: *Loaded, action: api.Action, fired: Fired) api.KeybindError!
             .global => .global,
             .game => .game,
         },
-        .kind = .{ .key = .{ .default = action.chord, .consume = action.consume, .while_typing = action.while_typing, .held = action.held } },
+        .kind = .{ .key = .{ .default = defaults, .consume = action.consume, .while_typing = action.while_typing, .held = action.held } },
     }, .{ .key = .{ .ctx = record, .call = Record.fire } }) catch |err| {
         allocator.destroy(record);
         return switch (err) {
@@ -154,19 +156,19 @@ fn register(loaded: *Loaded, action: api.Action, fired: Fired) api.KeybindError!
     return record;
 }
 
-/// Like someone picking it in Wraith's settings, so it's saved.
-pub fn rebind(record: *Record, chord: wraith_platform.input.Chord) api.KeybindError!void {
+/// Like someone picking them in Wraith's settings, so they're saved. Null leaves it without a key.
+pub fn rebind(record: *Record, keys: ?tuft_input.Keys) api.KeybindError!void {
     const r = registry orelse return error.KeybindFailed;
     const setting = record.setting orelse return error.KeybindFailed;
-    r.set(setting, .{ .key = chord }) catch |err| return switch (err) {
+    r.set(setting, .{ .key = keys }) catch |err| return switch (err) {
         error.InvalidChord => error.InvalidChord,
         error.OutOfMemory => error.OutOfMemory,
         else => error.KeybindFailed,
     };
 }
 
-/// What it's on now, the player's pick if they made one. Null once unbound or set to no key.
-pub fn chordOf(record: *Record) ?wraith_platform.input.Chord {
+/// What it's on now, the player's picks if they made some. Null once unbound or set to no key.
+pub fn keysOf(record: *Record) ?tuft_input.Keys {
     const r = registry orelse return null;
     const setting = record.setting orelse return null;
     return r.get(setting).key;
@@ -274,18 +276,27 @@ const tests = struct {
         defer fake.unload();
         var state: State = .{};
         const input = sdk.wraith.root().?.input();
-        const fast = try input.bind(.{ .id = "fast", .name = "Faster", .chord = .{ .key = .left_shift }, .passthrough = true, .held = true }, api.wraith.KeybindFired.init(&state, State.fired));
-        try testing.expectEqual(api.wraith.Key.left_shift, fast.chord().?.key);
+        const fast = try input.bind(.{ .id = "fast", .name = "Faster", .chord = .{ .key = .left_shift }, .also = &.{.{ .key = .gamepad_right_shoulder }}, .passthrough = true, .held = true }, api.wraith.KeybindFired.init(&state, State.fired));
+        try testing.expectEqual(2, fast.chords().len);
+        try testing.expectEqual(api.wraith.Key.left_shift, fast.chords()[0].key);
+        try testing.expectEqual(api.wraith.Key.gamepad_right_shoulder, fast.chords()[1].key);
         // Modifiers on a held key don't make sense
-        try testing.expectError(error.InvalidChord, fast.rebind(.{ .key = .w, .mods = .{ .shift = true } }));
-        try fast.rebind(.{ .key = .left_ctrl });
-        try testing.expectEqual(api.wraith.Key.left_ctrl, fast.chord().?.key);
+        try testing.expectError(error.InvalidChord, fast.rebind(&.{.{ .key = .w, .mods = .{ .shift = true } }}));
+        try fast.rebind(&.{ .{ .key = .left_ctrl }, .{ .key = .x } });
+        try testing.expectEqual(api.wraith.Key.left_ctrl, fast.chords()[0].key);
+        try testing.expectEqual(2, fast.chords().len);
 
+        // Either does it
         _ = rig.send(win.WM_KEYDOWN, 0x11, 1);
         _ = rig.send(win.WM_KEYUP, 0x11, @bitCast(@as(usize, 0xC000_0001)));
+        _ = rig.send(win.WM_KEYDOWN, 'X', 1);
+        _ = rig.send(win.WM_KEYUP, 'X', @bitCast(@as(usize, 0xC000_0001)));
         rig.present();
-        try testing.expectEqual(1, state.presses);
-        try testing.expectEqual(1, state.releases);
+        try testing.expectEqual(2, state.presses);
+        try testing.expectEqual(2, state.releases);
+
+        try fast.rebind(&.{});
+        try testing.expectEqual(0, fast.chords().len);
     }
 
     test "rebind live and pause" {
@@ -301,8 +312,8 @@ const tests = struct {
         defer fake.unload();
         var state: State = .{};
         const kb = try state.bind("toggle", .f8, true);
-        try kb.rebind(.{ .key = .f9 });
-        try testing.expectError(error.InvalidChord, kb.rebind(.{ .key = .left_shift }));
+        try kb.rebind(&.{.{ .key = .f9 }});
+        try testing.expectError(error.InvalidChord, kb.rebind(&.{.{ .key = .left_shift }}));
 
         _ = rig.send(win.WM_KEYDOWN, VK_F8, 1);
         _ = rig.send(win.WM_KEYUP, VK_F8, @bitCast(@as(usize, 0xC000_0001)));
@@ -343,7 +354,7 @@ const tests = struct {
         fake.init("kai");
         defer fake.unload();
         const kb = try state.bind("toggle", .f8, true);
-        try testing.expectEqual(.f9, recordOf(kb).setting.?.binding.?.chord.key);
+        try testing.expectEqual(.f9, recordOf(kb).setting.?.binding.?.keys.key);
     }
 
     test "through input.sal" {
@@ -384,8 +395,8 @@ const tests = struct {
         try testing.expect(!input.keyDown(.f8));
 
         // Rebound, then the old key goes to the game
-        try kb.rebind(.{ .key = .f9, .mods = .{ .ctrl = true } });
-        try testing.expectError(error.InvalidChord, kb.rebind(.{ .key = .left_shift }));
+        try kb.rebind(&.{.{ .key = .f9, .mods = .{ .ctrl = true } }});
+        try testing.expectError(error.InvalidChord, kb.rebind(&.{.{ .key = .left_shift }}));
         _ = rig.send(win.WM_KEYDOWN, VK_F8, 1);
         rig.present();
         try testing.expectEqual(1, seen.presses);
@@ -396,7 +407,7 @@ const tests = struct {
         try testing.expectEqual(null, reg.find("kai.toggle"));
         fake.unload();
         host.wraith.forget(&fake.loaded);
-        try testing.expectError(error.Gone, kb.rebind(.{ .key = .f10 }));
+        try testing.expectError(error.Gone, kb.rebind(&.{.{ .key = .f10 }}));
     }
 
     test "unbind early" {
