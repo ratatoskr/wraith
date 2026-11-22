@@ -178,6 +178,21 @@ pub const Impl = struct {
     pub fn readString(_: *Loaded, address: usize) sal.Plain(Managed, "readString") {
         return run(stringAt, .{ scratch.begin(), address });
     }
+
+    pub fn getField(_: *Loaded, object: usize, field: []const u8) sal.Plain(Managed, "getField") {
+        const g = global();
+        if (!g.running()) return error.NotRunning;
+        const a = scratch.begin();
+        return if (g.rt.attachedHere()) fieldOf(&g.rt, a, object, field) else run(fieldOf, .{ a, object, field });
+    }
+
+    pub fn setField(_: *Loaded, object: usize, field: []const u8, value: W.ManagedValue) sal.Plain(Managed, "setField") {
+        const g = global();
+        if (!g.running()) return error.NotRunning;
+        const a = scratch.begin();
+        // A Unity object's own fields want its main thread, which the runtime knows
+        return if (g.rt.attachedHere()) setFieldOn(&g.rt, a, object, field, value) else run(setFieldOn, .{ a, object, field, value });
+    }
 };
 
 // On the attached thread from here down
@@ -460,6 +475,11 @@ fn fromResult(rt: *const Runtime, a: Allocator, t: ?*ManagedRuntime.Type, result
         .string => return .{ .kind = .text, .text = rt.readString(a, @ptrCast(o)) catch return error.Failed },
         else => return .{ .kind = .object, .object = @intFromPtr(o) },
     };
+    return primitive(kind, at).?;
+}
+
+/// A number or flag of `kind` from its bytes at `at`, or null for other kinds.
+fn primitive(kind: Kind, at: [*]const u8) ?Value {
     return switch (kind) {
         .boolean => .{ .kind = .flag, .flag = at[0] != 0 },
         .i1 => .{ .kind = .integer, .integer = std.mem.bytesToValue(i8, at[0..1]) },
@@ -472,7 +492,7 @@ fn fromResult(rt: *const Runtime, a: Allocator, t: ?*ManagedRuntime.Type, result
         .i, .u => .{ .kind = .integer, .integer = std.mem.bytesToValue(isize, at[0..@sizeOf(isize)]) },
         .r4 => .{ .kind = .number, .number = std.mem.bytesToValue(f32, at[0..4]) },
         .r8 => .{ .kind = .number, .number = std.mem.bytesToValue(f64, at[0..8]) },
-        else => unreachable,
+        else => null,
     };
 }
 
@@ -516,6 +536,41 @@ fn classNameOf(rt: *const Runtime, a: Allocator, object: usize) E![]const u8 {
     return ManagedRuntime.fullName(rt, a, try objectClass(rt, object)) catch error.Failed;
 }
 
+/// An instance field by name, looking in parents too.
+fn instanceField(rt: *const Runtime, object: usize, name: []const u8) E!*ManagedRuntime.Field {
+    const f = ManagedRuntime.findField(rt, try objectClass(rt, object), name) orelse return error.NotFound;
+    if (rt.isStatic(f) or rt.isLiteral(f)) return error.NotFound;
+    return f;
+}
+
+fn fieldOf(rt: *const Runtime, a: Allocator, object: usize, name: []const u8) E!Value {
+    const f = try instanceField(rt, object, name);
+    const t = rt.fieldType(f) orelse return error.Failed;
+    var kind = rt.typeKind(t);
+    if (kind == .valuetype) {
+        const c = rt.typeClass(t) orelse return error.Failed;
+        if (!rt.isEnum(c)) return .{ .kind = .object, .object = object + rt.fieldOffset(f) };
+        kind = rt.typeKind(rt.enumBase(c) orelse return error.Failed);
+    }
+    var slot: u64 align(8) = 0;
+    rt.fieldValue(@ptrFromInt(object), f, &slot);
+    const at: [*]const u8 = @ptrCast(&slot);
+    if (primitive(kind, at)) |v| return v;
+    const pointer: usize = @truncate(slot);
+    if (kind == .string) {
+        if (pointer == 0) return .{ .kind = .text, .text = "" };
+        return .{ .kind = .text, .text = rt.readString(a, @ptrFromInt(pointer)) catch return error.Failed };
+    }
+    return .{ .kind = .object, .object = pointer };
+}
+
+fn setFieldOn(rt: *const Runtime, a: Allocator, object: usize, name: []const u8, value: Value) E!void {
+    const f = try instanceField(rt, object, name);
+    var slot: u64 = undefined;
+    const p = try argument(rt, a, rt.fieldType(f) orelse return error.Failed, value, &slot);
+    rt.setFieldValue(@ptrFromInt(object), f, p);
+}
+
 fn stringAt(rt: *const Runtime, a: Allocator, address: usize) E![]const u8 {
     const c = try objectClass(rt, address);
     if (!std.mem.eql(u8, rt.className(c), "String") or !std.mem.eql(u8, rt.classNamespace(c), "System")) return error.Unreadable;
@@ -528,6 +583,8 @@ test "nothing's running outside a game" {
     try testing.expectEqual(.none, Impl.kind(&loaded));
     try testing.expectError(error.NotRunning, Impl.images(&loaded));
     try testing.expectError(error.NotRunning, Impl.method(&loaded, "Game.Player", "Update", -1));
+    try testing.expectError(error.NotRunning, Impl.getField(&loaded, 0x1000, "health"));
+    try testing.expectError(error.NotRunning, Impl.setField(&loaded, 0x1000, "health", .{ .kind = .integer, .integer = 1 }));
 }
 
 // Off unless `WRAITH_MANAGED_GAME` names a Unity game's folder. See testing/managed_game.zig.
@@ -639,6 +696,13 @@ test "a real game's C#, through the API" {
     }.f, .{});
     try testing.expectEqualStrings("System.String", try m.classOf(made));
     try testing.expectEqualStrings("Velvet ✦", try m.readString(made));
+
+    // Fields of a live object, read and set by name
+    const version = try m.invoke("System.Version", "Parse", 0, &.{.{ .kind = .text, .text = "1.2.3.4" }});
+    try testing.expectEqual(1, (try m.getField(version.object, "_Major")).integer);
+    try m.setField(version.object, "_Major", .{ .kind = .integer, .integer = 7 });
+    try testing.expectEqual(7, (try m.invoke("System.Version", "get_Major", version.object, &.{})).integer);
+    try testing.expectError(error.NotFound, m.getField(version.object, "nope"));
 
     // Held past where it came from, and let go, which is fine twice
     const handle = try m.hold(made);

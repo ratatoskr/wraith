@@ -9,7 +9,7 @@ const devtools = @import("tuft_devtools");
 const ui = @import("wraith_ui");
 
 const Rates = @import("../Rates.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const Stats = core.timing.Stats;
 

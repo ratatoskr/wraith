@@ -11,7 +11,7 @@ const Symbols = @import("tuft_mem").Symbols;
 const ui = @import("wraith_ui");
 
 const Workbench = @import("../Workbench.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const Breakpoint = Debugger.Breakpoint;
 

@@ -10,7 +10,7 @@ const memory = @import("tuft_mem");
 const ui = @import("wraith_ui");
 
 const Navigator = @import("../Navigator.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const Claim = memory.Claims.Claim;
 

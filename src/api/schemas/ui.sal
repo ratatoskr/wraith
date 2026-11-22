@@ -49,6 +49,31 @@ fn void ClipRow(u32 index);
 // settings window from it.
 fn void OpenSettings();
 
+// Draws a Workbench panel, on the Workbench's own thread inside its ImGui frame. Not the render
+// thread or the game thread, so only touch what's safe from any thread. Read what your game-thread
+// code left for you and queue changes for it, rather than calling into the game.
+fn void WorkbenchDraw();
+
+struct WorkbenchPanelOptions {
+    // Its tab's label
+    string title;
+    // In the game engine's group with Classes, like Unity's, rather than with the other plugins'
+    // panels
+    bool engine;
+}
+
+// A panel of the plugin's in the Workbench.
+trait WorkbenchPanel {
+    // Whether its tab's open
+    bool isOpen();
+    // Opens it and brings its tab to the front
+    void focus();
+    // Takes it out of the Workbench. Waits for a draw under way, so a native plugin can free what it
+    // draws with after. It doesn't wait from inside a draw, or from a script, which never needs to.
+    // Fine to call twice.
+    void remove();
+}
+
 
 // An entry under the plugin's own button on the overlay's bar, which opens and closes something of
 // the plugin's.
@@ -121,6 +146,15 @@ trait Ui {
     // Without one, it shows the plugin's settings in Wraith's Settings. A second call replaces the
     // first, and it's gone with the plugin
     void onOpenSettings(keep OpenSettings open);
+
+    // The Workbench
+
+    // A panel in the Workbench, drawn by `draw` on the Workbench's thread whenever it's showing.
+    // Gone with the plugin. Any thread.
+    WorkbenchPanel addWorkbenchPanel(WorkbenchPanelOptions options, keep WorkbenchDraw draw);
+    // Opens the Workbench's Classes on a C# class by full name, like `UnityEngine.Transform`. Any
+    // thread.
+    void showClass(string class_name);
 
     // Windows' own dialogs, over the game. The full path, or null if it's cancelled. The game keeps
     // running while it's open. One at a time per plugin, another fails while one's up.

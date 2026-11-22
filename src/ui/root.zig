@@ -6,6 +6,9 @@ const tuft_ui = @import("tuft_ui");
 
 pub const WindowSystem = @import("WindowSystem.zig");
 pub const Window = WindowSystem.Window;
+pub const Clip = @import("Clip.zig");
+/// What copying is on unless it's been changed, in the Workbench's views and plugins' panels.
+pub const copy_chord: tuft_ui.Chord = .{ .key = .c, .ctrl = true };
 
 // All of tuft_ui. The test below checks nothing's missing
 pub const c = tuft_ui.c;

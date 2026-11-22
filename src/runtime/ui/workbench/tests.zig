@@ -122,14 +122,18 @@ test "default layout" {
         labels[n] = e.window.label();
         n += 1;
     }
-    try testing.expectEqual(9, n);
+    try testing.expectEqual(10, n);
     try testing.expectEqualStrings("Addresses", labels[1]);
     try testing.expectEqualStrings("Names", labels[2]);
-    try testing.expectEqualStrings("Classes", labels[3]);
-    try testing.expectEqualStrings("Tweaks", labels[4]);
-    // Most games have no C#, so it waits closed in the bottom spot
-    try testing.expect(!p.classes.window.open);
-    try testing.expectEqual(names_spot, tuft_imgui.dock.of(p.classes.window.title).?);
+    try testing.expectEqualStrings("Tweaks", labels[3]);
+    try testing.expectEqualStrings("Engine", labels[8]);
+    try testing.expectEqualStrings("Plugins", labels[9]);
+    // Most games have no C# or engine plugins, so it waits closed with the documents
+    const engine = &wb.groups.engine;
+    try testing.expect(!engine.window.open);
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(engine.window.title).?);
+    try testing.expect(!wb.groups.plugins.window.open);
+    try testing.expectEqual(names_spot, tuft_imgui.dock.of(wb.groups.plugins.window.title).?);
 
     // ImGui keeps Search's empty spot and shows it again right there
     wb.toggleSearch();
@@ -151,6 +155,99 @@ test "default layout" {
     frames.run(wb, 3);
     try testing.expect(wb.groups.diagnostics.window.open);
     try testing.expectEqual(2, wb.groups.diagnostics.shown);
+}
+
+const PanelDraws = struct {
+    draws: u32 = 0,
+    in_frame: bool = false,
+    in_workbench: bool = false,
+
+    fn draw(self: *PanelDraws) void {
+        const host_ui = @import("../../host/ui.zig");
+        self.draws += 1;
+        self.in_frame = host_ui.inFrame();
+        self.in_workbench = host_ui.inWorkbench();
+    }
+};
+
+test "plugins' panels show in their groups, drawn in its frame" {
+    const sdk = @import("wraith_sdk");
+    const Loaded = @import("../../PluginLoader.zig").Loaded;
+    var frames = try Frames.init();
+    defer frames.deinit();
+    const wb = try Workbench.create(testing.allocator, .{});
+    defer wb.destroy();
+    frames.run(wb, 3);
+    try testing.expect(!wb.groups.plugins.window.open);
+
+    var loaded: Loaded = undefined;
+    loaded.initForTest(testing.allocator, "tools");
+    sdk.Owner.attach(loaded.root());
+    defer sdk.Owner.detach();
+    const area = sdk.wraith.root().?.ui();
+    var mine: PanelDraws = .{};
+    var engines: PanelDraws = .{};
+    const panel = area.addWorkbenchPanel(.{ .title = "Party", .engine = false }, .init(&mine, PanelDraws.draw));
+    _ = area.addWorkbenchPanel(.{ .title = "Scene", .engine = true }, .init(&engines, PanelDraws.draw));
+
+    // Each group opens itself once there's something in it
+    frames.run(wb, 4);
+    try testing.expect(wb.groups.plugins.window.open);
+    try testing.expect(wb.groups.engine.window.open);
+    try testing.expect(mine.draws > 0);
+    try testing.expect(mine.in_frame and mine.in_workbench);
+    try testing.expect(panel.isOpen());
+    // The engine's group is with the documents, behind the one you were looking at
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(wb.groups.engine.window.title).?);
+    try testing.expect(tuft_imgui.dock.inFront(wb.documents.items[1].window().title));
+    try testing.expect(!tuft_imgui.dock.inFront(wb.groups.engine.window.title));
+
+    // Classes comes first in the engine's group, so its panel waits behind till it's focused
+    const before = engines.draws;
+    area.showClass("System.String");
+    frames.run(wb, 3);
+    try testing.expectEqual(before, engines.draws);
+    sdk.wraith.root().?.ui().addWorkbenchPanel(.{ .title = "Scene 2", .engine = true }, .init(&engines, PanelDraws.draw)).focus();
+    frames.run(wb, 3);
+    try testing.expect(engines.draws > before);
+    try testing.expect(tuft_imgui.dock.inFront(wb.groups.engine.window.title));
+
+    // Gone with the plugin
+    loaded.owner.close();
+    const draws = mine.draws;
+    frames.run(wb, 3);
+    try testing.expectEqual(draws, mine.draws);
+    try testing.expect(!panel.isOpen());
+    loaded.deinitForTest();
+}
+
+test "game speed on the menu bar, back to normal on a right-click" {
+    const game_area = @import("../../host/game_area.zig");
+    try hook.init(testing.allocator);
+    defer hook.deinit();
+    defer @import("../../speed/root.zig").stop();
+    var frames = try Frames.init();
+    defer frames.deinit();
+    const wb = try Workbench.create(testing.allocator, .{});
+    defer wb.destroy();
+    defer game_area.setSpeedForPlayer(1) catch {};
+
+    // It shows what it's at, whoever set it
+    try game_area.setSpeedForPlayer(3);
+    frames.run(wb, 3);
+    try testing.expectEqual(3, game_area.currentSpeed());
+    const r = wb.game_speed.rect;
+    try testing.expect(r[1][0] > r[0][0]);
+
+    const io = c.ImGui_GetIO();
+    c.ImGuiIO_AddMousePosEvent(io, (r[0][0] + r[1][0]) / 2, (r[0][1] + r[1][1]) / 2);
+    frames.run(wb, 2);
+    c.ImGuiIO_AddMouseButtonEvent(io, 1, true);
+    frames.run(wb, 2);
+    c.ImGuiIO_AddMouseButtonEvent(io, 1, false);
+    frames.run(wb, 2);
+    try testing.expectEqual(1, game_area.currentSpeed());
+    try testing.expectEqual(0, wb.failures);
 }
 
 test "script document" {
@@ -1011,8 +1108,7 @@ test "classes panel on a real game's C#" {
     const wb = try Workbench.create(testing.allocator, .{});
     defer wb.destroy();
     const panel = &wb.panels.classes;
-    panel.window.open = true;
-    panel.window.focus();
+    wb.groups.engine.focusOwn(panel);
     frames.run(wb, 3);
     try testing.expect(panel.all.len > 1000);
     try testing.expect(panel.images > 10);
@@ -1026,7 +1122,7 @@ test "classes panel on a real game's C#" {
     try testing.expect(panel.shown.items.len < panel.all.len);
     panel.picked.only(@intFromPtr(string.class));
     // Addresses comes to the front as the workbench starts
-    panel.window.focus();
+    wb.groups.engine.focusOwn(panel);
     frames.run(wb, 3);
     try testing.expectEqual(string.class, panel.members_of.?);
     const empty = for (panel.fields) |f| {

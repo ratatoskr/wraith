@@ -1,10 +1,11 @@
-//! Tab-separated text for the clipboard, so it pastes into a spreadsheet as is.
+//! Tab-separated text for the clipboard, so it pastes into a spreadsheet as is. The Workbench's
+//! views and plugins' panels copy with it alike.
 
 const Clip = @This();
 
 const std = @import("std");
 
-const ui = @import("wraith_ui");
+const ui = @import("root.zig");
 
 out: std.Io.Writer.Allocating = .init(std.heap.smp_allocator),
 lines: usize = 0,

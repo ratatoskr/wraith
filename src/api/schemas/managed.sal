@@ -121,4 +121,12 @@ trait Managed {
     string!ManagedError classOf(usize object);
     // The `System.String` at `address`, as UTF-8
     string!ManagedError readString(usize address);
+    // An instance field of the object at `object`, by name, looking in its parents too. Whole
+    // numbers, enums, floats, bools and strings come back as themselves. A struct comes back as the
+    // address of its bytes inside the object, and anything else as its object. Any thread.
+    ManagedValue!ManagedError getField(usize object, string field);
+    // Sets one, through the runtime so the garbage collector sees new references. Text makes a new
+    // string, and an object or a struct's address is copied in. Any thread, but a Unity object's
+    // own fields want Unity's main thread.
+    void!ManagedError setField(usize object, string field, ManagedValue value);
 }

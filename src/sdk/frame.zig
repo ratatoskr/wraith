@@ -22,6 +22,8 @@ const tasks = @import("tasks.zig");
 
 const sal = api.salamander;
 const W = api.wraith;
+const Mat4 = @import("tuft_math").Mat4;
+const Vec3 = @import("tuft_math").Vec3;
 
 pub const PostStatus = api.PostStatus;
 
@@ -132,6 +134,41 @@ pub fn driveTicks() Error!TickDriver {
     const owner = Owner.current() orelse return error.OwnerGone;
     const d = owner.root.frame().driveTicks() catch |err| return frameError(err);
     return .{ .object = d };
+}
+
+/// What the game's camera shows, for drawing over the world, like a gizmo or a label over a
+/// character. Row-vector style, the way Direct3D has it: the camera looks down +z and depth goes
+/// from 0 to 1.
+pub const View = struct {
+    view: Mat4,
+    projection: Mat4,
+
+    pub fn viewProjection(self: View) Mat4 {
+        return self.view.mul(self.projection);
+    }
+
+    /// Where `point` in the world is on a window `size` pixels big, from its top left. Null if it's
+    /// behind the camera.
+    pub fn project(self: View, point: Vec3, size: [2]f32) ?[2]f32 {
+        const clip = self.viewProjection().transformVec4(point.withW(1));
+        if (clip.w < 0.01) return null;
+        return .{ (clip.x / clip.w * 0.5 + 0.5) * size[0], (0.5 - clip.y / clip.w * 0.5) * size[1] };
+    }
+};
+
+/// For a game or game engine plugin, each frame once the camera's where it'll be drawn from, after
+/// Camera Tools has moved it. Any thread.
+pub fn setView(view_: Mat4, projection: Mat4) void {
+    const owner = Owner.current() orelse return;
+    owner.root.frame().setView(view_, projection);
+}
+
+/// The game's camera as its plugin last set it, or null if it hasn't lately. Any thread.
+pub fn view() ?View {
+    const owner = Owner.current() orelse return null;
+    const v = owner.root.frame().view();
+    if (!v.known) return null;
+    return .{ .view = v.view, .projection = v.projection };
 }
 
 /// Runs once next frame, from any thread, or with `.cancelled` if the plugin's going first.
@@ -352,6 +389,22 @@ const tests = struct {
             if (status == .run) self.ran += 1 else self.cancelled += 1;
         }
     };
+
+    test "a point in front lands on screen, one behind doesn't" {
+        // Looking down +z, a quarter turn wide
+        const near: f32 = 0.1;
+        const far: f32 = 100;
+        const projection: Mat4 = .{ .m = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, far / (far - near), 1, 0, 0, -near * far / (far - near), 0 } };
+        const v: View = .{ .view = .identity, .projection = projection };
+        const middle = v.project(.{ .z = 5 }, .{ 800, 600 }).?;
+        try std.testing.expectApproxEqAbs(400, middle[0], 1e-3);
+        try std.testing.expectApproxEqAbs(300, middle[1], 1e-3);
+        // Up and right is up and right on screen
+        const corner = v.project(.{ .x = 5, .y = 5, .z = 5 }, .{ 800, 600 }).?;
+        try std.testing.expectApproxEqAbs(800, corner[0], 1e-3);
+        try std.testing.expectApproxEqAbs(0, corner[1], 1e-3);
+        try std.testing.expectEqual(null, v.project(.{ .z = -5 }, .{ 800, 600 }));
+    }
 
     test "frames and posts" {
         var fake: Fake = .{};

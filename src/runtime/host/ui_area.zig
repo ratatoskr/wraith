@@ -21,6 +21,7 @@ const sal = api.salamander;
 const W = api.wraith;
 pub const Ui = W.Ui;
 pub const MenuItem = W.MenuItem;
+pub const WorkbenchPanel = W.WorkbenchPanel;
 pub const DrawList = W.ImDrawList;
 
 /// Every draw list function calls dcimgui's with the list as `self`, only while the plugin's drawing.
@@ -38,17 +39,21 @@ pub const draw_list_table = sal.forwarding(DrawList, struct {
 pub const State = struct {
     /// Text boxes being typed in, by label. Render thread.
     inputs: std.StringHashMapUnmanaged(*Input) = .empty,
+    /// The same, for its Workbench panels. Workbench thread.
+    workbench_inputs: std.StringHashMapUnmanaged(*Input) = .empty,
     lock: sync.RwLock = .{},
     menus: std.ArrayList(*Menu) = .empty,
 
     pub fn deinit(self: *State, a: std.mem.Allocator) void {
-        var it = self.inputs.iterator();
-        while (it.next()) |e| {
-            a.free(e.key_ptr.*);
-            a.free(e.value_ptr.*.buf);
-            a.destroy(e.value_ptr.*);
+        inline for (.{ &self.inputs, &self.workbench_inputs }) |inputs| {
+            var it = inputs.iterator();
+            while (it.next()) |e| {
+                a.free(e.key_ptr.*);
+                a.free(e.value_ptr.*.buf);
+                a.destroy(e.value_ptr.*);
+            }
+            inputs.deinit(a);
         }
-        self.inputs.deinit(a);
         for (self.menus.items) |m| {
             if (!m.removed) MenuItems.remove(&m.item);
             a.free(m.label);
@@ -341,6 +346,35 @@ pub const UiImpl = struct {
             open.release();
         };
     }
+
+    pub fn addWorkbenchPanel(loaded: *Loaded, options: W.WorkbenchPanelOptions, draw: W.WorkbenchDraw) sal.Object(WorkbenchPanel) {
+        const t = wraith.tablesOf(loaded) orelse {
+            draw.release();
+            return .{};
+        };
+        const p = host.workbench_panels.add(loaded, options, draw) orelse return .{};
+        return .init(p, t.workbench_panel);
+    }
+
+    pub fn showClass(_: *Loaded, class_name: []const u8) void {
+        host.workbench_panels.showClass(class_name);
+    }
+};
+
+pub const WorkbenchPanelImpl = struct {
+    const Panel = host.workbench_panels.Panel;
+
+    pub fn isOpen(p: *Panel) bool {
+        return p.shown.load(.acquire);
+    }
+
+    pub fn focus(p: *Panel) void {
+        p.focus_wanted.store(true, .release);
+    }
+
+    pub fn remove(p: *Panel) void {
+        p.stop();
+    }
 };
 
 /// A plugin's Settings button in the Mods window and under its button on the bar.
@@ -449,15 +483,17 @@ fn textBox(loaded: *Loaded, label: ?[*:0]const u8, text: []const u8, flags: i32,
     const state = stateOf(loaded) orelse return text;
     const z = label orelse return text;
     const key = std.mem.span(z);
-    const entry = state.inputs.getOrPut(gpa, key) catch return text;
+    // The Workbench's thread has its own, so a panel and the overlay never share one
+    const inputs = if (host.ui.inWorkbench()) &state.workbench_inputs else &state.inputs;
+    const entry = inputs.getOrPut(gpa, key) catch return text;
     if (!entry.found_existing) {
         entry.key_ptr.* = gpa.dupe(u8, key) catch {
-            _ = state.inputs.remove(key);
+            _ = inputs.remove(key);
             return text;
         };
         const made = gpa.create(Input) catch {
             const owned = entry.key_ptr.*;
-            _ = state.inputs.remove(key);
+            _ = inputs.remove(key);
             gpa.free(owned);
             return text;
         };

@@ -10,7 +10,7 @@ const ui = @import("wraith_ui");
 
 const Managed = @import("../../../Managed.zig");
 const Navigator = @import("../Navigator.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const Runtime = Managed.Runtime;
 const Allocator = std.mem.Allocator;
@@ -153,6 +153,20 @@ fn refilter(self: *Classes) void {
         if (text.len > 0 and std.ascii.findIgnoreCase(e.name, text) == null) continue;
         self.shown.append(self.allocator, e) catch return;
     }
+}
+
+/// Filters to `name` and picks it, if it's there.
+pub fn show(self: *Classes, name: []const u8) void {
+    if (!Managed.global.running()) return;
+    if (self.arena == null) self.refresh();
+    const n = @min(name.len, self.search.len);
+    @memset(&self.search, 0);
+    @memcpy(self.search[0..n], name[0..n]);
+    self.refilter();
+    for (self.shown.items) |e| if (std.mem.eql(u8, e.name, name)) {
+        self.picked.only(entryId(e));
+        return;
+    };
 }
 
 fn drawClasses(self: *Classes) void {

@@ -29,7 +29,7 @@ const DebugControl = @import("DebugControl.zig");
 const DevMenus = @import("DevMenus.zig");
 const Transfer = @import("Transfer.zig");
 pub const keys = @import("keys.zig");
-pub const Clip = @import("Clip.zig");
+pub const Clip = @import("wraith_ui").Clip;
 pub const Environment = @import("panels/Environment.zig");
 pub const Disassembly = @import("documents/Disassembly.zig");
 pub const MemoryViewer = @import("documents/MemoryViewer.zig");
@@ -61,6 +61,11 @@ const Breakpoints = @import("panels/Breakpoints.zig");
 const Stopped = @import("panels/Stopped.zig");
 const Registers = @import("panels/Registers.zig");
 pub const Group = @import("Group.zig");
+pub const PanelGroup = @import("PanelGroup.zig");
+const GameSpeed = @import("GameSpeed.zig");
+const GameInfo = @import("../../GameInfo.zig");
+const Managed = @import("../../Managed.zig");
+const plugin_panels = @import("../../host/workbench_panels.zig");
 
 const AppWindow = tuft_imgui.AppWindow;
 const log = core.log.scoped(.wraith_ui);
@@ -133,10 +138,10 @@ pub const Panels = struct {
 };
 
 /// Docked on their own, not in a `Group`.
-const alone = .{ "search", "addresses", "names", "classes", "tweaks", "log" };
+const alone = .{ "search", "addresses", "names", "tweaks", "log" };
 /// `alone` and `Groups` in View menu order, which is also the order they're docked in. These need a
 /// spot in `defaultLayout`.
-const docked = .{ "search", "addresses", "names", "classes", "tweaks", "diagnostics", "debug", "scripts", "log" };
+const docked = .{ "search", "addresses", "names", "tweaks", "diagnostics", "debug", "scripts", "log", "engine", "plugins" };
 
 /// So the dock's a few tabs and not a row of them.
 pub const Groups = struct {
@@ -145,9 +150,13 @@ pub const Groups = struct {
     /// Comes to the front when a script runs.
     scripts: Group,
     diagnostics: Group,
+    /// Classes and game engine plugins' panels, named after the engine. With the documents.
+    engine: PanelGroup,
+    /// Other plugins' panels.
+    plugins: PanelGroup,
 };
 
-/// Not Classes, since most games have no C#.
+/// Not the engine's group, since most games have no C#. It opens itself once there's something in it.
 const open_at_start = .{ "search", "addresses", "names", "tweaks", "diagnostics", "debug", "scripts", "log" };
 
 pub const Options = struct {
@@ -169,7 +178,7 @@ const ui_scale = 1.0;
 const font_size = 15;
 const dockspace_name = "wraith.workbench";
 /// Bump when `defaultLayout` changes.
-const layout_version = "13";
+const layout_version = "15";
 
 allocator: std.mem.Allocator,
 io: ?std.Io,
@@ -252,6 +261,7 @@ reset_layout: bool = false,
 /// Also puts windows back where they first were, next frame.
 reset_windows: bool = false,
 go_to: devtools.AddressBar = .{ .symbols = Names.global_symbols, .memory = .local },
+game_speed: GameSpeed = .{},
 /// How many `fail` has shown, for tests.
 failures: u32 = 0,
 project_menu: ProjectMenu = .{},
@@ -309,7 +319,11 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
         .debug = .init("Debug", .tabs, &.{ .of("Threads", &p.stopped), .of("Registers", &p.registers), .of("Breakpoints", &p.breakpoints) }),
         .scripts = .init("Scripts", .{ .split = .{ .ratio = 0.75 } }, &.{ .of("Console", &p.console), .of("Sessions", &p.sessions) }),
         .diagnostics = .init("Diagnostics", .tabs, &.{ .of("Timings", &p.timings), .of("Frames", &p.frames), .of("Memory", &p.memory), .of("Environment", &p.environment), .of("Hooks", &p.hooks), .of("Claims", &p.claims), .of("IO", &p.file_io) }),
+        .engine = .init(true, &.{.of("Classes", &p.classes)}, ""),
+        .plugins = .init(false, &.{}, "Plugins' Workbench panels show here."),
     };
+    // It opens itself behind what you're looking at
+    self.groups.engine.window.flags.no_focus_on_appearing = true;
     errdefer self.system.deinit();
     self.system.before_each = .{ .ctx = self, .func = withHost };
     comptime std.debug.assert(docked.len == alone.len + @typeInfo(Groups).@"struct".field_names.len);
@@ -564,6 +578,7 @@ pub fn draw(self: *Workbench) void {
     c.ImGui_End();
     if (!keep_open) self.close();
 
+    self.pollPluginPanels();
     self.system.draw();
     self.dev_menus.drawWindows();
     self.own_file_focused = false;
@@ -580,6 +595,20 @@ fn drawStatusBar(self: *Workbench) void {
     var bar = StatusBar.begin();
     self.sig_maker.status(&bar);
     self.project_menu.ce.status(&bar);
+}
+
+/// Names the engine's group, and picks up what plugins asked for: panels to focus and classes to show.
+fn pollPluginPanels(self: *Workbench) void {
+    const engine = &self.groups.engine;
+    // "C#" can't be a title, since ImGui takes its # as the start of an ID
+    engine.setName(if (GameInfo.global.game_engine) |e| e.label() else if (Managed.global.kind()) |k| Managed.label(k) else "Engine");
+    engine.poll(Managed.global.running());
+    self.groups.plugins.poll(false);
+    var buf: [256]u8 = undefined;
+    if (plugin_panels.takeClass(&buf)) |name| {
+        self.panels.classes.show(name);
+        engine.focusOwn(&self.panels.classes);
+    }
 }
 
 /// The project's name, with a star if it's not saved. The part after ### keeps it the same window.
@@ -636,11 +665,13 @@ fn defaultLayout(self: *Workbench, id: c.ImGuiID) void {
     const bottom = tuft_imgui.dock.split(&center, .down, 0.35);
     tuft_imgui.dock.window(self.panels.search.window.title, left);
     inline for (docked) |name| {
-        if (comptime std.mem.eql(u8, name, "search")) continue;
+        if (comptime std.mem.eql(u8, name, "search") or std.mem.eql(u8, name, "engine")) continue;
         const title = if (@hasField(Panels, name)) @field(self.panels, name).window.title else @field(self.groups, name).window.title;
         tuft_imgui.dock.window(title, bottom);
     }
     for (self.documents.items) |d| tuft_imgui.dock.window(d.window().title, center);
+    // With the documents, since it's as big as one
+    tuft_imgui.dock.window(self.groups.engine.window.title, center);
     tuft_imgui.dock.finish(id);
     self.document_dock = center;
     self.fronts_pending = 1;
@@ -659,24 +690,28 @@ fn bringStartingTabsToFront(self: *Workbench) void {
 const Side = enum {
     left,
     bottom,
+    /// With the documents
+    center,
 
     fn dir(self: Side) tuft_imgui.dock.Dir {
         return switch (self) {
             .left => .left,
-            .bottom => .down,
+            .bottom, .center => .down,
         };
     }
 
     fn ratio(self: Side) f32 {
         return switch (self) {
             .left => 0.22,
-            .bottom => 0.35,
+            .bottom, .center => 0.35,
         };
     }
 };
 
 fn sideOf(self: *const Workbench, window: *const ui.Window) Side {
-    return if (window == &self.panels.search.window) .left else .bottom;
+    if (window == &self.panels.search.window) return .left;
+    if (window == &self.groups.engine.window) return .center;
+    return .bottom;
 }
 
 /// Closing the last panel in a spot takes the spot away, so it'd float otherwise.
@@ -692,7 +727,8 @@ fn redockReopened(self: *Workbench) void {
         const last = tuft_imgui.dock.of(e.window.title) orelse continue;
         if (tuft_imgui.dock.exists(last)) continue;
         const side = self.sideOf(e.window);
-        const node = self.nodeOn(side) orelse blk: {
+        // The documents' spot is always there
+        const node = if (side == .center) tuft_imgui.dock.central(self.dockspace) orelse continue else self.nodeOn(side) orelse blk: {
             var rest = tuft_imgui.dock.central(self.dockspace) orelse continue;
             break :blk tuft_imgui.dock.split(&rest, side.dir(), side.ratio());
         };
@@ -763,6 +799,8 @@ fn drawMenuBar(self: *Workbench) void {
     }
     self.dev_menus.drawMenus();
 
+    self.game_speed.draw();
+    ui.sameLine();
     if (self.go_to.draw()) |address| self.go(.{ .address = address });
 }
 

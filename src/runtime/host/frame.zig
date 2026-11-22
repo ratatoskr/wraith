@@ -72,6 +72,29 @@ pub fn onGameThread() bool {
     return id != 0 and id == std.Thread.getCurrentId();
 }
 
+/// What the game's camera showed last, from its plugin.
+var view_lock: sync.RwLock = .{};
+var game_view: W.GameView = .{ .view = .identity, .projection = .identity, .known = false };
+/// `core.timing.now()` when it was set, under `view_lock`.
+var view_at: u64 = 0;
+/// Older than this and it's not known any more, since the plugin's stopped saying.
+const view_ns = std.time.ns_per_s;
+
+pub fn setView(view_: W.Mat4, projection: W.Mat4) void {
+    view_lock.lock();
+    defer view_lock.unlock();
+    game_view = .{ .view = view_, .projection = projection, .known = true };
+    view_at = core.timing.now();
+}
+
+pub fn view() W.GameView {
+    view_lock.lockShared();
+    defer view_lock.unlockShared();
+    var v = game_view;
+    v.known = v.known and core.timing.now() -| view_at < view_ns;
+    return v;
+}
+
 /// Skipped if a tick's already running on another thread.
 fn tickNow() void {
     if (ticking.swap(true, .acquire)) return;
@@ -585,6 +608,24 @@ const tests = struct {
 
     fn tickOn(driver: sdk.frame.TickDriver) void {
         driver.tick();
+    }
+
+    test "the game's view, as its plugin last set it, till it's stale" {
+        var a: FakePlugin = undefined;
+        a.init("a");
+        defer a.loaded.deinitForTest();
+        const acting = a.owner().enter();
+        defer acting.end();
+        const math = sdk.math;
+
+        try testing.expectEqual(null, sdk.frame.view());
+        const moved = math.Mat4.translation(.{ .x = 2 });
+        sdk.frame.setView(moved, .identity);
+        const v = sdk.frame.view().?;
+        try testing.expectEqual(moved, v.view);
+        // A plugin that's stopped saying doesn't leave an old one
+        view_at -|= 2 * view_ns;
+        try testing.expectEqual(null, sdk.frame.view());
     }
 
     test "drivers take ticks by rank, and hand them back as they go" {

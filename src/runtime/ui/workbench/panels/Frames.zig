@@ -11,7 +11,7 @@ const ui = @import("wraith_ui");
 const Shell = @import("../../shell/Shell.zig");
 const Settings = @import("../../../Settings.zig");
 const FrameStats = @import("../../../FrameStats.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const plot = ui.plot;
 

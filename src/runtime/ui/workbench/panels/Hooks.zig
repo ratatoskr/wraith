@@ -13,7 +13,7 @@ const ui = @import("wraith_ui");
 
 const Rates = @import("../Rates.zig");
 const Navigator = @import("../Navigator.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const Info = hook.registry.Info;
 

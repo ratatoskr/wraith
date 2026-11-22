@@ -8,7 +8,7 @@ const devtools = @import("tuft_devtools");
 const ui = @import("wraith_ui");
 
 const LogHistory = @import("../../../LogHistory.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 const Entry = LogHistory.Entry;
 
 window: ui.Window = .{ .title = "Log", .size = .{ 760, 380 }, .min_size = .{ 480, 200 } },

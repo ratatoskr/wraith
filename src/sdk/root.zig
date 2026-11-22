@@ -48,6 +48,7 @@ pub const logFn = log.logFn;
 pub const panic = std.debug.FullPanic(log.onPanic);
 pub const signatures = @import("signatures.zig");
 pub const images = @import("images.zig");
+pub const workbench = @import("workbench.zig");
 pub const testing = @import("testing.zig");
 
 test {
@@ -62,5 +63,6 @@ test {
     _ = signatures;
     _ = salamander;
     _ = images;
+    _ = workbench;
     _ = Owner;
 }

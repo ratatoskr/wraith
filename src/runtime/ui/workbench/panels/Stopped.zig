@@ -14,7 +14,7 @@ const ui = @import("wraith_ui");
 const Workbench = @import("../Workbench.zig");
 const Breakpoints = @import("Breakpoints.zig");
 const CrashReport = @import("../../../crash/Report.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const Paused = Debugger.Paused;
 

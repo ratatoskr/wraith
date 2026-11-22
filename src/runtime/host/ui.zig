@@ -29,7 +29,8 @@ pub fn isAvailable(_: *Loaded) bool {
 }
 
 /// Runs a plugin's frame callback in the current ImGui frame, scoped to the plugin, with what it
-/// leaves open unwound after. Without an ImGui context, like in tests, it just calls it. Render thread.
+/// leaves open unwound after. Without an ImGui context, like in tests, it just calls it. The render
+/// thread, or the Workbench's for its panels.
 pub fn runAs(loaded: *Loaded, warned: *bool, ctx: *anyopaque, func: *const fn (ctx: ?*anyopaque) callconv(.c) void) void {
     if (c.ImGui_GetCurrentContext() == null) return func(ctx);
     drawing = loaded;
@@ -54,14 +55,28 @@ pub fn getProc(name: []const u8) ?*const anyopaque {
     return imgui.lookup(name);
 }
 
-/// Render thread only.
-var drawing: ?*Loaded = null;
+/// The plugin drawing on this thread, for scoping its window names.
+threadlocal var drawing: ?*Loaded = null;
 
 /// Set while a plugin draws, so ImGui calls from anywhere else do nothing.
 threadlocal var in_frame: bool = false;
 
+/// Set while a plugin draws a Workbench panel, on the Workbench's thread.
+threadlocal var in_workbench: bool = false;
+
 pub fn inFrame() bool {
     return in_frame;
+}
+
+pub fn inWorkbench() bool {
+    return in_workbench;
+}
+
+/// Like `runAs`, for a Workbench panel on the Workbench's thread.
+pub fn runInWorkbench(loaded: *Loaded, warned: *bool, ctx: *anyopaque, func: *const fn (ctx: ?*anyopaque) callconv(.c) void) void {
+    in_workbench = true;
+    defer in_workbench = false;
+    runAs(loaded, warned, ctx, func);
 }
 
 /// What `ImGui_<name>` is for plugins: dcimgui's, or one scoping window names to the plugin.

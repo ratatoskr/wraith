@@ -14,7 +14,7 @@ const ui = @import("wraith_ui");
 
 const Names = @import("../../../Names.zig");
 const Navigator = @import("../Navigator.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 const Workbench = @import("../Workbench.zig");
 
 const AddressList = devtools.AddressList;

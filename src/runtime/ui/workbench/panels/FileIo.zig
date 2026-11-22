@@ -10,7 +10,7 @@ const devtools = @import("tuft_devtools");
 const ui = @import("wraith_ui");
 
 const Files = @import("../../../Files.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 const Vfs = Files.Vfs;
 const Entry = Files.Entry;
 const Op = Files.Op;

@@ -10,7 +10,7 @@ const Debugger = @import("tuft_hook").Debugger;
 const ui = @import("wraith_ui");
 
 const Workbench = @import("../Workbench.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const Paused = Debugger.Paused;
 

@@ -84,6 +84,17 @@ trait TickDriver {
     void release();
 }
 
+// What the game's camera shows, for drawing over the world, like gizmos and labels. Row-vector
+// style, so clip = [x y z 1] * view * projection, the way Direct3D has it: the camera looks down +z
+// and depth goes from 0 at the near plane to 1 at the far one. Clip x and y go from -1 to 1 across
+// the game's window, with y up.
+struct GameView {
+    Mat4 view;
+    Mat4 projection;
+    // False till a game's plugin sets one, or once the last is more than a second old
+    bool known;
+}
+
 struct FrameStats {
     // What these cover. Less than the window early on or after a reset.
     f32 window_seconds;
@@ -120,6 +131,11 @@ trait Frame {
     TickDriver!FrameError driveTicks();
     // Whether this is the thread ticks run on. False everywhere till the first tick.
     bool onGameThread();
+    // From a game or game engine plugin each frame, once the camera's where it'll be drawn from,
+    // after Camera Tools has moved it. See `GameView` for which way round. Any thread.
+    void setView(Mat4 view, Mat4 projection);
+    // The last view set. Any thread.
+    GameView view();
     // Any thread. Posted from inside a task, it waits a frame.
     void!FrameError post(keep FrameTask task);
     // The next frame drawn at `point`, copied only because someone asked. Any thread.

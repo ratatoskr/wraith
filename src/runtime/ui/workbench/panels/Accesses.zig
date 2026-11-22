@@ -18,7 +18,7 @@ const ui = @import("wraith_ui");
 const Text = @import("tuft_text").Text;
 
 const Workbench = @import("../Workbench.zig");
-const Clip = @import("../Clip.zig");
+const Clip = @import("wraith_ui").Clip;
 
 const watch = hook.watch;
 const CpuContext = hook.CpuContext;
