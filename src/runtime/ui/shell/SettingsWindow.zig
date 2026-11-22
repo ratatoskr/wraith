@@ -534,7 +534,11 @@ fn takePicked(self: *SettingsWindow, shell: *Shell) void {
 fn keyRow(self: *SettingsWindow, shell: *Shell, s: *Setting, current: ?Chord) void {
     var picked = current;
     ui.setNextItemWidth(200);
-    if (ui.chordInput("##key", &picked, .{ .none = "No key" })) self.apply(shell, s, .{ .key = picked }, true);
+    const held = switch (s.def.kind) {
+        .key => |k| k.held,
+        else => false,
+    };
+    if (ui.chordInput("##key", &picked, .{ .none = "No key", .held = held })) self.apply(shell, s, .{ .key = picked }, true);
     if (current != null) {
         ui.sameLine();
         if (ui.iconButton(icons.x ++ "##clear", "No key")) self.apply(shell, s, .{ .key = null }, true);

@@ -163,6 +163,8 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, game_settings: *core.Con
     errdefer host.keybinds.setKeybinds(null);
     host.keybinds.setWindow(self.window);
     errdefer host.keybinds.setWindow(null);
+    host.keybinds.setGamepads(self.gamepads);
+    errdefer host.keybinds.setGamepads(null);
     // Right after keybinds, before the overlay's frame
     try self.graphics.frame.subscribeOpts(&self.wiring, self, startFrame, .{ .priority = 99 });
     // Plugins' frames run inside the overlay's ImGui frame, or a headless one
@@ -203,6 +205,7 @@ pub fn destroy(self: *Game) void {
     if (self.registry) |r| r.setKeybinds(null);
     host.keybinds.setKeybinds(null);
     host.keybinds.setWindow(null);
+    host.keybinds.setGamepads(null);
     host.watches.shutdown();
     host.ui.setOverlay(null);
     // Off the overlay's event before it goes

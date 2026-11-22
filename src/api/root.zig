@@ -146,6 +146,8 @@ pub const Action = struct {
     chord: input.Chord,
     consume: bool = true,
     while_typing: bool = false,
+    /// Held, like a key to move with: it fires with any modifiers down and can be one, like Shift.
+    held: bool = false,
     /// Where the key someone picks is kept.
     scope: Scope = .global,
 };
@@ -870,6 +872,13 @@ pub const native_version: u32 = 2;
 
 /// The kind that runs a plugin when its manifest doesn't say.
 pub const default_provider = "native";
+
+test "the maths types are tuft's, with its methods" {
+    const a: wraith.Vec3 = .init(1, 0, 0);
+    try std.testing.expect(a.cross(.unit_y).approxEql(.unit_z, 0));
+    try std.testing.expectEqual(64, @sizeOf(wraith.Mat4));
+    try std.testing.expect(wraith.Quat.identity.rotate(a).approxEql(a, 0));
+}
 
 test {
     std.testing.refAllDecls(@This());

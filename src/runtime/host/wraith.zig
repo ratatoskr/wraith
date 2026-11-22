@@ -598,19 +598,31 @@ const InputImpl = struct {
             .chord = chord,
             .consume = !action.passthrough,
             .while_typing = action.while_typing,
+            .held = action.held,
             .scope = if (action.scope == .game) .game else .global,
         }, fired) catch |err| return keybindError(err);
         return .init(record, t.keybind);
     }
+
+    pub fn gamepad(_: *Loaded) ?W.GamepadAxes {
+        const a = keybinds.gamepad() orelse return null;
+        return .{ .left_x = a.left_x, .left_y = a.left_y, .right_x = a.right_x, .right_y = a.right_y, .left_trigger = a.left_trigger, .right_trigger = a.right_trigger };
+    }
 };
 
 const KeybindImpl = struct {
-    pub fn rebind(record: *keybinds.Record, chord: W.Chord) sal.Plain(Keybind, "rebind") {
-        keybinds.rebind(record, chordOf(chord) orelse return error.InvalidChord) catch |err| return keybindError(err);
+    pub fn rebind(record: *keybinds.Record, to: W.Chord) sal.Plain(Keybind, "rebind") {
+        keybinds.rebind(record, chordOf(to) orelse return error.InvalidChord) catch |err| return keybindError(err);
     }
 
     pub fn unbind(record: *keybinds.Record) void {
         record.stop();
+    }
+
+    pub fn chord(record: *keybinds.Record) ?W.Chord {
+        const c = keybinds.chordOf(record) orelse return null;
+        const bits: u8 = @bitCast(c.mods);
+        return .{ .key = @fromBackingInt(@backingInt(c.key)), .mods = @bitCast(bits & 0xF) };
     }
 };
 

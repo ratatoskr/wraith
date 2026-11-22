@@ -26,9 +26,22 @@ pub fn setRegistry(r: ?*Registry) void {
 }
 /// For where the mouse is before the window's said.
 var window: ?*Window = null;
+/// Null while plugins aren't loaded.
+var gamepads: ?*tuft_input.Gamepads = null;
 
 pub fn setKeybinds(k: ?*Keybinds) void {
     keybinds = k;
+}
+
+pub fn setGamepads(g: ?*tuft_input.Gamepads) void {
+    gamepads = g;
+}
+
+/// Every connected controller merged, or null without one. Any thread.
+pub fn gamepad() ?tuft_input.Axes {
+    const g = gamepads orelse return null;
+    if (!g.connected()) return null;
+    return g.state().axes;
 }
 
 pub fn setWindow(w: ?*Window) void {
@@ -106,7 +119,7 @@ pub fn bind(loaded: *Loaded, action: api.Action, fired: Fired) api.KeybindError!
 fn register(loaded: *Loaded, action: api.Action, fired: Fired) api.KeybindError!*Record {
     if (keybinds == null) return error.KeybindsUnavailable;
     const r = registry orelse return error.KeybindsUnavailable;
-    if (tuft_input.isModifier(action.chord.key)) return error.InvalidChord;
+    if (!(if (action.held) action.chord.isValidHeld() else action.chord.isValid())) return error.InvalidChord;
     var id_buf: [256]u8 = undefined;
     const id = std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ loaded.name, action.id }) catch {
         log.warn("{s}'s keybind id is too long", .{loaded.name});
@@ -124,7 +137,7 @@ fn register(loaded: *Loaded, action: api.Action, fired: Fired) api.KeybindError!
             .global => .global,
             .game => .game,
         },
-        .kind = .{ .key = .{ .default = action.chord, .consume = action.consume, .while_typing = action.while_typing } },
+        .kind = .{ .key = .{ .default = action.chord, .consume = action.consume, .while_typing = action.while_typing, .held = action.held } },
     }, .{ .key = .{ .ctx = record, .call = Record.fire } }) catch |err| {
         allocator.destroy(record);
         return switch (err) {
@@ -150,6 +163,13 @@ pub fn rebind(record: *Record, chord: wraith_platform.input.Chord) api.KeybindEr
         error.OutOfMemory => error.OutOfMemory,
         else => error.KeybindFailed,
     };
+}
+
+/// What it's on now, the player's pick if they made one. Null once unbound or set to no key.
+pub fn chordOf(record: *Record) ?wraith_platform.input.Chord {
+    const r = registry orelse return null;
+    const setting = record.setting orelse return null;
+    return r.get(setting).key;
 }
 
 const tests = struct {
@@ -239,6 +259,33 @@ const tests = struct {
         try testing.expectEqual(1, state.presses);
         try testing.expectEqual(1, Rig.game.count(win.WM_KEYDOWN));
         try testing.expectEqual(0, rig.keybinds.bindings.items.len);
+    }
+
+    test "held keys can be modifiers, and say what they're on" {
+        var rig: Rig = undefined;
+        try rig.init(.{ .overlay = false });
+        defer rig.deinit();
+        rig.present();
+        const reg = try attach(&rig);
+        defer detach(reg);
+
+        var fake: FakePlugin = undefined;
+        fake.init("kai");
+        defer fake.unload();
+        var state: State = .{};
+        const input = sdk.wraith.root().?.input();
+        const fast = try input.bind(.{ .id = "fast", .name = "Faster", .chord = .{ .key = .left_shift }, .passthrough = true, .held = true }, api.wraith.KeybindFired.init(&state, State.fired));
+        try testing.expectEqual(api.wraith.Key.left_shift, fast.chord().?.key);
+        // Modifiers on a held key don't make sense
+        try testing.expectError(error.InvalidChord, fast.rebind(.{ .key = .w, .mods = .{ .shift = true } }));
+        try fast.rebind(.{ .key = .left_ctrl });
+        try testing.expectEqual(api.wraith.Key.left_ctrl, fast.chord().?.key);
+
+        _ = rig.send(win.WM_KEYDOWN, 0x11, 1);
+        _ = rig.send(win.WM_KEYUP, 0x11, @bitCast(@as(usize, 0xC000_0001)));
+        rig.present();
+        try testing.expectEqual(1, state.presses);
+        try testing.expectEqual(1, state.releases);
     }
 
     test "rebind live and pause" {

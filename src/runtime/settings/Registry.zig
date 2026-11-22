@@ -64,6 +64,8 @@ pub const Key = struct {
     consume: bool = true,
     /// Works while typing in a text box too.
     while_typing: bool = false,
+    /// Held, like a key to move with: it works with any modifiers down and can be one, like Shift.
+    held: bool = false,
 };
 
 pub const Value = union(Type) {
@@ -338,7 +340,7 @@ pub fn setWith(self: *Registry, s: *Setting, wanted: Value, options: SetOptions)
         .choice => |ch| for (ch.options) |o| {
             if (std.mem.eql(u8, o, v.choice)) break;
         } else return error.NotAnOption,
-        .key => if (v.key) |chord| if (!chord.isValid()) return error.InvalidChord,
+        .key => |k| if (v.key) |chord| if (!(if (k.held) chord.isValidHeld() else chord.isValid())) return error.InvalidChord,
         else => {},
     }
     const hook = blk: {
@@ -430,7 +432,7 @@ fn bindKey(self: *Registry, s: *Setting) void {
     // Named in full, like `Mira: set 999999`, since keys are listed without their headings
     var name_buf: [256]u8 = undefined;
     const name = if (s.def.section.len > 0) std.fmt.bufPrint(&name_buf, "{s}: {s}", .{ s.def.section, s.def.name }) catch s.def.name else s.def.name;
-    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = name, .chord = c, .consume = key.consume, .while_typing = key.while_typing }, s, Setting.fire) catch |err| blk: {
+    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = name, .chord = c, .consume = key.consume, .while_typing = key.while_typing, .held = key.held }, s, Setting.fire) catch |err| blk: {
         log.warn("Couldn't bind {f} for {s}: {t}", .{ c, s.def.id, err });
         break :blk null;
     };

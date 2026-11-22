@@ -54,7 +54,7 @@ pub const Plugin = struct {
             const salamander = wraith.builder.dependency("salamander", .{ .target = target, .optimize = options.optimize });
             var for_arch = options;
             for_arch.target = target;
-            arch.* = create(b, wraith.module("wraith_sdk"), salamander, for_arch, depends);
+            arch.* = create(b, .of(wraith), salamander, for_arch, depends);
         }
         return .{
             .name = options.name,
@@ -185,18 +185,35 @@ pub const Plugin = struct {
         return out.items;
     }
 
-    fn create(b: *std.Build, sdk: *std.Build.Module, salamander: *std.Build.Dependency, options: Options, depends: []const Salamander.ZigOptions.With) Arch {
+    /// What plugins build against: the SDK, and Wraith's schemas with their Zig.
+    pub const Sdk = struct {
+        sdk: *std.Build.Module,
+        api_zig: *std.Build.Module,
+        schemas: std.Build.LazyPath,
+
+        fn of(wraith: *std.Build.Dependency) Sdk {
+            return .{ .sdk = wraith.module("wraith_sdk"), .api_zig = wraith.module("wraith_api_zig"), .schemas = wraith.path("src/api/schemas") };
+        }
+    };
+
+    fn create(b: *std.Build, wraith: Sdk, salamander: *std.Build.Dependency, options: Options, depends: []const Salamander.ZigOptions.With) Arch {
+        const sdk = wraith.sdk;
         const module = b.createModule(.{
             .root_source_file = options.root_source_file,
             .target = options.target,
             .optimize = options.optimize,
             .imports = &.{.{ .name = "wraith_sdk", .module = sdk }},
         });
-        if (options.schemas orelse findSchemas(options.root_source_file)) |dir| {
-            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = dir, .target = options.target, .uses = &.{"wraith"}, .instances = &.{instance_tag}, .with = depends }));
-        } else if (depends.len > 0) {
-            // Nothing of its own, so the first dependency's folder stands in
-            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = depends[0].folder, .target = options.target, .uses = &.{"wraith"}, .instances = &.{instance_tag}, .with = depends[1..] }));
+        // Wraith's own types are in scope like they are for scripts, and they're the SDK's
+        const own: Salamander.ZigOptions.With = .{ .name = "wraith", .folder = wraith.schemas };
+        const aliases: []const Salamander.ZigOptions.Alias = &.{.{ .prefix = "wraith/", .name = "wraith_api_zig", .module = wraith.api_zig }};
+        const schemas = options.schemas orelse findSchemas(options.root_source_file);
+        // Without any of its own, the first dependency's folder stands in
+        const folder = schemas orelse if (depends.len > 0) depends[0].folder else null;
+        if (folder) |dir| {
+            const rest = if (schemas != null) depends else depends[1..];
+            const with = std.mem.concat(b.allocator, Salamander.ZigOptions.With, &.{ &.{own}, rest }) catch @panic("OOM");
+            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = dir, .target = options.target, .uses = &.{"wraith"}, .instances = &.{instance_tag}, .with = with, .aliases = aliases }));
         }
         const arch = if (options.target.result.cpu.arch == .x86) "x86" else "x64";
         return .{
@@ -361,7 +378,7 @@ fn addDll(b: *std.Build, name: []const u8, root: std.Build.LazyPath, mods: Modul
     return b.addLibrary(.{
         .name = b.fmt("wraith_{s}_{s}", .{ name, arch }),
         .linkage = .dynamic,
-        .root_module = Plugin.create(b, mods.sdk, b.dependency("salamander", .{ .target = mods.target, .optimize = mods.optimize }), .{
+        .root_module = Plugin.create(b, .{ .sdk = mods.sdk, .api_zig = mods.api_zig, .schemas = b.path("src/api/schemas") }, b.dependency("salamander", .{ .target = mods.target, .optimize = mods.optimize }), .{
             .name = name,
             .root_source_file = root,
             .target = mods.target,
@@ -400,6 +417,8 @@ const Modules = struct {
     platform: *std.Build.Module,
     ui: *std.Build.Module,
     api: *std.Build.Module,
+    /// Wraith's schemas as Zig, which plugins' schemas take Wraith's types from.
+    api_zig: *std.Build.Module,
     sdk: *std.Build.Module,
     runtime: *std.Build.Module,
     bootstrap: *std.Build.Module,
@@ -452,8 +471,16 @@ const Modules = struct {
 
         // Wraith's API, every file in `src/api/schemas` as one schema
         api.addAnonymousImport("wraith.sal", .{ .root_source_file = @import("salamander").bundle(salamander_dep, b.path("src/api/schemas")) });
-        // And as Zig with real methods, made for the target's pointer size each build
-        api.addImport("wraith_api_zig", @import("salamander").zigModule(salamander_dep, .{ .folder = b.path("src/api/schemas"), .target = target }));
+        // And as Zig with real methods, made for the target's pointer size each build. The maths
+        // types are tuft's, so they have its methods
+        const api_zig = @import("salamander").zigModule(salamander_dep, .{
+            .folder = b.path("src/api/schemas"),
+            .target = target,
+            .aliases = &.{.{ .prefix = "math.sal", .name = "tuft_math", .module = tuft.module("tuft_math") }},
+        });
+        api.addImport("wraith_api_zig", api_zig);
+        // Plugins' schemas take Wraith's types from it, so they're the SDK's own
+        if (visibility == .exported) b.modules.put(b.graph.arena, "wraith_api_zig", api_zig) catch @panic("OOM");
 
         const sdk = f.module("sdk", "src/sdk/root.zig", &.{
             .{ .name = "salamander_runtime", .module = salamander },
@@ -565,7 +592,7 @@ const Modules = struct {
         }, true);
         cli.addOptions("build_info", build_info);
 
-        return .{ .b = b, .target = target, .optimize = optimize, .core = core, .platform = platform, .ui = ui, .api = api, .sdk = sdk, .runtime = runtime, .bootstrap = bootstrap, .proxies = proxies, .game = game, .registry = registry, .importer = importer, .cli = cli, .tuft = tuft };
+        return .{ .b = b, .target = target, .optimize = optimize, .core = core, .platform = platform, .ui = ui, .api = api, .api_zig = api_zig, .sdk = sdk, .runtime = runtime, .bootstrap = bootstrap, .proxies = proxies, .game = game, .registry = registry, .importer = importer, .cli = cli, .tuft = tuft };
     }
 
     fn addTests(self: Modules, test_step: *std.Build.Step, build_test_step: *std.Build.Step) void {

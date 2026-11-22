@@ -45,6 +45,20 @@ struct Action {
     bool while_typing;
     // Where the key someone picks is kept
     SettingScope scope;
+    // Held, like a key to move with: it fires whatever modifiers are down too, and it can be a
+    // modifier itself, like Shift. Its chord has no modifiers.
+    bool held;
+}
+
+// Sticks go -1 to 1 with up and right positive, triggers 0 to 1, with no dead zone. Every controller
+// that's connected, merged into one.
+struct GamepadAxes {
+    f32 left_x;
+    f32 left_y;
+    f32 right_x;
+    f32 right_y;
+    f32 left_trigger;
+    f32 right_trigger;
 }
 
 error KeybindError { Unavailable = 1, AlreadyBound, InvalidChord, Failed }
@@ -57,6 +71,8 @@ trait Keybind {
     void!KeybindError rebind(Chord chord);
     // Its key stays saved for next time.
     void unbind();
+    // What it's on now, the player's pick if they made one. Null without a key.
+    ?Chord chord();
 }
 
 trait Input {
@@ -67,4 +83,6 @@ trait Input {
     ?Point mousePos();
     // A key setting listed under the plugin in Settings. Gone with the plugin.
     Keybind!KeybindError bind(Action action, keep KeybindFired fired);
+    // Sticks and triggers, or null without a controller. Any thread.
+    ?GamepadAxes gamepad();
 }

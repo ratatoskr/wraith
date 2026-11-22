@@ -108,4 +108,7 @@ pub const Plugin = struct {
 
 comptime {
     sdk.exportPlugin(Plugin);
+    // A plugin's schemas have Wraith's types, and they're the SDK's own
+    std.debug.assert(schema.Vec3 == sdk.api.wraith.Vec3);
+    std.debug.assert(schema.Point == sdk.api.wraith.Point);
 }
