@@ -89,9 +89,8 @@ fn run() !void {
     const module = loadBootstrap(install_dir) orelse
         loadBootstrap(currentDir(install_dir, &current_buf) orelse return error.LoadFailed) orelse
         return error.LoadFailed;
-    // On x86, stdcall exports get the argument byte count appended to the name
-    const init_address = win.GetProcAddress(module, init_export) orelse
-        win.GetProcAddress(module, init_export ++ "@4") orelse return error.NoInitExport;
+    // src/bootstrap/x86.def keeps the x86 name undecorated
+    const init_address = win.GetProcAddress(module, init_export) orelse return error.NoInitExport;
     const bootstrap_init: *const fn (u32) callconv(.winapi) u32 = @ptrCast(init_address);
     // runtime_abi.BootstrapFlags. Wraith hooks device creation and holds the game until ready
     const started_with_game = 1;

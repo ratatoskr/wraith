@@ -321,6 +321,7 @@ pub fn build(b: *std.Build) void {
 
         const bootstrap = b.addLibrary(.{ .name = b.fmt("wraith_bootstrap_{s}", .{a.dir}), .linkage = .dynamic, .root_module = mods.bootstrap });
         addResources(b, bootstrap, .{ .description = "Wraith bootstrap" });
+        if (a.cpu == .x86) bootstrap.root_module.addObjectFile(b.path("src/bootstrap/x86.def"));
         b.getInstallStep().dependOn(&b.addInstallArtifact(bootstrap, .{
             .dest_dir = .{ .override = .{ .custom = "bin" } },
             .implib_dir = .disabled,
