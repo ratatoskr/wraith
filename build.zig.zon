@@ -17,8 +17,8 @@
             .hash = "salamander-0.0.1-6ZeDNpFiDQAYHcQY5un_vgzMjiy2j5mvXUAlYJm7rOgE",
         },
         .tuft = .{
-            .url = "git+https://github.com/ratatoskr/tuft.git#53d797f708cbf52dc5d15efb56a0eede2ec6b6f5",
-            .hash = "tuft-0.0.0-DNo4ymqoJgDWn9OIpVSjkhHGw7wXlJ7qf0e4D7kNSSAk",
+            .url = "git+https://github.com/ratatoskr/tuft.git#8baf7306b0c2c885510dc4bcdaef5256153ce8cf",
+            .hash = "tuft-0.0.0-DNo4ynfXJgDcOmvUPFaQv0vhvTxCZUDDfnabRKig0aOZ",
         },
     },
 }
