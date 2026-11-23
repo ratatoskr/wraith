@@ -14,7 +14,7 @@ const ui = @import("wraith_ui");
 const Registry = @import("../settings/Registry.zig");
 const Overlay = @import("../ui/Overlay.zig");
 const Screenshot = @import("../Screenshot.zig");
-const game_area = @import("../host/game_area.zig");
+const GameSpeed = @import("../ui/GameSpeed.zig");
 pub const Camera = @import("Camera.zig");
 pub const Posing = @import("Posing.zig");
 
@@ -28,8 +28,6 @@ overlay: *Overlay,
 camera: Camera = undefined,
 posing: Posing = undefined,
 scope: core.Scope,
-/// The speed the game was at before Photo mode paused it. Render thread.
-paused_from: ?f64 = null,
 
 pub fn create(allocator: std.mem.Allocator, registry: *Registry, overlay: *Overlay, keybinds: *Keybinds) !*Photo {
     const self = try allocator.create(Photo);
@@ -47,7 +45,6 @@ pub fn create(allocator: std.mem.Allocator, registry: *Registry, overlay: *Overl
 pub fn destroy(self: *Photo) void {
     // Waits for a frame in flight
     self.scope.deinit();
-    self.resume_();
     self.posing.deinit();
     self.camera.deinit();
     self.allocator.destroy(self);
@@ -59,31 +56,12 @@ fn update(self: *Photo) void {
     self.posing.tick();
 }
 
-pub fn paused(self: *const Photo) bool {
-    return self.paused_from != null;
-}
-
-pub fn setPaused(self: *Photo, on: bool) void {
-    if (on == self.paused()) return;
-    if (on) {
-        const before = game_area.currentSpeed();
-        game_area.setSpeedForPlayer(0) catch |err| return log.warn("Couldn't pause the game: {t}", .{err});
-        self.paused_from = if (before == 0) 1 else before;
-    } else self.resume_();
-}
-
-fn resume_(self: *Photo) void {
-    const before = self.paused_from orelse return;
-    self.paused_from = null;
-    // Only if it's still the pause we made
-    if (game_area.currentSpeed() == 0) game_area.setSpeedForPlayer(before) catch |err| log.warn("Couldn't unpause the game: {t}", .{err});
-}
-
 /// The Photo mode window, in the shell's windows.
 pub const Window = struct {
     window: ui.Window = .{ .title = "Photo mode##wraith.photo", .size = .{ 360, 0 } },
     photo: ?*Photo = null,
     screenshot: ?*Screenshot = null,
+    speed: GameSpeed = .{},
 
     pub fn draw(self: *Window) void {
         const photo = self.photo orelse {
@@ -108,9 +86,7 @@ pub const Window = struct {
         }
 
         ui.separatorText("Game");
-        var pause = photo.paused();
-        if (ui.checkbox("Pause", &pause)) photo.setPaused(pause);
-        ui.tooltip("Stops the world, through the game's engine when there's a plugin for it. The camera still moves.", .{});
+        self.speed.draw(.{ .width = 0 });
 
         ui.separatorText("Posing");
         var posing_open = photo.posing.isOpen();

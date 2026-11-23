@@ -142,12 +142,20 @@ pub fn active(self: *const Posing) bool {
     return self.wanted.load(.monotonic);
 }
 
-pub fn pose(self: *Posing, skeleton: W.PosingSkeleton, matrices: *Mat4) void {
+pub fn pose(self: *Posing, owner: usize, skeleton: W.PosingSkeleton, matrices: *Mat4) void {
     const bones = skeleton.bones;
     const many: [*]Mat4 = @ptrCast(matrices);
     self.acquire();
     defer self.release();
     self.store.pose(skeleton.id, skeleton.name, bones, many[0..bones.len], skeleton.to_world);
+    if (self.store.byId(skeleton.id)) |a| a.owner = owner;
+}
+
+/// Drops what `owner` handed over, when it's going.
+pub fn forget(self: *Posing, owner: usize) void {
+    self.acquire();
+    defer self.release();
+    self.store.forgetOwner(owner);
 }
 
 // Render thread from here

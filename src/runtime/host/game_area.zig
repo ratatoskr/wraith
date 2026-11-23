@@ -54,13 +54,13 @@ fn speedOwnerGone(owner: *Owner) void {
 }
 
 /// The provider if it takes it, else the clocks, which can't go below their minimum. Needs `speed_lock`.
+/// `wanted` stays as asked, so a provider that comes back still gets a pause.
 fn apply() !void {
     if (provider) |p| if (p.handler.invoke(.{wanted})) {
         try speed_.set(1);
         return;
     };
-    wanted = @max(wanted, speed_.min);
-    try speed_.set(wanted);
+    try speed_.set(@max(wanted, speed_.min));
 }
 
 fn setLocked(s: f64, owner: ?*Owner) !void {
@@ -71,13 +71,29 @@ fn setLocked(s: f64, owner: ?*Owner) !void {
         return err;
     };
     setter = owner;
+    if (wanted != 0) resume_to = wanted;
 }
+
+/// What unpausing goes back to.
+var resume_to: f64 = 1;
 
 /// For Wraith's own settings and keys, which are the player's rather than a plugin's.
 pub fn setSpeedForPlayer(s: f64) !void {
     speed_lock.lock();
     defer speed_lock.unlock();
     try setLocked(s, null);
+}
+
+/// Pausing is speed 0, and unpausing goes back to the speed from before.
+pub fn setPausedForPlayer(on: bool) !void {
+    speed_lock.lock();
+    defer speed_lock.unlock();
+    if (on == (wanted == 0)) return;
+    try setLocked(if (on) 0 else resume_to, null);
+}
+
+pub fn paused() bool {
+    return currentSpeed() == 0;
 }
 
 /// What it's at, as asked for.
@@ -269,4 +285,26 @@ test "a plugin that provides speed gets it first, and the clocks carry on once i
     try testing.expectEqual(3, speed_.get());
     try testing.expectEqual(3, currentSpeed());
     try setSpeedForPlayer(1);
+}
+
+test "pausing goes back to the speed from before, and stays a pause on the clocks" {
+    const testing = std.testing;
+    const tuft_hook = @import("tuft_hook");
+    try tuft_hook.init(testing.allocator);
+    defer tuft_hook.deinit();
+    defer speed_.stop();
+    defer setSpeedForPlayer(1) catch {};
+    try setSpeedForPlayer(2.5);
+    try setPausedForPlayer(true);
+    try testing.expect(paused());
+    // The clocks can't stop, but what was asked for is still a pause
+    try testing.expectEqual(speed_.min, speed_.get());
+    try testing.expectEqual(0, currentSpeed());
+    try setPausedForPlayer(false);
+    try testing.expectEqual(2.5, currentSpeed());
+    // Sliding it to 0 is a pause too, and carrying on goes back to before
+    try setSpeedForPlayer(0.5);
+    try setSpeedForPlayer(0);
+    try setPausedForPlayer(false);
+    try testing.expectEqual(0.5, currentSpeed());
 }

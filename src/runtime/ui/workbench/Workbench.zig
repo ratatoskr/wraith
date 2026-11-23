@@ -62,7 +62,7 @@ const Stopped = @import("panels/Stopped.zig");
 const Registers = @import("panels/Registers.zig");
 pub const Group = @import("Group.zig");
 pub const PanelGroup = @import("PanelGroup.zig");
-const GameSpeed = @import("GameSpeed.zig");
+const GameSpeed = @import("../GameSpeed.zig");
 const GameInfo = @import("../../GameInfo.zig");
 const Managed = @import("../../Managed.zig");
 const plugin_panels = @import("../../host/workbench_panels.zig");
@@ -801,7 +801,7 @@ fn drawMenuBar(self: *Workbench) void {
     }
     self.dev_menus.drawMenus();
 
-    self.game_speed.draw();
+    self.game_speed.draw(.{});
     ui.sameLine();
     if (self.go_to.draw()) |address| self.go(.{ .address = address });
 }

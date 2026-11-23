@@ -120,6 +120,8 @@ pub fn apply(parents: []const i32, world: []Mat4, edits: []Placed) void {
 pub const Actor = struct {
     used: bool = false,
     id: u64 = 0,
+    /// Who hands it over, so it's forgotten with them. 0 for nobody in particular.
+    owner: usize = 0,
     name: Name = .{},
     /// `Store.frame` when the game last posed it
     seen: u64 = 0,
@@ -276,6 +278,15 @@ pub const Store = struct {
         for (s.actors) |*a| if (a.used and a.frozen) return true;
         return false;
     }
+
+    /// Everything `owner` handed over, edits and all, since the ids it gave mean nothing once it's gone.
+    pub fn forgetOwner(s: *Store, owner: usize) void {
+        for (s.actors) |*a| {
+            if (!a.used or a.owner != owner) continue;
+            s.resetActor(a.id);
+            a.* = .{};
+        }
+    }
 };
 
 /// A plain slice, or a salamander `String` from an async call.
@@ -363,6 +374,28 @@ test "edits stick by name every frame, and freezing holds the pose from before t
 
     store.resetActor(7);
     frame = .{ at(4, 0, 0), at(4, 1, 0) };
+    store.pose(7, "Rean", &bones, &frame, .identity);
+    try testing.expect(frame[1].getTranslation().approxEql(.init(0, 1, 0), 1e-5));
+}
+
+test "an owner going takes its actors' edits with it, and no one else's" {
+    var store: Store = try .init(testing.allocator);
+    defer store.deinit(testing.allocator);
+    const bones = [_]TestBone{ .{ .name = "root", .parent = -1 }, .{ .name = "head", .parent = 0 } };
+    var frame = [_]Mat4{ at(0, 0, 0), at(0, 1, 0) };
+    store.pose(7, "Rean", &bones, &frame, .identity);
+    store.byId(7).?.owner = 1;
+    store.pose(8, "Agnes", &bones, &frame, .identity);
+    store.byId(8).?.owner = 2;
+    store.edit(7, "head").?.position = .init(0, 2, 0);
+    store.edit(8, "head").?.position = .init(0, 2, 0);
+
+    store.forgetOwner(1);
+    try testing.expectEqual(null, store.byId(7));
+    try testing.expect(!store.hasEdits(7));
+    try testing.expect(store.hasEdits(8));
+    // A new plugin handing over the same id starts afresh
+    frame = .{ at(0, 0, 0), at(0, 1, 0) };
     store.pose(7, "Rean", &bones, &frame, .identity);
     try testing.expect(frame[1].getTranslation().approxEql(.init(0, 1, 0), 1e-5));
 }

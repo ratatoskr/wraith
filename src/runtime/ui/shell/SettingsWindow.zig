@@ -22,6 +22,7 @@ const Registry = Settings.Registry;
 const Setting = Registry.Setting;
 const Shell = @import("Shell.zig");
 const Workbench = @import("../workbench/Workbench.zig");
+const GameSpeed = @import("../GameSpeed.zig");
 
 const log = core.log.scoped(.wraith_ui);
 
@@ -44,6 +45,8 @@ adding_starts: bool = false,
 page: PageKind = .wraith,
 page_name: [96]u8 = undefined,
 page_name_len: usize = 0,
+/// The Game speed page's, the same speed the Workbench and Photo mode show.
+speed: GameSpeed = .{},
 
 const PageKind = enum {
     /// One of Wraith's sections, by name. Empty is General.
@@ -241,6 +244,10 @@ fn isGameKey(s: *const Setting) bool {
 
 /// One of Wraith's own. True if it asked for the welcome.
 fn drawSection(self: *SettingsWindow, shell: *Shell, section: []const u8) bool {
+    if (std.mem.eql(u8, section, "Game speed")) {
+        self.speed.draw(.{ .width = 0 });
+        ui.spacing();
+    }
     var heading: []const u8 = "";
     for (self.settings) |s| {
         if (s.def.hidden or !isWraith(s) or !std.mem.eql(u8, s.def.section, section)) continue;

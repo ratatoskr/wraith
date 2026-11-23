@@ -10,6 +10,8 @@ const sync = @import("tuft_sys").sync;
 
 const Photo = @import("../photo/Photo.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
+const OnGone = @import("Owned.zig").OnGone;
+const Owner = @import("tuft_event").Owner;
 
 const W = api.wraith;
 pub const FreeCamera = W.FreeCamera;
@@ -61,9 +63,20 @@ pub const PosingImpl = struct {
         return p.posing.active();
     }
 
-    pub fn pose(_: *Loaded, skeleton: W.PosingSkeleton, matrices: *math.Mat4) void {
+    pub fn pose(loaded: *Loaded, skeleton: W.PosingSkeleton, matrices: *math.Mat4) void {
+        const lease = posing_cleanup.lease(&loaded.owner) orelse return;
+        defer lease.end();
         lock.lockShared();
         defer lock.unlockShared();
-        if (photo) |p| p.posing.pose(skeleton, matrices);
+        if (photo) |p| p.posing.pose(@intFromPtr(&loaded.owner), skeleton, matrices);
     }
 };
+
+var posing_cleanup: OnGone(.closing, posingOwnerGone) = .{};
+
+/// Its ids mean nothing once it's gone, and a new one could hand over the same ones.
+fn posingOwnerGone(owner: *Owner) void {
+    lock.lockShared();
+    defer lock.unlockShared();
+    if (photo) |p| p.posing.forget(@intFromPtr(owner));
+}
