@@ -44,6 +44,8 @@ fn speedOwnerGone(owner: *Owner) void {
         p.handler.release();
         provider = null;
         changed = true;
+        // The clocks can only speed it up, so a pause or slow motion ends with the plugin
+        if (wanted < 1) wanted = 1;
     };
     if (setter == owner) {
         setter = null;
@@ -53,19 +55,25 @@ fn speedOwnerGone(owner: *Owner) void {
     if (changed) apply() catch {};
 }
 
-/// The provider if it takes it, else the clocks, which can't go below their minimum. Needs `speed_lock`.
-/// `wanted` stays as asked, so a provider that comes back still gets a pause.
+/// The provider if it takes it, else the clocks. Those only ever speed the game up, since games
+/// cap their frame rate with the same clocks, so slowing them slows the frame rate and Wraith's
+/// windows drawn with it. Needs `speed_lock`.
 fn apply() !void {
     if (provider) |p| if (p.handler.invoke(.{wanted})) {
         try speed_.set(1);
         return;
     };
-    try speed_.set(@max(wanted, speed_.min));
+    try speed_.set(@max(wanted, 1));
+}
+
+/// Below 1 needs a plugin that handles the game's speed. Needs `speed_lock`.
+fn lowest() f64 {
+    return if (provider != null) 0 else 1;
 }
 
 fn setLocked(s: f64, owner: ?*Owner) !void {
     const before = wanted;
-    wanted = std.math.clamp(s, 0, speed_.max);
+    wanted = std.math.clamp(s, lowest(), speed_.max);
     apply() catch |err| {
         wanted = before;
         return err;
@@ -84,16 +92,26 @@ pub fn setSpeedForPlayer(s: f64) !void {
     try setLocked(s, null);
 }
 
-/// Pausing is speed 0, and unpausing goes back to the speed from before.
+/// Pausing is speed 0, and unpausing goes back to the speed from before. Pausing needs a plugin
+/// that handles the game's speed.
 pub fn setPausedForPlayer(on: bool) !void {
     speed_lock.lock();
     defer speed_lock.unlock();
     if (on == (wanted == 0)) return;
+    if (on and provider == null) return error.NeedsPlugin;
     try setLocked(if (on) 0 else resume_to, null);
 }
 
 pub fn paused() bool {
     return currentSpeed() == 0;
+}
+
+/// Whether it can go below 1 and pause, which takes a plugin that handles the game's speed, like
+/// one for its engine.
+pub fn canSlow() bool {
+    speed_lock.lockShared();
+    defer speed_lock.unlockShared();
+    return provider != null;
 }
 
 /// What it's at, as asked for.
@@ -270,41 +288,72 @@ test "a plugin that provides speed gets it first, and the clocks carry on once i
     try testing.expectEqual(0, game.speed());
     try testing.expectEqual(1, speed_.get());
 
-    // One it won't do goes to the clocks
+    // One it won't do goes to the clocks, which only speed up
     state.takes = false;
     try game.setSpeed(0.5);
-    try testing.expectEqual(0.5, speed_.get());
+    try testing.expectEqual(1, speed_.get());
+    try game.setSpeed(2);
+    try testing.expectEqual(2, speed_.get());
     state.takes = true;
 
-    // The player's speed stays once the provider's gone, on the clocks now
-    try setSpeedForPlayer(3);
-    try testing.expectEqual(3, state.got);
-    try testing.expectEqual(1, speed_.get());
+    // Paused when it goes, the game carries on at normal, since the clocks can't pause
+    try setSpeedForPlayer(2.5);
+    try setPausedForPlayer(true);
+    try testing.expectEqual(0, state.got);
     loaded.deinitForTest();
     wraith.forget(&loaded);
+    try testing.expectEqual(1, currentSpeed());
+    try testing.expect(!canSlow());
+    // The player's speed-up carries on, on the clocks
+    try setSpeedForPlayer(3);
     try testing.expectEqual(3, speed_.get());
-    try testing.expectEqual(3, currentSpeed());
     try setSpeedForPlayer(1);
 }
 
-test "pausing goes back to the speed from before, and stays a pause on the clocks" {
+test "without a plugin for its speed, the game only speeds up, and can't pause" {
     const testing = std.testing;
     const tuft_hook = @import("tuft_hook");
     try tuft_hook.init(testing.allocator);
     defer tuft_hook.deinit();
     defer speed_.stop();
     defer setSpeedForPlayer(1) catch {};
-    try setSpeedForPlayer(2.5);
+    try testing.expect(!canSlow());
+    try setSpeedForPlayer(0.5);
+    try testing.expectEqual(1, currentSpeed());
+    try testing.expectError(error.NeedsPlugin, setPausedForPlayer(true));
+    try testing.expect(!paused());
+    try setSpeedForPlayer(4);
+    try testing.expectEqual(4, speed_.get());
+}
+
+test "pausing with a plugin goes back to the speed from before" {
+    const testing = std.testing;
+    const sdk = @import("wraith_sdk");
+    var loaded: Loaded = undefined;
+    loaded.initForTest(testing.allocator, "engine");
+    defer {
+        loaded.deinitForTest();
+        wraith.forget(&loaded);
+    }
+    sdk.Owner.attach(loaded.root());
+    defer sdk.Owner.detach();
+    const Takes = struct {
+        fn handle(_: *@This(), _: f64) bool {
+            return true;
+        }
+    };
+    var takes: Takes = .{};
+    sdk.wraith.root().?.game().provideSpeed(W.SpeedHandler.init(&takes, Takes.handle));
+    defer setSpeedForPlayer(1) catch {};
+
+    try setSpeedForPlayer(0.5);
     try setPausedForPlayer(true);
     try testing.expect(paused());
-    // The clocks can't stop, but what was asked for is still a pause
-    try testing.expectEqual(speed_.min, speed_.get());
-    try testing.expectEqual(0, currentSpeed());
-    try setPausedForPlayer(false);
-    try testing.expectEqual(2.5, currentSpeed());
-    // Sliding it to 0 is a pause too, and carrying on goes back to before
-    try setSpeedForPlayer(0.5);
-    try setSpeedForPlayer(0);
     try setPausedForPlayer(false);
     try testing.expectEqual(0.5, currentSpeed());
+    // Sliding it to 0 is a pause too
+    try setSpeedForPlayer(2.5);
+    try setSpeedForPlayer(0);
+    try setPausedForPlayer(false);
+    try testing.expectEqual(2.5, currentSpeed());
 }

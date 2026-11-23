@@ -245,7 +245,7 @@ fn isGameKey(s: *const Setting) bool {
 /// One of Wraith's own. True if it asked for the welcome.
 fn drawSection(self: *SettingsWindow, shell: *Shell, section: []const u8) bool {
     if (std.mem.eql(u8, section, "Game speed")) {
-        self.speed.draw(.{ .width = 0 });
+        self.speed.draw(.{ .width = 0, .explain = true });
         ui.spacing();
     }
     var heading: []const u8 = "";

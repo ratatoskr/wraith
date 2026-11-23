@@ -1,4 +1,7 @@
-//! Game speed, like Cheat Engine's speedhack. The clocks games time their frames with are hooked,
+//! Game speed, like Cheat Engine's speedhack, for games without a plugin that handles their speed.
+//! Wraith only speeds games up this way, since games cap their frame rate with the same clocks, so
+//! slowing them slows the frame rate, and Wraith's windows drawn with it. The clocks games time
+//! their frames with are hooked,
 //! and each reads as where it was when the speed last changed, plus the real time since times the
 //! speed. Calls from Wraith's own code and its plugins' still get the real time, so Wraith's UI,
 //! timers and frame stats don't change. Nothing's hooked till the speed first isn't 1.

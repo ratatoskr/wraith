@@ -1,6 +1,8 @@
 //! The game's speed, as a slider with a pause button by it. The Workbench, Settings and Photo mode
 //! each draw one, and they all show and set the same speed, whoever else set it, like a key or a
-//! plugin. It changes as you slide it, without a toast, since you can see where it's at.
+//! plugin. It changes as you slide it, without a toast, since you can see where it's at. Slow
+//! motion and pausing need a plugin that handles the game's speed, so without one it starts at 1
+//! and the pause button's off, and Settings and Photo mode say why.
 
 const GameSpeed = @This();
 
@@ -16,11 +18,16 @@ const log = core.log.scoped(.wraith_ui);
 
 pub const max = 10;
 
+/// Why it only speeds up, for wherever it's explained.
+pub const only_faster = "This game has no plugin that handles its speed, so Wraith can only speed it up.";
+
 pub const Options = struct {
     /// The slider's, unscaled. 0 takes what's left of the line.
     width: f32 = 110,
     /// "Speed" before it.
     label: bool = true,
+    /// Says under it why it only speeds up, when it does.
+    explain: bool = false,
 };
 
 /// Said once, rather than every frame of a drag.
@@ -29,25 +36,34 @@ warned: bool = false,
 rect: [2]ui.Vec2 = .{ .{ 0, 0 }, .{ 0, 0 } },
 
 pub fn draw(self: *GameSpeed, options: Options) void {
+    const can_slow = game_area.canSlow();
     if (options.label) {
         ui.textDisabled("Speed", .{});
         ui.sameLine();
     }
     const is_paused = game_area.paused();
-    if (ui.iconButton(if (is_paused) icons.play ++ "##game_speed_pause" else icons.pause ++ "##game_speed_pause", if (is_paused) "Carry on at the speed from before" else "Pause the game")) {
-        self.report(game_area.setPausedForPlayer(!is_paused));
+    {
+        const off = ui.disabled(!can_slow);
+        defer off.end();
+        const tip = if (!can_slow) "Pausing needs a plugin that handles this game's speed" else if (is_paused) "Carry on at the speed from before" else "Pause the game";
+        if (ui.iconButton(if (is_paused) icons.play ++ "##game_speed_pause" else icons.pause ++ "##game_speed_pause", tip)) {
+            self.report(game_area.setPausedForPlayer(!is_paused));
+        }
     }
     ui.sameLine();
     var speed: f64 = game_area.currentSpeed();
     ui.setNextItemWidth(if (options.width == 0) -std.math.floatMin(f32) else ui.scaled(options.width));
-    var changed = ui.sliderWith("##game_speed", &speed, 0, max, .{ .format = "%.2fx", .clamp = true, .logarithmic = true });
+    var changed = ui.sliderWith("##game_speed", &speed, if (can_slow) 0 else 1, max, .{ .format = "%.2fx", .clamp = true, .logarithmic = true });
     self.rect = .{ ui.getItemRectMin(), ui.getItemRectMax() };
     if (ui.isItemClicked(.right)) {
         speed = 1;
         changed = true;
     }
-    ui.tooltip("How fast the game runs. Right-click for normal. 0 pauses in games whose plugin handles speed, like Unity's and Unreal's, and is as slow as it goes elsewhere", .{});
+    if (can_slow) {
+        ui.tooltip("How fast the game runs. Right-click for normal, and 0 pauses", .{});
+    } else ui.tooltip("How fast the game runs. Right-click for normal. Only faster in this game, since it has no plugin that handles its speed", .{});
     if (changed) self.report(game_area.setSpeedForPlayer(speed));
+    if (options.explain and !can_slow) ui.textWrapped("{s}", .{only_faster});
 }
 
 fn report(self: *GameSpeed, result: anyerror!void) void {

@@ -152,7 +152,7 @@ pub fn add(shell: *Shell, registry: *Registry) !ShellSettings {
     self.pause_key = try registry.add(.{
         .id = "wraith.speed.pause",
         .name = "Pause or carry on",
-        .help = "Pauses the game, and carries on at the speed from before. Most games follow it, a few keep their own time.",
+        .help = "Pauses the game, and carries on at the speed from before. Needs a plugin that handles the game's speed, like the Unity and Unreal plugins.",
         .group = Settings.group,
         .section = "Game speed",
         .kind = .{ .key = .{ .default = null } },
@@ -229,6 +229,10 @@ fn pauseKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
     if (phase != .pressed) return;
     const shell: *Shell = @ptrCast(@alignCast(ctx));
     game_area.setPausedForPlayer(!game_area.paused()) catch |err| {
+        if (err == error.NeedsPlugin) {
+            _ = shell.overlay.host.toasts.push(.{ .kind = .info, .title = "Game speed", .text = "Pausing needs a plugin that handles this game's speed.", .seconds = 3 });
+            return;
+        }
         log.warn("Couldn't change the game's speed: {t}", .{err});
         _ = shell.overlay.host.toasts.push(.{ .kind = .@"error", .title = "Game speed", .text = "This game's clocks couldn't be changed.", .seconds = 3 });
         return;

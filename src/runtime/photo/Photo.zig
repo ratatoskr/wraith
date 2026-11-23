@@ -86,7 +86,7 @@ pub const Window = struct {
         }
 
         ui.separatorText("Game");
-        self.speed.draw(.{ .width = 0 });
+        self.speed.draw(.{ .width = 0, .explain = true });
 
         ui.separatorText("Posing");
         var posing_open = photo.posing.isOpen();
