@@ -142,21 +142,23 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []co
     const revoked = registry.revoked(arena, io, source) catch &.{};
     for (try registry.installedAll(arena, io, mods_dir)) |have| {
         if (gather.find(have.id) == null) {
-            const pkg = (registry.package(arena, io, source, have.id) catch null) orelse continue;
-            const newest = registry.latest(pkg, wraith, null);
-            try gather.add(.{
-                .id = pkg.id,
-                .kind = pkg.kind,
-                .author = pkg.author,
-                .title = pkg.title,
-                .summary = pkg.summary,
-                .version = if (newest) |v| v.version else have.version,
-                .wraith = if (newest) |v| v.wraith else null,
-                .apiVersion = if (newest) |v| v.apiVersion else null,
-                .games = if (newest) |v| if (v.game) |g| g.ids else &.{} else &.{},
-                .gameEngine = if (newest) |v| v.gameEngine else null,
-                .library = pkg.library,
-            }, null);
+            // Still listed when the hub's dropped it or can't be asked, so it can be taken out
+            if (registry.package(arena, io, source, have.id) catch null) |pkg| {
+                const newest = registry.latest(pkg, wraith, null);
+                try gather.add(.{
+                    .id = pkg.id,
+                    .kind = pkg.kind,
+                    .author = pkg.author,
+                    .title = pkg.title,
+                    .summary = pkg.summary,
+                    .version = if (newest) |v| v.version else have.version,
+                    .wraith = if (newest) |v| v.wraith else null,
+                    .apiVersion = if (newest) |v| v.apiVersion else null,
+                    .games = if (newest) |v| if (v.game) |g| g.ids else &.{} else &.{},
+                    .gameEngine = if (newest) |v| v.gameEngine else null,
+                    .library = pkg.library,
+                }, null);
+            } else try gather.listed.append(arena, try installedOnly(arena, io, mods_dir, have));
         }
         const l = gather.find(have.id) orelse continue;
         l.installed = have.version;
@@ -164,6 +166,30 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []co
     }
     const generated = if (any.generated.len > 0) any.generated else if (picks.generated.len > 0) picks.generated else known.generated;
     return .{ .generated = generated, .mods = gather.listed.items };
+}
+
+/// One the hub doesn't have, or couldn't say about, from its own wraith.json.
+fn installedOnly(arena: std.mem.Allocator, io: std.Io, mods_dir: []const u8, have: registry.Installed) !Listed {
+    const path = try std.fs.path.join(arena, &.{ mods_dir, have.id, core.manifest.file_name });
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch "";
+    const m: core.manifest.Manifest = core.manifest.parse(arena, text, null) catch .{};
+    return .{
+        .id = have.id,
+        .kind = if (m.kind == .project) .project else .plugin,
+        .title = m.title orelse "",
+        .summary = m.summary orelse "",
+        .author = m.author orelse "",
+        .any_game = m.game == null and m.gameEngine == null,
+        .games = &.{},
+        .game_engine = m.gameEngine,
+        .featured = false,
+        .why = null,
+        .latest = null,
+        .needs_wraith = null,
+        .installed = have.version,
+        .revoked = false,
+        .library = m.library,
+    };
 }
 
 pub const Where = struct {

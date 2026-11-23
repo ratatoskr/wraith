@@ -55,8 +55,8 @@ const Row = struct {
     plugin: ?*const Info = null,
     listed: ?*const Listed = null,
     dev: bool = false,
-    /// A dev plugin's installed copy in the mods folder, which it's loaded over.
-    over: ?*const Folder = null,
+    /// Its copy in the mods folder. A dev plugin is loaded over it.
+    folder: ?*const Folder = null,
 
     fn title(self: Row) []const u8 {
         if (self.plugin) |p| if (p.about.title.len() > 0) return p.about.title.get();
@@ -84,8 +84,15 @@ const Row = struct {
         return if (self.listed) |l| l.kind == .project else false;
     }
 
-    fn fromHub(self: Row) bool {
+    /// Installed from the hub, so it can be uninstalled. The folder says so even when the hub can't.
+    pub fn fromHub(self: Row) bool {
+        if (self.folder) |f| if (f.from_hub) return true;
         return if (self.listed) |l| l.installed != null else false;
+    }
+
+    /// The installed copy a dev plugin's loaded over.
+    pub fn over(self: Row) ?*const Folder {
+        return if (self.dev) self.folder else null;
     }
 
     fn hasUpdate(self: Row) bool {
@@ -193,7 +200,7 @@ pub fn collect(self: *ModsWindow, section: Section, query: []const u8) []const R
                     .dev = !std.mem.startsWith(u8, p.source_dir.get(), self.mods_dir.get()),
                 };
                 if (row.dev != (section == .dev)) continue;
-                if (row.dev) row.over = self.work.folder(row.id);
+                row.folder = self.work.folder(row.id);
                 if (section == .updates and !row.hasUpdate()) continue;
                 if (n < max_rows and row.matches(query)) {
                     self.rows[n] = row;
@@ -289,7 +296,7 @@ fn drawTags(row: Row) void {
     if (row.listed) |l| if (l.library) tag(blue, "Library");
     if (row.isProject()) tag(blue, "Project");
     if (row.dev) tag(blue, "Dev");
-    if (row.over) |o| {
+    if (row.over()) |o| {
         var buf: [64]u8 = undefined;
         tag(amber, std.fmt.bufPrint(&buf, "Over installed {s}", .{if (o.version.len > 0) o.version else "copy"}) catch "Over installed copy");
     }
@@ -318,7 +325,7 @@ fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
     ui.textDisabled("{s}", .{row.id});
     if (row.plugin) |p| {
         if (row.dev) ui.textDisabled("Dev plugin, from {s}", .{p.source_dir.get()});
-        if (row.over) |o| ui.textColored(amber, "Loaded instead of the installed copy{s}{s}. Stop loading from here to go back to it.", .{ if (o.version.len > 0) ", " else "", o.version });
+        if (row.over()) |o| ui.textColored(amber, "Loaded instead of the installed copy{s}{s}. Stop loading from here to go back to it.", .{ if (o.version.len > 0) ", " else "", o.version });
         if (p.about.games.len() > 0) ui.textDisabled("For {s}", .{p.about.games.get()});
         if (p.last_error) |err| {
             if (err == error.OutdatedApi) {
@@ -434,6 +441,8 @@ pub const Folder = struct {
     id: []const u8,
     /// Its wraith.json's. Empty if it has none.
     version: []const u8,
+    /// It has the hub's install receipt.
+    from_hub: bool,
 };
 
 /// The mods folder's folders with their versions.
@@ -449,7 +458,8 @@ fn readFolders(a: std.mem.Allocator, io: std.Io, mods_dir: []const u8) ![]const 
         if (entry.kind != .directory) continue;
         const path = try std.fs.path.join(a, &.{ mods_dir, entry.name });
         const manifest = (Manifest.read(a, io, path) catch null) orelse continue;
-        try out.append(a, .{ .id = try a.dupe(u8, entry.name), .version = manifest.value.version orelse "" });
+        const from_hub = (registry.installed(a, io, mods_dir, entry.name) catch null) != null;
+        try out.append(a, .{ .id = try a.dupe(u8, entry.name), .version = manifest.value.version orelse "", .from_hub = from_hub });
     }
     return out.items;
 }

@@ -1161,7 +1161,7 @@ const tests = struct {
         defer page.work.listing = null;
 
         // An installed copy under the dev one
-        const folders = [_]ModsWindow.Folder{.{ .id = "mine", .version = "0.9.0" }};
+        const folders = [_]ModsWindow.Folder{ .{ .id = "mine", .version = "0.9.0", .from_hub = false }, .{ .id = "fixture", .version = "1.0.0", .from_hub = true } };
         page.work.folders = &folders;
         defer page.work.folders = &.{};
 
@@ -1170,16 +1170,26 @@ const tests = struct {
             const installed = page.collect(.installed, "");
             try testing.expectEqual(1, installed.len);
             try testing.expectEqualStrings("fixture", installed[0].id);
-            try testing.expectEqual(null, installed[0].over);
+            try testing.expectEqual(null, installed[0].over());
             const dev = page.collect(.dev, "");
             try testing.expectEqual(1, dev.len);
             try testing.expect(dev[0].dev);
-            try testing.expectEqualStrings("0.9.0", dev[0].over.?.version);
+            try testing.expectEqualStrings("0.9.0", dev[0].over().?.version);
             try testing.expectEqualStrings("fixture", page.collect(.updates, "")[0].id);
             try testing.expectEqual(1, page.collect(.updates, "").len);
             try testing.expectEqualStrings("other", page.collect(.browse, "")[0].id);
             try testing.expectEqual(0, page.collect(.installed, "nothing like it").len);
             try testing.expectEqual(1, page.collect(.installed, "draws").len);
+        }
+
+        // Without the hub, its folder still says it can be uninstalled
+        {
+            const saved_listing = page.work.listing;
+            page.work.listing = null;
+            defer page.work.listing = saved_listing;
+            const installed = page.collect(.installed, "");
+            try testing.expectEqual(1, installed.len);
+            try testing.expect(installed[0].fromHub());
         }
 
         // Every section draws, with a row open

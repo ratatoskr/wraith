@@ -298,6 +298,27 @@ test "install and remove" {
     try testing.expectEqual(null, try registry.installed(a, io, plugins, "hello"));
 }
 
+test "installed ones the hub doesn't have any more are still listed" {
+    const saved = core.log.mute(&.{.other});
+    defer core.log.setFilter(saved);
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    try hub.publishHello(&.{"1.0.0"}, &helloSha256());
+    const hello = (try registry.package(a, io, hub.source(), "hello")).?;
+    const mods_dir = hub.path("mods");
+    try registry.install(a, io, hub.source(), mods_dir, hello, hello.find("1.0.0").?);
+
+    try hub.tmp.dir.deleteFile(io, "site/v1/packages/hello.json");
+    var source = hub.source();
+    source.cache_dir = null;
+    const listing = try registry.mods.list(a, io, source, mods_dir, "1.0.0", &.{}, &.{});
+    const listed = listing.find("hello").?;
+    try testing.expectEqualStrings("1.0.0", listed.installed.?);
+    try testing.expectEqual(null, listed.latest);
+    try testing.expect(!listed.hasUpdate());
+}
+
 test "only the package it says, and only plugins" {
     const saved = core.log.mute(&.{.other});
     defer core.log.setFilter(saved);
