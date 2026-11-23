@@ -202,11 +202,8 @@ test "plugins' panels show in their groups, drawn in its frame" {
     try testing.expect(tuft_imgui.dock.inFront(wb.documents.items[1].window().title));
     try testing.expect(!tuft_imgui.dock.inFront(wb.groups.engine.window.title));
 
-    // Classes comes first in the engine's group, so its panel waits behind till it's focused
+    // Without C# there's no Classes tab, so a plugin's panel is what it shows once it's focused
     const before = engines.draws;
-    area.showClass("System.String");
-    frames.run(wb, 3);
-    try testing.expectEqual(before, engines.draws);
     sdk.wraith.root().?.ui().addWorkbenchPanel(.{ .title = "Scene 2", .engine = true }, .init(&engines, PanelDraws.draw)).focus();
     frames.run(wb, 3);
     try testing.expect(engines.draws > before);

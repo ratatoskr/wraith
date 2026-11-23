@@ -319,7 +319,7 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
         .debug = .init("Debug", .tabs, &.{ .of("Threads", &p.stopped), .of("Registers", &p.registers), .of("Breakpoints", &p.breakpoints) }),
         .scripts = .init("Scripts", .{ .split = .{ .ratio = 0.75 } }, &.{ .of("Console", &p.console), .of("Sessions", &p.sessions) }),
         .diagnostics = .init("Diagnostics", .tabs, &.{ .of("Timings", &p.timings), .of("Frames", &p.frames), .of("Memory", &p.memory), .of("Environment", &p.environment), .of("Hooks", &p.hooks), .of("Claims", &p.claims), .of("IO", &p.file_io) }),
-        .engine = .init(true, &.{.of("Classes", &p.classes)}, ""),
+        .engine = .init(true, &.{.of("Classes", &p.classes)}, "Nothing for this game's engine yet. Engine plugins, like Unity's, add their panels here, and Classes shows once the game runs C#."),
         .plugins = .init(false, &.{}, "Plugins' Workbench panels show here."),
     };
     // It opens itself behind what you're looking at
@@ -603,6 +603,8 @@ fn pollPluginPanels(self: *Workbench) void {
     // "C#" can't be a title, since ImGui takes its # as the start of an ID
     engine.setName(if (GameInfo.global.game_engine) |e| e.label() else if (Managed.global.kind()) |k| Managed.label(k) else "Engine");
     engine.poll(Managed.global.running());
+    // C# only, so not in an Unreal game, say
+    engine.own_shown = Managed.global.running();
     self.groups.plugins.poll(false);
     var buf: [256]u8 = undefined;
     if (plugin_panels.takeClass(&buf)) |name| {

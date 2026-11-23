@@ -30,6 +30,8 @@ pick_own: ?u8 = null,
 pick_label: ?u64 = null,
 /// Opened itself once already, so closing it sticks.
 opened_once: bool = false,
+/// Whether its own parts show, like Classes only once there's C#.
+own_shown: bool = true,
 
 pub fn init(engine: bool, own: []const Group.Part, empty: [:0]const u8) PanelGroup {
     var self: PanelGroup = .{
@@ -83,13 +85,14 @@ pub fn draw(self: *PanelGroup) void {
     defer panels.release(taken);
     defer self.pick_own = null;
     defer self.pick_label = null;
-    if (self.own_len == 0 and taken.len == 0) {
+    const own_len: u8 = if (self.own_shown) self.own_len else 0;
+    if (own_len == 0 and taken.len == 0) {
         ui.textDisabled("{s}", .{self.empty});
         return;
     }
     const bar = ui.tabBar("parts") orelse return;
     defer bar.end();
-    for (self.own[0..self.own_len], 0..) |p, i| {
+    for (self.own[0..own_len], 0..) |p, i| {
         const tab = ui.tabItem(p.label, .{ .select = self.pick_own != null and self.pick_own.? == i }) orelse continue;
         defer tab.end();
         const part = ui.child(p.label, .{ 0, 0 }, .{}) orelse continue;
