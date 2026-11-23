@@ -118,6 +118,18 @@ fn hintGone(owner: *Owner) void {
     if (hint_owner.cmpxchgStrong(@intFromPtr(owner), 0, .acq_rel, .acquire) == null) gfx.color_space_hint.set(null);
 }
 
+pub const TickSubscription = Bus.Subscription;
+
+/// For the runtime's own code, not a plugin's. `f(ctx)` runs each tick, on the game thread.
+pub fn subscribeTicks(ctx: anytype, comptime f: fn (@TypeOf(ctx)) void) !TickSubscription {
+    return tick_bus.subscribeUnscoped(ctx, f);
+}
+
+/// A tick with no frame, for tests.
+pub fn tickForTests() void {
+    tickNow();
+}
+
 /// Skipped if a tick's already running on another thread.
 fn tickNow() void {
     if (ticking.swap(true, .acquire)) return;

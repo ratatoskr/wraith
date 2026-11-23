@@ -101,7 +101,7 @@ pub const Rig = struct {
         host.messages.setFrames(true);
         host.frame.setFrames(true);
         r.heard = .{};
-        r.sessions = try Sessions.create(testing.allocator, "", "");
+        r.sessions = try Sessions.create(testing.allocator, "", "", null);
         r.subscription = try host.messages.subscribeRuntime(&r.heard, Heard.on);
     }
 
@@ -121,9 +121,10 @@ pub const Rig = struct {
         try host.messages.publishFromRuntime(topic, json);
     }
 
-    /// Requests in, a frame, and what that said out.
+    /// Requests in, a tick and a frame, and what that said out.
     pub fn step(_: *Rig) void {
         host.messages.deliver();
+        host.frame.tickForTests();
         host.salamander.pollRender();
         host.messages.deliver();
     }

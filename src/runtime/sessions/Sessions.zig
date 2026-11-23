@@ -1,9 +1,11 @@
 //! The workbench's script sessions, in JS or Lua on Salamander. Requests come as runtime messages,
 //! and each session is a script of its own that keeps its state between runs, with Wraith's areas
-//! as globals like `frame` and `hooks`. Tweaks run in them too, each in a session of its own. Each
-//! is for a project, and starts with its schemas and names, see `host.projects`.
+//! as globals like `frame` and `hooks`, and every loaded plugin's services as modules by its name,
+//! like `require("unreal")`. Tweaks run in them too, each in a session of its own. Each is for a
+//! project, and starts with its schemas and names, see `host.projects`.
 //!
-//! Everything happens on the render thread, in a task its queue runs once a frame.
+//! Each session runs on the game thread or the render thread, as its runs ask. Game thread ones are
+//! looked after in a tick, render thread ones in a task the render queue runs once a frame.
 
 const Sessions = @This();
 
@@ -18,9 +20,11 @@ const sync = @import("tuft_sys").sync;
 const host = @import("../host/root.zig");
 const scripts = @import("../plugins/scripts.zig");
 const repl = @import("repl.zig");
-const Loaded = @import("../PluginLoader.zig").Loaded;
+const PluginLoader = @import("../PluginLoader.zig");
+const Loaded = PluginLoader.Loaded;
 
 const protocol = api.script;
+const Thread = protocol.Thread;
 const tweak = api.tweak;
 const sal = api.salamander;
 const engine = hosts.engine;
@@ -35,16 +39,21 @@ const tweak_lua = @embedFile("tweak.lua");
 const max_result = 256 * 1024;
 
 gpa: std.mem.Allocator,
+/// Whose plugins' services sessions get. Null in tests.
+loader: ?*PluginLoader,
 /// Where sessions keep their settings, each in a folder of its own.
 config_dir: []u8,
 game_config_dir: []u8,
 /// Its pump's, so stopping waits for one that's running.
 owner: *sal.Owner,
 pump: sal.Task = .{},
+ticks: ?host.frame.TickSubscription = null,
 subscription: ?host.messages.RuntimeSubscription = null,
 lock: sync.RwLock = .{},
 queue: std.ArrayList(Request) = .empty,
-// Render thread only
+/// Held by whichever thread's looking after its sessions. Neither waits for it.
+work: sync.Mutex = .{},
+// Under `work`
 sessions: std.ArrayList(*Session) = .empty,
 reported: std.ArrayList(protocol.Running) = .empty,
 report_all: bool = true,
@@ -54,6 +63,7 @@ pub const Session = struct {
     id: u32,
     name: []u8,
     language: Language,
+    thread: Thread = .game,
     /// Null after a reset.
     live: ?*Live = null,
     /// Runs a tweak, which gets to clean up when it stops.
@@ -94,6 +104,8 @@ const Live = struct {
     exposed: scripts.Exposed = .{},
     /// Its project's schemas as one text, which a tweak's own `@schema` comes after.
     project_text: []u8 = &.{},
+    /// Its schemas have the plugins' that offer services, so it can have their services.
+    with_plugins: bool = false,
 
     fn languageName(l: *const Live) []const u8 {
         return @tagName(l.language);
@@ -112,6 +124,7 @@ const Request = struct {
     part: []u8 = &.{},
     shared_values: []tweak.Value = &.{},
     project: []u8 = &.{},
+    thread: Thread = .game,
 
     fn free(self: Request, gpa: std.mem.Allocator) void {
         gpa.free(self.project);
@@ -130,10 +143,10 @@ fn freeValues(gpa: std.mem.Allocator, values: []tweak.Value) void {
 }
 
 /// Listens for requests from now on. The config folders are where sessions keep their settings.
-pub fn create(gpa: std.mem.Allocator, config_dir: []const u8, game_config_dir: []const u8) !*Sessions {
+pub fn create(gpa: std.mem.Allocator, config_dir: []const u8, game_config_dir: []const u8, loader: ?*PluginLoader) !*Sessions {
     const self = try gpa.create(Sessions);
     errdefer gpa.destroy(self);
-    self.* = .{ .gpa = gpa, .config_dir = undefined, .game_config_dir = undefined, .owner = undefined };
+    self.* = .{ .gpa = gpa, .loader = loader, .config_dir = undefined, .game_config_dir = undefined, .owner = undefined };
     self.config_dir = try gpa.dupe(u8, config_dir);
     errdefer gpa.free(self.config_dir);
     self.game_config_dir = try gpa.dupe(u8, game_config_dir);
@@ -141,6 +154,8 @@ pub fn create(gpa: std.mem.Allocator, config_dir: []const u8, game_config_dir: [
     self.owner = try sal.host().owner("wraith.sessions");
     errdefer self.owner.drain();
     self.pump = try sal.Task.owned(self.owner, self, pumpNow);
+    self.ticks = try host.frame.subscribeTicks(self, tickNow);
+    errdefer self.ticks.?.unsubscribe();
     self.subscription = try host.messages.subscribeRuntime(self, onMessage);
     self.schedule();
     return self;
@@ -149,6 +164,8 @@ pub fn create(gpa: std.mem.Allocator, config_dir: []const u8, game_config_dir: [
 /// Stops every session, letting tweaks clean up first.
 pub fn destroy(self: *Sessions) void {
     if (self.subscription) |s| s.unsubscribe();
+    // Waits for a tick that's in
+    if (self.ticks) |t| t.unsubscribe();
     // Its pump's done for good, so nothing else touches the sessions
     self.owner.drain();
     for (self.sessions.items) |s| {
@@ -171,16 +188,33 @@ fn schedule(self: *Sessions) void {
 
 /// Once a frame.
 fn pumpNow(self: *Sessions) void {
-    self.handleQueued();
+    defer self.schedule();
+    // The render thread never waits, so with the game thread in it's next frame
+    if (!self.work.tryLock()) return;
+    defer self.work.unlock();
+    self.pumpOn(.render);
+    self.report();
+}
+
+/// Once a tick, on the game thread.
+fn tickNow(self: *Sessions) void {
+    // It doesn't hold up the game either, so with the render thread in it's next tick
+    if (!self.work.tryLock()) return;
+    defer self.work.unlock();
+    self.pumpOn(.game);
+}
+
+/// Under `work`. What was asked of the sessions on `thread`, then what their scripts set going.
+fn pumpOn(self: *Sessions, thread: Thread) void {
+    self.handleQueued(thread);
     for (self.sessions.items) |s| {
+        if (s.thread != thread) continue;
         const live = s.live orelse continue;
-        // The render thread never waits on a script
+        // Nor does it wait on a script
         if (!live.script.tryEnter()) continue;
         defer live.script.leave();
         live.script.pump();
     }
-    self.report();
-    self.schedule();
 }
 
 // Requests
@@ -205,7 +239,7 @@ fn onMessage(self: *Sessions, message: *const api.Message) void {
 }
 
 fn copyRun(self: *Sessions, request: protocol.Run) !Request {
-    var r: Request = .{ .op = .run, .session = request.session, .tweak = request.tweak };
+    var r: Request = .{ .op = .run, .session = request.session, .tweak = request.tweak, .thread = request.thread };
     errdefer r.free(self.gpa);
     r.name = try self.gpa.dupe(u8, request.name);
     r.code = try self.gpa.dupe(u8, request.code);
@@ -237,15 +271,29 @@ fn push(self: *Sessions, request: Request) void {
     self.queue.append(self.gpa, request) catch request.free(self.gpa);
 }
 
-fn handleQueued(self: *Sessions) void {
-    var queue: std.ArrayList(Request) = blk: {
+/// Under `work`. Takes the requests for sessions on `thread`, leaving the rest.
+fn handleQueued(self: *Sessions, thread: Thread) void {
+    var queue: std.ArrayList(Request) = .empty;
+    defer queue.deinit(self.gpa);
+    {
         self.lock.lock();
         defer self.lock.unlock();
-        const q = self.queue;
-        self.queue = .empty;
-        break :blk q;
-    };
-    defer queue.deinit(self.gpa);
+        const all = self.queue.items;
+        if (all.len == 0) return;
+        const threads = self.gpa.alloc(Thread, all.len) catch return;
+        defer self.gpa.free(threads);
+        for (all, threads, 0..) |r, *t, i| t.* = self.threadFor(r, all[0..i]);
+        var kept: usize = 0;
+        for (all, threads) |r, t| {
+            // Out of memory and it waits for the next go
+            if (t == thread) {
+                if (queue.append(self.gpa, r)) |_| continue else |_| {}
+            }
+            all[kept] = r;
+            kept += 1;
+        }
+        self.queue.shrinkRetainingCapacity(kept);
+    }
     for (queue.items) |r| {
         defer r.free(self.gpa);
         switch (r.op) {
@@ -269,12 +317,25 @@ pub fn find(self: *Sessions, id: u32) ?*Session {
     return null;
 }
 
+/// Under both locks. A run goes where it asks. Anything else goes where its session is, or will be
+/// once a run that's ahead of it starts it.
+fn threadFor(self: *Sessions, r: Request, ahead: []const Request) Thread {
+    if (r.op == .run) return r.thread;
+    var i = ahead.len;
+    while (i > 0) {
+        i -= 1;
+        if (ahead[i].op == .run and ahead[i].session == r.session) return ahead[i].thread;
+    }
+    if (self.find(r.session)) |s| return s.thread;
+    return .render;
+}
+
 // Running code
 
 fn run(self: *Sessions, r: Request) void {
     const language = std.meta.stringToEnum(Language, r.language) orelse
         return self.send(r.session, .thrown, "There's no {s} language", .{r.language});
-    const session = self.find(r.session) orelse (self.open(r.session, r.name, language) catch |err| {
+    const session = self.find(r.session) orelse (self.open(r.session, r.name, language, r.thread) catch |err| {
         self.send(r.session, .thrown, "Couldn't start a session: {t}", .{err});
         return;
     });
@@ -285,10 +346,11 @@ fn run(self: *Sessions, r: Request) void {
             session.name = copy;
         } else |_| {}
     }
-    // Its variables were the other language's
-    if (session.language != language) {
+    // Its variables were the other language's, or what it made is the other thread's
+    if (session.language != language or session.thread != r.thread) {
         self.reset(session);
         session.language = language;
+        session.thread = r.thread;
     }
     const live = session.live orelse (self.makeLive(session, r.project) catch |err| {
         self.send(r.session, .thrown, "Couldn't start a script: {t}", .{err});
@@ -343,12 +405,12 @@ fn runTweak(self: *Sessions, r: Request) void {
 
     if (!file.grouped) {
         if (self.find(id) != null) return self.send(id, .thrown, "A tweak gets a session of its own", .{});
-        const session = self.openTweak(id, r.name, language, r.project) orelse return;
+        const session = self.openTweak(id, r.name, language, r.project, r.thread) orelse return;
         return self.reportPart(a, session, "", self.runPart(session, a, r.code, file, .whole, r.values, ""));
     }
     const target = file.resolve(part) orelse return self.sendPart(id, part, .thrown, "There's no @tweak or @group \"{s}\" in it", .{part});
     const session = self.find(id) orelse blk: {
-        const session = self.openTweak(id, r.name, language, r.project) orelse return;
+        const session = self.openTweak(id, r.name, language, r.project, r.thread) orelse return;
         const shared = self.runPart(session, a, r.code, file, .{ .group = 0 }, if (part.len == 0) r.values else r.shared_values, "");
         self.reportPart(a, session, "", shared);
         if (shared == .thrown) {
@@ -370,8 +432,8 @@ fn runTweak(self: *Sessions, r: Request) void {
     self.reportPart(a, session, part, self.runPart(session, a, r.code, file, target, r.values, part));
 }
 
-fn openTweak(self: *Sessions, id: u32, name: []const u8, language: Language, project: []const u8) ?*Session {
-    const session = self.open(id, name, language) catch |err| {
+fn openTweak(self: *Sessions, id: u32, name: []const u8, language: Language, project: []const u8, thread: Thread) ?*Session {
+    const session = self.open(id, name, language, thread) catch |err| {
         self.send(id, .thrown, "Couldn't start a session: {t}", .{err});
         return null;
     };
@@ -539,12 +601,12 @@ fn runOff(_: *Sessions, session: *Session, live: *Live, part: []const u8) void {
 
 // Sessions
 
-fn open(self: *Sessions, id: u32, name: []const u8, language: Language) !*Session {
+fn open(self: *Sessions, id: u32, name: []const u8, language: Language, thread: Thread) !*Session {
     const session = try self.gpa.create(Session);
     errdefer self.gpa.destroy(session);
     const owned = try self.gpa.dupe(u8, name);
     errdefer self.gpa.free(owned);
-    session.* = .{ .owner = self, .id = id, .name = owned, .language = language };
+    session.* = .{ .owner = self, .id = id, .name = owned, .language = language, .thread = thread };
     try self.sessions.append(self.gpa, session);
     return session;
 }
@@ -570,7 +632,10 @@ fn makeLive(self: *Sessions, session: *Session, project: []const u8) !*Live {
         live.loaded.owner.release();
         live.loaded.free();
     }
-    try useProject(live, gpa, project);
+    // Its plugins can't go while their schemas and services are read
+    if (self.loader) |l| l.known.lock.lockShared();
+    defer if (self.loader) |l| l.known.lock.unlockShared();
+    try useProject(live, gpa, project, self.loader);
     errdefer freeProject(live, gpa);
 
     live.script = try live.exposed.create(session.language, gpa, .{ .ctx = live, .resolve = resolve, .read = read }, .{ .ctx = session, .f = thrownLater });
@@ -578,21 +643,58 @@ fn makeLive(self: *Sessions, session: *Session, project: []const u8) !*Live {
     const wraith = host.wraith.root(&live.loaded).as(@FieldType(host.wraith.Guest, "wraith"));
     if (wraith.table == null) return error.OutOfMemory;
     try live.exposed.expose(live.script, wraith, if (live.loaded.schemas) |s| s.text else api.wraith_sal, true);
+    if (live.with_plugins) try exposeServices(live, gpa, self.loader.?);
     session.live = live;
     return live;
 }
 
-/// Its project's schemas as its own, like a plugin's. Ones that don't check out are left out, since
-/// the project says why.
-fn useProject(live: *Live, gpa: std.mem.Allocator, project: []const u8) !void {
+/// Its project's schemas as its own, like a plugin's, with those of every plugin that offers
+/// services. Ones that don't check out are left out, since the project says why. Under the
+/// loader's lock.
+fn useProject(live: *Live, gpa: std.mem.Allocator, project: []const u8, loader: ?*PluginLoader) !void {
     live.loaded.project = try gpa.dupe(u8, project);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const files = host.projects.files(project, arena.allocator());
-    if (files.len == 0) return;
-    live.loaded.schemas = host.schemas.fromFiles(files) catch null;
+    const a = arena.allocator();
+    const own = host.projects.files(project, a);
+    var files: std.ArrayList(host.schemas.File) = .empty;
+    try files.appendSlice(a, own);
+    if (loader) |l| for (l.known.items.items) |k| {
+        const loaded = k.loaded orelse continue;
+        if (loaded.services.items.len == 0) continue;
+        const theirs = loaded.schemas orelse continue;
+        // Their dependencies' come with them, which others may have brought already
+        outer: for (theirs.files) |f| {
+            for (files.items) |have| if (std.mem.eql(u8, have.name, f.name)) continue :outer;
+            try files.append(a, f);
+        }
+    };
+    if (files.items.len > own.len) {
+        if (host.schemas.fromFiles(files.items)) |s| {
+            live.loaded.schemas = s;
+            live.with_plugins = true;
+        } else |err| log.warn("Script sessions for {s} don't get plugins' services, since their schemas and the project's don't go together ({t})", .{ if (project.len == 0) "your project" else project, err });
+    }
+    if (own.len == 0) return;
+    if (live.loaded.schemas == null) live.loaded.schemas = host.schemas.fromFiles(own) catch null;
     if (live.loaded.schemas == null) return;
-    live.project_text = try gpa.dupe(u8, host.projects.bundle(project, arena.allocator()));
+    live.project_text = try gpa.dupe(u8, host.projects.bundle(project, a));
+}
+
+/// Each plugin that offers services as a module by its name, like `require("unreal")`, the way
+/// plugins that depend on it get them. Under the loader's lock. What's called once its plugin's
+/// gone just fails with `Gone`.
+fn exposeServices(live: *Live, gpa: std.mem.Allocator, loader: *PluginLoader) !void {
+    const types = live.exposed.types orelse return;
+    var exports: std.ArrayList(engine.Export) = .empty;
+    defer exports.deinit(gpa);
+    for (loader.known.items.items) |k| {
+        const loaded = k.loaded orelse continue;
+        if (loaded.services.items.len == 0) continue;
+        exports.clearRetainingCapacity();
+        for (loaded.services.items) |s| try exports.append(gpa, .{ .name = s.trait, .schema = types, .trait = s.trait, .obj = s.obj });
+        try live.script.module(loaded.name, exports.items);
+    }
 }
 
 fn freeProject(live: *Live, gpa: std.mem.Allocator) void {

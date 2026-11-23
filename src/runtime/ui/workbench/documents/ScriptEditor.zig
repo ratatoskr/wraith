@@ -5,6 +5,7 @@ const ScriptEditor = @This();
 
 const std = @import("std");
 
+const api = @import("wraith_api");
 const core = @import("wraith_core");
 const devtools = @import("tuft_devtools");
 const ui = @import("wraith_ui");
@@ -102,6 +103,11 @@ fn language(self: *ScriptEditor) Scripts.Language {
     return s.language;
 }
 
+fn thread(self: *ScriptEditor) api.script.Thread {
+    const s = self.wb.scripts.find(self.session) orelse return .game;
+    return s.thread;
+}
+
 /// Runs it as the other language from now on, moving its project file to that extension.
 fn switchLanguage(self: *ScriptEditor) void {
     const to: Scripts.Language = switch (self.language()) {
@@ -167,6 +173,19 @@ pub fn draw(self: *ScriptEditor) void {
         .lua => "Switch to JavaScript",
     };
     if (menu.item(.{ .label = switch_label, .tooltip = "Runs it in the other language from now on, as a .rws.lua or .rws.js file" })) self.switchLanguage();
+    const runs_on = self.thread();
+    const thread_label: [:0]const u8 = switch (runs_on) {
+        .game => "Run on the render thread",
+        .render => "Run on the game thread",
+    };
+    const thread_tip = switch (runs_on) {
+        .game => "Where ImGui can be drawn. Starts the session afresh",
+        .render => "Where game engines' objects can be used, like Unreal's. Starts the session afresh",
+    };
+    if (menu.item(.{ .label = thread_label, .tooltip = thread_tip })) self.wb.scripts.setThread(self.session, switch (runs_on) {
+        .game => .render,
+        .render => .game,
+    });
     if (self.projectPath()) |path| if (menu.item(.{ .label = "Remove from the project", .tooltip = "Gone when the project's saved" })) {
         if (self.wb.project) |project| project.delete(path);
         self.wb.scripts.bindFile(self.session, "");
@@ -211,11 +230,15 @@ fn drawStatus(self: *ScriptEditor) void {
     const lang = self.language();
     const title = lang.title();
     if (!scripts.ready()) return ui.textDisabled("{s}. Scripts run once Wraith's plugins are up", .{title});
+    const on = switch (self.thread()) {
+        .game => "the game thread",
+        .render => "the render thread",
+    };
     const s = scripts.find(self.session);
     if (s != null and s.?.running != null) {
         const r = s.?.running.?;
-        ui.textDisabled("{s} session running: {d} frame callback(s), {d} keybind(s), {d} hook(s)", .{ title, r.frames, r.keybinds, r.hooks });
+        ui.textDisabled("{s} session running on {s}: {d} frame callback(s), {d} keybind(s), {d} hook(s)", .{ title, on, r.frames, r.keybinds, r.hooks });
     } else {
-        ui.textDisabled("{s}. Ctrl+Enter runs it. Right-click for more", .{title});
+        ui.textDisabled("{s}, on {s}. Ctrl+Enter runs it. Right-click for more", .{ title, on });
     }
 }

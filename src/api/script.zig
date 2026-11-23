@@ -36,6 +36,17 @@ pub const Run = struct {
     /// The project it's for, whose schemas and names it starts with: empty for the open one, else
     /// an installed mod's id. Only the run that starts its session counts.
     project: []const u8 = "",
+    /// Where its session runs. A different one than it's on starts it afresh, like a language.
+    thread: Thread = .game,
+};
+
+/// Where a session runs. With nothing driving ticks, the game thread's ticks run on the render
+/// thread too, so they're the same.
+pub const Thread = enum {
+    /// Its ticks, where game engines' objects can be used.
+    game,
+    /// Its frames, where ImGui can be drawn.
+    render,
 };
 
 /// Where a tweak's data went, so the UI can show and change it.

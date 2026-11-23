@@ -681,6 +681,78 @@ const tests = struct {
         try testing.expectEqual(3, offered[0].obj.as(Service).next());
     }
 
+    test "script sessions get every loaded plugin's services, on the thread they ask for" {
+        const options = @import("test_options");
+        const host = @import("host/root.zig");
+        const api = @import("wraith_api");
+        const Sessions = @import("sessions/Sessions.zig");
+        const Heard = @import("sessions/testing.zig").Heard;
+        const protocol = api.script;
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "fixture", options.fixture_plugin }} });
+        defer install.deinit();
+        const io = testing.io;
+        try install.tmp.dir.createDirPath(io, "plugins/fixture/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/fixture/schemas/fixture.sal", .data = "[Service] trait FixtureService { u32 next(); }" });
+        const loader = &install.loader;
+        try loader.start(&.{});
+
+        host.messages.setFrames(true);
+        defer host.messages.setFrames(false);
+        host.frame.setFrames(true);
+        defer host.frame.setFrames(false);
+        var heard: Heard = .{};
+        defer heard.deinit();
+        const sub = try host.messages.subscribeRuntime(&heard, Heard.on);
+        defer sub.unsubscribe();
+        const sessions = try Sessions.create(testing.allocator, "", "", loader);
+        defer sessions.destroy();
+
+        const Send = struct {
+            fn runIn(thread: protocol.Thread) !void {
+                return runAs(1, "lua", "return require('fixture').FixtureService:next()", thread);
+            }
+
+            fn runAs(session: u32, language: []const u8, code: []const u8, thread: protocol.Thread) !void {
+                const json = try std.json.Stringify.valueAlloc(testing.allocator, protocol.Run{ .session = session, .language = language, .code = code, .thread = thread }, .{});
+                defer testing.allocator.free(json);
+                try host.messages.publishFromRuntime(protocol.topics.run, json);
+                host.messages.deliver();
+            }
+        };
+        const runIn = Send.runIn;
+
+        // Game thread ones wait for a tick
+        try runIn(.game);
+        host.salamander.pollRender();
+        host.messages.deliver();
+        try testing.expectEqual(0, heard.lines.items.len);
+        host.frame.tickForTests();
+        host.messages.deliver();
+        try testing.expectEqual(2, heard.lines.items.len);
+        const first = try std.fmt.parseInt(u32, heard.line(1), 10);
+
+        // And render thread ones for a frame, which starts it afresh
+        try runIn(.render);
+        host.frame.tickForTests();
+        host.messages.deliver();
+        try testing.expectEqual(2, heard.lines.items.len);
+        host.salamander.pollRender();
+        host.messages.deliver();
+        try testing.expectEqual(4, heard.lines.items.len);
+        try testing.expectEqual(first + 1, try std.fmt.parseInt(u32, heard.line(3), 10));
+
+        // JS has them too
+        try Send.runAs(2, "js", "require('fixture').FixtureService.next()", .game);
+        host.frame.tickForTests();
+        host.messages.deliver();
+        try testing.expectEqual(6, heard.lines.items.len);
+        try testing.expectEqual(first + 2, try std.fmt.parseInt(u32, heard.line(5), 10));
+    }
+
     test "start skips disabled plugins" {
         const options = @import("test_options");
         var install: Install = undefined;

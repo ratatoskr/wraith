@@ -609,7 +609,8 @@
         }
       }
       const tick = ownFunction(part, "tick");
-      if (tick) part.tick = frame.onFrame(tick);
+      // Each tick, on the game thread like the tweak, where engines' objects can be used
+      if (tick) part.tick = frame.onTick(tick);
       return JSON.stringify({
         fields: part.fields.map((f) => ({ name: f.name, address: f.address, choices: f.choices ? choicesOf(part, f) : null })),
         // For the game's names, like `xp.multiplier`

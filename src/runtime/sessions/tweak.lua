@@ -633,7 +633,8 @@ function __t.done()
     on[#on + 1] = m
   end
   local tick = rawget(part.env, "tick")
-  if type(tick) == "function" then part.tick = frame:onFrame(tick) end
+  -- Each tick, on the game thread like the tweak, where engines' objects can be used
+  if type(tick) == "function" then part.tick = frame:onTick(tick) end
   local out_fields = {}
   for i, f in ipairs(part.fields) do
     local choices = "null"

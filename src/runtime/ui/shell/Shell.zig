@@ -279,7 +279,7 @@ pub fn setLoader(self: *Shell, loader: ?*PluginLoader) void {
         defer self.loader_lock.unlock();
         self.loader = loader;
         if (loader) |l| {
-            if (self.sessions == null) self.sessions = Sessions.create(self.allocator, l.config_dir, l.game_config_dir) catch |err| s: {
+            if (self.sessions == null) self.sessions = Sessions.create(self.allocator, l.config_dir, l.game_config_dir, l) catch |err| s: {
                 log.warn("Couldn't start script sessions: {t}", .{err});
                 break :s null;
             };

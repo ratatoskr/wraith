@@ -78,6 +78,8 @@ pub const Session = struct {
     /// Its project script, like `scripts/x.rws.js`. Empty if it hasn't one.
     file: Text(128) = .{},
     language: Language = .js,
+    /// Where it runs, from the next run. A change starts it afresh.
+    thread: protocol.Thread = .game,
     code: []u8 = &.{},
     pending: ?[]u8 = null,
     /// Null if the runtime hasn't heard of it.
@@ -142,6 +144,15 @@ pub fn setLanguage(self: *Scripts, id: u32, language: Language) void {
     if (s.language == language) return;
     if (s.code.len > 0 or s.running != null) self.send(protocol.topics.reset, protocol.Target{ .session = id });
     s.language = language;
+    s.running = null;
+}
+
+/// From the next run, which starts it afresh on that thread.
+pub fn setThread(self: *Scripts, id: u32, thread: protocol.Thread) void {
+    const s = self.find(id) orelse return;
+    if (s.thread == thread) return;
+    if (s.code.len > 0 or s.running != null) self.send(protocol.topics.reset, protocol.Target{ .session = id });
+    s.thread = thread;
     s.running = null;
 }
 
@@ -250,7 +261,7 @@ fn sendPending(self: *Scripts) void {
         if (!self.ready()) continue;
         s.pending = null;
         defer self.allocator.free(code);
-        self.send(protocol.topics.run, protocol.Run{ .session = s.id, .name = s.label(), .code = code, .language = @tagName(s.language) });
+        self.send(protocol.topics.run, protocol.Run{ .session = s.id, .name = s.label(), .code = code, .language = @tagName(s.language), .thread = s.thread });
     }
 }
 
