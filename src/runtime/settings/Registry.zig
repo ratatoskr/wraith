@@ -100,6 +100,9 @@ pub const Definition = struct {
     group: []const u8,
     /// A heading in the group, like "Look & Feel". Can be empty.
     section: []const u8 = "",
+    /// A smaller heading in its section, like "Free camera keys". Settings with one should be
+    /// added together, since it shows where the heading changes.
+    heading: []const u8 = "",
     scope: Scope = .global,
     kind: Kind,
     /// Saving it only takes effect next time the game starts.
@@ -111,6 +114,7 @@ pub const Definition = struct {
     pub fn describe(self: *const Definition, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.print("{s}: ", .{self.group});
         if (self.section.len > 0) try w.print("{s}: ", .{self.section});
+        if (self.heading.len > 0) try w.print("{s}: ", .{self.heading});
         try w.writeAll(self.name);
     }
 };
@@ -503,6 +507,7 @@ fn ownDefinition(self: *Registry, def: Definition) !Definition {
     d.help = try self.ownString(def.help);
     d.group = try self.ownString(def.group);
     d.section = try self.ownString(def.section);
+    d.heading = try self.ownString(def.heading);
     switch (def.kind) {
         .choice => |ch| {
             const options = try self.allocator.alloc([]const u8, ch.options.len);

@@ -16,6 +16,8 @@ const api = @import("wraith_api");
 const ui = @import("wraith_ui");
 
 const Registry = @import("../settings/Registry.zig");
+const Settings = @import("../Settings.zig");
+const Photo = @import("Photo.zig");
 const Overlay = @import("../ui/Overlay.zig");
 const host_keys = @import("../host/keybinds.zig");
 const rig = @import("rig.zig");
@@ -24,7 +26,6 @@ const W = api.wraith;
 const V3 = rig.V3;
 
 /// Listed under it in Settings.
-pub const group = "Camera";
 const title = "Camera";
 
 /// What the game's thread and the render thread share. The game's thread only copies in and out.
@@ -205,15 +206,15 @@ want_toggle: Atomic(bool) = .init(false),
 pub fn init(self: *Camera, registry: *Registry, overlay: *Overlay, keybinds: *Keybinds) !void {
     self.* = .{ .registry = registry, .overlay = overlay, .keybinds = keybinds };
     errdefer self.removeSettings();
-    self.speed = try self.number("speed", "Speed", "Flying", "In metres a second. Faster and Slower change it while they're held, and so does the mouse wheel.", 3, 0.1, 100);
-    self.smoothing = try self.number("smoothing", "Smoothing", "Flying", "Seconds it takes to catch up with the controls. 0 is instant.", 0.3, 0, 2);
-    self.take_input = try self.add("take_input", "Keep the game from seeing the controls", "Flying", "", .{ .toggle = true });
-    self.mouse_look = try self.add("mouse_look", "Look with the mouse", "Mouse", "", .{ .choice = .{ .default = mouse_look_options[0], .options = &mouse_look_options } });
-    self.sensitivity = try self.number("sensitivity", "Mouse sensitivity", "Mouse", "Degrees a pixel.", 0.15, 0.01, 1);
-    self.gamepad = try self.add("gamepad", "Use a controller", "Controller", "The left stick moves, the right stick looks, and the triggers go down and up. Its buttons are with the keys, like RB for Faster.", .{ .toggle = false });
-    self.pad_sensitivity = try self.number("pad_sensitivity", "Stick sensitivity", "Controller", "Degrees a second with the right stick all the way over.", 120, 10, 360);
-    self.show_controls = try self.add("show_controls", "Show the controls while flying", "Controls", "", .{ .toggle = true });
-    self.corner = try self.add("controls_corner", "Where they show", "Controls", "", .{ .choice = .{ .default = corner_options[0], .options = &corner_options } });
+    self.speed = try self.number("speed", "Speed", "In metres a second. Faster and Slower change it while they're held, and so does the mouse wheel.", 3, 0.1, 100);
+    self.smoothing = try self.number("smoothing", "Smoothing", "Seconds it takes to catch up with the controls. 0 is instant.", 0.3, 0, 2);
+    self.take_input = try self.add("take_input", "Keep the game from seeing the controls", "", .{ .toggle = true });
+    self.mouse_look = try self.add("mouse_look", "Look with the mouse", "", .{ .choice = .{ .default = mouse_look_options[0], .options = &mouse_look_options } });
+    self.sensitivity = try self.number("sensitivity", "Mouse sensitivity", "Degrees a pixel.", 0.15, 0.01, 1);
+    self.gamepad = try self.add("gamepad", "Use a controller", "The left stick moves, the right stick looks, and the triggers go down and up. Its buttons are with the keys, like RB for Faster.", .{ .toggle = false });
+    self.pad_sensitivity = try self.number("pad_sensitivity", "Stick sensitivity", "Degrees a second with the right stick all the way over.", 120, 10, 360);
+    self.show_controls = try self.add("show_controls", "Show the controls while flying", "", .{ .toggle = true });
+    self.corner = try self.add("controls_corner", "Where they show", "", .{ .choice = .{ .default = corner_options[0], .options = &corner_options } });
     inline for (comptime std.enums.values(Hold)) |h| {
         const name, const keys = h.def();
         const slot = self.holds.getPtr(h);
@@ -221,8 +222,9 @@ pub fn init(self: *Camera, registry: *Registry, overlay: *Overlay, keybinds: *Ke
         slot.setting = self.track(try self.registry.add(.{
             .id = idOf(@tagName(h)),
             .name = name,
-            .group = group,
-            .section = "Keys",
+            .group = Settings.group,
+            .section = Photo.section,
+            .heading = "Free camera keys",
             .kind = .{ .key = .{ .default = keysOf(keys), .consume = false, .held = true } },
         }, .{ .key = .{ .ctx = slot, .call = HoldKey.fired } }));
     }
@@ -233,8 +235,9 @@ pub fn init(self: *Camera, registry: *Registry, overlay: *Overlay, keybinds: *Ke
         slot.setting = self.track(try self.registry.add(.{
             .id = idOf(@tagName(p)),
             .name = name,
-            .group = group,
-            .section = "Keys",
+            .group = Settings.group,
+            .section = Photo.section,
+            .heading = "Free camera keys",
             .kind = .{ .key = .{ .default = keysOf(keys), .consume = p == .toggle } },
         }, .{ .key = .{ .ctx = slot, .call = PressKey.fired } }));
     }
@@ -273,13 +276,13 @@ fn keysOf(keys: []const tuft_input.Key) ?Keys {
     return Keys.of(chords[0..n]);
 }
 
-fn add(self: *Camera, comptime id: []const u8, name: []const u8, section: []const u8, help: []const u8, kind: Registry.Kind) !*Registry.Setting {
-    return self.track(try self.registry.add(.{ .id = idOf(id), .name = name, .help = help, .group = group, .section = section, .kind = kind }, .{}));
+fn add(self: *Camera, comptime id: []const u8, name: []const u8, help: []const u8, kind: Registry.Kind) !*Registry.Setting {
+    return self.track(try self.registry.add(.{ .id = idOf(id), .name = name, .help = help, .group = Settings.group, .section = Photo.section, .heading = "Free camera", .kind = kind }, .{}));
 }
 
-fn number(self: *Camera, comptime id: []const u8, name: []const u8, section: []const u8, help: []const u8, default: f64, min: f64, max: f64) !*Registry.Setting {
+fn number(self: *Camera, comptime id: []const u8, name: []const u8, help: []const u8, default: f64, min: f64, max: f64) !*Registry.Setting {
     const step: f64 = if (max - min >= 50) 1 else 0;
-    return self.add(id, name, section, help, .{ .number = .{ .default = default, .min = min, .max = max, .step = step } });
+    return self.add(id, name, help, .{ .number = .{ .default = default, .min = min, .max = max, .step = step } });
 }
 
 // The API, from game and engine plugins, on any thread

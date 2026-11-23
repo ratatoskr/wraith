@@ -13,6 +13,8 @@ const api = @import("wraith_api");
 const ui = @import("wraith_ui");
 
 const Registry = @import("../settings/Registry.zig");
+const Settings = @import("../Settings.zig");
+const Photo = @import("Photo.zig");
 const Overlay = @import("../ui/Overlay.zig");
 const frame = @import("../host/frame.zig");
 const Camera = @import("Camera.zig");
@@ -23,7 +25,6 @@ const Mat4 = math.Mat4;
 const Vec3 = math.Vec3;
 
 /// Listed under it in Settings.
-pub const group = "Posing";
 
 const Show = enum { posed, everyone, nobody };
 const show_options = [_][]const u8{ "The one being posed", "Everyone", "No one" };
@@ -99,9 +100,9 @@ search: [64:0]u8 = @splat(0),
 pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, camera: *Camera) !void {
     self.* = .{ .registry = registry, .overlay = overlay, .camera = camera };
     self.store = try .init(std.heap.page_allocator);
-    self.show = try registry.add(.{ .id = "wraith.posing.show", .name = "Draw skeletons of", .help = "While the Posing window's open.", .group = group, .section = "Drawing", .kind = .{ .choice = .{ .default = show_options[0], .options = &show_options } } }, .{});
+    self.show = try registry.add(.{ .id = "wraith.posing.show", .name = "Draw skeletons of", .help = "While the Posing window's open.", .group = Settings.group, .section = Photo.section, .heading = "Posing", .kind = .{ .choice = .{ .default = show_options[0], .options = &show_options } } }, .{});
     errdefer registry.remove(self.show);
-    self.thickness = try registry.add(.{ .id = "wraith.posing.thickness", .name = "Line thickness", .group = group, .section = "Drawing", .kind = .{ .number = .{ .default = 1.5, .min = 0.5, .max = 5, .step = 0 } } }, .{});
+    self.thickness = try registry.add(.{ .id = "wraith.posing.thickness", .name = "Line thickness", .group = Settings.group, .section = Photo.section, .heading = "Posing", .kind = .{ .number = .{ .default = 1.5, .min = 0.5, .max = 5, .step = 0 } } }, .{});
     errdefer registry.remove(self.thickness);
     var bound: usize = 0;
     errdefer for (std.enums.values(Press)[0..bound]) |p| registry.remove(self.keys.getPtr(p).setting);
@@ -114,7 +115,7 @@ pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, camera: *Came
             .focus => .{ "wraith.posing.focus", "Orbit the camera round the picked bone", .keypad_decimal },
         };
         // Focus only does anything while the window's open, so the game keeps the key otherwise
-        slot.setting = try registry.add(.{ .id = id, .name = name, .group = group, .section = "Keys", .kind = .{ .key = .{ .default = .one(.{ .key = key }), .consume = p != .focus } } }, .{ .key = .{ .ctx = slot, .call = Key.fired } });
+        slot.setting = try registry.add(.{ .id = id, .name = name, .group = Settings.group, .section = Photo.section, .heading = "Posing keys", .kind = .{ .key = .{ .default = .one(.{ .key = key }), .consume = p != .focus } } }, .{ .key = .{ .ctx = slot, .call = Key.fired } });
         bound += 1;
     }
 }

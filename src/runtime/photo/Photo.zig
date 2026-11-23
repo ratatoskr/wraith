@@ -20,6 +20,9 @@ pub const Posing = @import("Posing.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
+/// Where the camera's and posing's settings and keys are, among Wraith's own.
+pub const section = "Photo mode";
+
 allocator: std.mem.Allocator,
 overlay: *Overlay,
 camera: Camera = undefined,

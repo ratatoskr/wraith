@@ -241,8 +241,17 @@ fn isGameKey(s: *const Setting) bool {
 
 /// One of Wraith's own. True if it asked for the welcome.
 fn drawSection(self: *SettingsWindow, shell: *Shell, section: []const u8) bool {
+    var heading: []const u8 = "";
     for (self.settings) |s| {
         if (s.def.hidden or !isWraith(s) or !std.mem.eql(u8, s.def.section, section)) continue;
+        if (!std.mem.eql(u8, s.def.heading, heading)) {
+            heading = s.def.heading;
+            if (heading.len > 0) {
+                ui.spacing();
+                var buf: [96]u8 = undefined;
+                ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{heading}, 0) catch "?");
+            }
+        }
         self.row(shell, s);
     }
     if (std.mem.eql(u8, section, "Developer")) drawDevPlugins(shell);
@@ -308,7 +317,8 @@ fn drawAllKeys(self: *SettingsWindow, shell: *Shell) void {
         ui.alignTextToFramePadding();
         ui.textDisabled("{s}", .{group});
         ui.sameLine();
-        if (s.def.section.len > 0) ui.text("{s}: {s}", .{ s.def.section, s.def.name }) else ui.text("{s}", .{s.def.name});
+        const where = if (s.def.heading.len > 0) s.def.heading else s.def.section;
+        if (where.len > 0) ui.text("{s}: {s}", .{ where, s.def.name }) else ui.text("{s}", .{s.def.name});
         _ = ui.tableNextColumn();
         self.keyRow(shell, s, shell.registry.get(s).key);
     };
@@ -324,18 +334,23 @@ fn drawFound(self: *SettingsWindow, shell: *Shell, query: []const u8) void {
     var any = false;
     var group: []const u8 = "";
     var section: []const u8 = "";
+    var heading: []const u8 = "";
     for (self.settings) |s| {
         if (s.def.hidden) continue;
         const hit = std.ascii.findIgnoreCase(s.def.name, query) != null or
             std.ascii.findIgnoreCase(s.def.help, query) != null or
             std.ascii.findIgnoreCase(s.def.group, query) != null or
-            std.ascii.findIgnoreCase(s.def.section, query) != null;
+            std.ascii.findIgnoreCase(s.def.section, query) != null or
+            std.ascii.findIgnoreCase(s.def.heading, query) != null;
         if (!hit) continue;
-        if (!any or !std.mem.eql(u8, group, s.def.group) or !std.mem.eql(u8, section, s.def.section)) {
+        if (!any or !std.mem.eql(u8, group, s.def.group) or !std.mem.eql(u8, section, s.def.section) or !std.mem.eql(u8, heading, s.def.heading)) {
             group = s.def.group;
             section = s.def.section;
+            heading = s.def.heading;
             ui.spacing();
-            if (section.len > 0) ui.textDisabled("{s} / {s}", .{ group, section }) else ui.textDisabled("{s}", .{group});
+            if (heading.len > 0) {
+                ui.textDisabled("{s} / {s} / {s}", .{ group, section, heading });
+            } else if (section.len > 0) ui.textDisabled("{s} / {s}", .{ group, section }) else ui.textDisabled("{s}", .{group});
         }
         any = true;
         self.row(shell, s);
