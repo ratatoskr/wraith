@@ -20,7 +20,7 @@ const log = core.log.scoped(.wraith_cli);
 /// Bump when a message change would break an older launcher.
 pub const protocol = 3;
 
-pub const Method = enum { processes, anticheat, inspect, identify, games, game_add, game_remove, executables, mods, mod_install, mod_remove, mod_update, install, uninstall, inject, launch, watch, play, cancel };
+pub const Method = enum { processes, anticheat, inspect, identify, games, game_add, game_remove, executables, mods, mod_install, mod_remove, mod_update, mod_essentials, install, uninstall, inject, launch, watch, play, cancel };
 
 pub fn run(ctx: ops.Context) !void {
     var out_buf: [4096]u8 = undefined;
@@ -275,6 +275,7 @@ const Call = struct {
                 self.reply(@as(struct {}, .{}));
             },
             .mod_update => self.reply(.{ .updated = try mods.updateAll(ctx, self.arena.allocator()) }),
+            .mod_essentials => self.reply(.{ .kept = try mods.keepEssentials(ctx, self.arena.allocator()) }),
             // Handled on receive
             .cancel => unreachable,
         }

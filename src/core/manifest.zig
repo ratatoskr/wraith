@@ -446,6 +446,35 @@ test "only packages made for this API load" {
     try std.testing.expectEqual(.newer, ApiFit.of(api_version + 1));
 }
 
+/// The hub's schema, kept in step by the hub's `npm run sync-schema`.
+const schema_json = @embedFile("wraith.schema.json");
+
+fn expectFieldsMatch(comptime T: type, properties: std.json.ObjectMap, comptime skip: []const []const u8) !void {
+    const fields = @typeInfo(T).@"struct".field_names;
+    inline for (fields) |name| {
+        if (properties.get(name) == null) {
+            std.debug.print("{s}.{s} isn't in wraith.schema.json\n", .{ @typeName(T), name });
+            return error.NotInSchema;
+        }
+    }
+    var it = properties.iterator();
+    outer: while (it.next()) |entry| {
+        inline for (fields) |name| if (std.mem.eql(u8, name, entry.key_ptr.*)) continue :outer;
+        for (skip) |s| if (std.mem.eql(u8, s, entry.key_ptr.*)) continue :outer;
+        std.debug.print("wraith.schema.json's {s} isn't in {s}\n", .{ entry.key_ptr.*, @typeName(T) });
+        return error.NotInStruct;
+    }
+}
+
+test "the manifest has every field the hub's schema has, and no others" {
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, schema_json, .{});
+    defer parsed.deinit();
+    const properties = parsed.value.object.get("properties").?.object;
+    try expectFieldsMatch(Manifest, properties, &.{"$schema"});
+    try expectFieldsMatch(Game, properties.get("game").?.object.get("properties").?.object, &.{});
+    try expectFieldsMatch(GameEngine, properties.get("gameEngine").?.object.get("properties").?.object, &.{});
+}
+
 test "bad manifests say why" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();

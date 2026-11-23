@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hub.wraith.io/schema/v1/wraith.json",
+  "title": "Wraith package",
+  "description": "wraith.json, at the top of a plugin or project zip.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "version", "apiVersion", "title", "summary"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": {
+      "description": "Its name on the hub, like kai_bones. The first upload claims it for your account.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$"
+    },
+    "kind": {
+      "description": "A plugin is code Wraith loads. A project is tweaks, scripts, layouts and addresses for a game.",
+      "enum": ["plugin", "project"]
+    },
+    "version": {
+      "description": "major.minor.patch, with an optional -prerelease. Can't change once it's published.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+    },
+    "apiVersion": {
+      "description": "The version of Wraith's API it's made for, like 1. Wraith won't load it without one, or once it's older than the oldest Wraith still loads. Bump it when you update it for a new one.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "summary": { "description": "One line, shown in lists.", "type": "string", "minLength": 1, "maxLength": 200 },
+    "description": { "description": "Markdown, shown on its page.", "type": "string", "maxLength": 20000 },
+    "descriptionFile": {
+      "description": "A Markdown file relative to this one, instead of description. Build tools put its text in description, and the hub won't take it.",
+      "type": "string",
+      "pattern": "^[^/\\\\:*?\"<>|][^:*?\"<>|]*\\.[mM][dD]$",
+      "maxLength": 260
+    },
+    "license": { "description": "An SPDX id, like MIT.", "type": "string", "maxLength": 64 },
+    "author": { "description": "Who made it, as shown in Wraith and on the hub. The hub also shows the account that uploaded it.", "type": "string", "maxLength": 64 },
+    "homepage": { "type": "string", "pattern": "^https://[^\\s]+$", "maxLength": 256 },
+    "repo": { "description": "Where its source is, like https://github.com/me/my_mod.", "type": "string", "pattern": "^https://[^\\s]+$", "maxLength": 256 },
+    "tags": {
+      "description": "A few words for finding it on the hub, like camera or quality-of-life. Lowercase letters, digits and -, up to 24 each.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,23}$" }
+    },
+    "icon": {
+      "description": "A picture in the package, like icon.png, shown beside it in lists. PNG, JPEG or WebP, square works best, up to 256 KB.",
+      "type": "string",
+      "pattern": "^(?![./])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9_ ./-]{0,123}\\.([Pp][Nn][Gg]|[Jj][Pp][Ee]?[Gg]|[Ww][Ee][Bb][Pp])$"
+    },
+    "images": {
+      "description": "Screenshots in the package, like images/menu.png, shown on its hub page. PNG, JPEG or WebP, up to 2 MB each.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?![./])(?!.*\\.\\.)(?!.*//)[A-Za-z0-9_ ./-]{0,123}\\.([Pp][Nn][Gg]|[Jj][Pp][Ee]?[Gg]|[Ww][Ee][Bb][Pp])$"
+      }
+    },
+    "wraith": {
+      "description": "The oldest Wraith it runs on.",
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+){0,2}$"
+    },
+    "game": {
+      "description": "The game it's for. Any of its ids or exes will do. Left out means any game.",
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [{ "required": ["ids"] }, { "required": ["exes"] }],
+      "properties": {
+        "ids": {
+          "description": "Wraith's ids for the game. Its own name for games it knows, like ffxiv, else the store and its id there, like steam-1245620 or gog-1207658930. The hub needs at least one.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+~-]{0,127}$" }
+        },
+        "exes": {
+          "description": "Also matches the game by its exe's name, like kai.exe, for copies Wraith has no id for.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[^<>:\"/\\\\|?*]{1,128}\\.[eE][xX][eE]$" }
+        },
+        "builds": {
+          "description": "Game builds it was tested on, like steam:18234455. Others get a warning, not a block.",
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z]+:[A-Za-z0-9._-]{1,128}$" }
+        },
+        "hashes": {
+          "description": "SHA-512s of exes it was tested on, in hex. Works for any store or a local copy. Others get a warning, not a block.",
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[0-9a-fA-F]{128}$" }
+        }
+      }
+    },
+    "gameEngine": {
+      "description": "Every game made with a game engine, instead of game. Wraith works the engine out from the files beside the game's exe.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "description": "The game engine, as Wraith names it.",
+          "enum": ["unity", "unreal", "godot", "gamemaker", "rpg_maker", "renpy", "source", "source2", "cryengine", "re_engine", "fna", "monogame", "xna", "love", "nwjs", "electron"]
+        },
+        "variants": {
+          "description": "Just these kinds of it, like IL2CPP or Mono for Unity, or MV for RPG Maker. Left out means any.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,31}$" }
+        }
+      }
+    },
+    "arches": {
+      "description": "Plugins only. Left out means both.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["x64", "x86"] }
+    },
+    "provider": {
+      "description": "Plugins only. What runs it, like js or lua. Left out means zig.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+    },
+    "autoLoad": {
+      "description": "Plugins only. False waits for someone to load it.",
+      "type": "boolean"
+    },
+    "library": {
+      "description": "Plugins only. True if it's code for other plugins, with nothing of its own to use.",
+      "type": "boolean"
+    },
+    "depends": {
+      "description": "Other packages, as name or name@minimum-version.",
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{1,63}(@[0-9]+(\\.[0-9]+){0,2})?$"
+      }
+    },
+    "devDepends": {
+      "description": "For building against packages you're working on: a name from depends, to its folder or its wraith.json, relative to this one. Build tools leave it out of packages, and the hub won't take it.",
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 260 }
+    }
+  },
+  "allOf": [
+    { "not": { "required": ["game", "gameEngine"] } },
+    { "not": { "required": ["description", "descriptionFile"] } }
+  ],
+  "if": { "properties": { "kind": { "const": "project" } } },
+  "then": {
+    "properties": {
+      "arches": { "description": "Projects can't set this.", "not": {} },
+      "provider": { "description": "Projects can't set this.", "not": {} },
+      "autoLoad": { "description": "Projects can't set this.", "not": {} },
+      "library": { "description": "Projects can't set this.", "not": {} }
+    }
+  }
+}

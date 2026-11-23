@@ -1,5 +1,5 @@
-//! Packages from the Wraith Hub. Its files live on dist.wraith.io, each signed, and a copy
-//! of each is kept so it works offline. See the hub's README for what's in them.
+//! Packages from the Wraith Hub. Everything it has is in one index on dist.wraith.io, signed in the
+//! same file, and a copy of it is kept so it works offline. See the hub's README for what's in it.
 
 const std = @import("std");
 
@@ -12,6 +12,9 @@ pub const public_key = "edb40b1d003a41c82145590059cef9e415c09a5fa0f0337c5aeb3673
 
 pub const default_location = "https://dist.wraith.io/hub";
 
+/// The hex signature of the rest, a newline, then the index's JSON.
+pub const index_path = "v2/index.signed";
+
 pub const installed_name = ".registry.zon";
 pub const cache_folder = "registry";
 
@@ -19,81 +22,12 @@ pub const cache_folder = "registry";
 pub const mods = @import("mods.zig");
 
 /// Newer formats get refused.
-pub const format = 1;
+pub const format = 2;
 
 pub const Kind = enum { plugin, project };
 pub const Game = core.manifest.Game;
 pub const GameEngine = core.manifest.GameEngine;
 pub const Arch = core.arch.Arch;
-
-/// A package in a list, at its newest version for there.
-pub const Entry = struct {
-    id: []const u8,
-    kind: Kind = .plugin,
-    author: []const u8 = "",
-    title: []const u8 = "",
-    summary: []const u8 = "",
-    version: []const u8 = "",
-    wraith: ?[]const u8 = null,
-    /// The version of Wraith's API it's made for. Null for ones from before there were any.
-    apiVersion: ?u32 = null,
-    /// Empty, with no `gameEngine` either, means any game.
-    games: []const []const u8 = &.{},
-    /// Every game made with this game engine, instead of `games`.
-    gameEngine: ?GameEngine = null,
-    /// Builds it was tested on, in a game's list.
-    builds: []const []const u8 = &.{},
-    /// Picked for that game, or for every game in the any-game and featured lists.
-    featured: bool = false,
-    /// Why it's picked, in the featured list.
-    why: ?[]const u8 = null,
-    updated: ?[]const u8 = null,
-    /// Other mods use it, like an engine's helpers, and it comes with them. Not one to list for players.
-    library: bool = false,
-};
-
-pub const Link = struct {
-    label: []const u8,
-    url: []const u8,
-};
-
-pub const GameInfo = struct {
-    name: []const u8,
-    image: ?[]const u8 = null,
-    /// Every id Wraith might know it by.
-    idents: []const []const u8 = &.{},
-    links: []const Link = &.{},
-};
-
-/// `v1/games/<id>.json`, `v1/engines/<id>.json`, `v1/any.json` or `v1/featured.json`.
-pub const List = struct {
-    format: u32,
-    generated: []const u8 = "",
-    /// Null for the game engine, any-game and featured lists.
-    game: ?GameInfo = null,
-    /// For a game engine's list.
-    gameEngine: ?struct { id: []const u8, label: []const u8 = "" } = null,
-    packages: []const Entry = &.{},
-};
-
-pub const CatalogGame = struct {
-    name: []const u8,
-    image: ?[]const u8 = null,
-    idents: []const []const u8 = &.{},
-    packages: u32 = 0,
-};
-
-/// `v1/games.json`, every game with something out for it.
-pub const Catalog = struct {
-    format: u32,
-    generated: []const u8 = "",
-    games: []const CatalogGame = &.{},
-
-    pub fn find(self: Catalog, ident: []const u8) ?CatalogGame {
-        for (self.games) |g| for (g.idents) |i| if (std.mem.eql(u8, i, ident)) return g;
-        return null;
-    }
-};
 
 pub const Version = struct {
     version: []const u8,
@@ -112,6 +46,8 @@ pub const Version = struct {
     arches: ?[]const Arch = null,
     provider: ?[]const u8 = null,
     depends: []const []const u8 = &.{},
+    /// What's new in it, in Markdown.
+    notes: ?[]const u8 = null,
 
     /// Whether this Wraith, at `wraith_version`, loads it.
     pub fn runsOn(self: Version, wraith_version: []const u8) bool {
@@ -123,35 +59,87 @@ pub const Version = struct {
         const arches = self.arches orelse return true;
         return std.mem.indexOfScalar(Arch, arches, arch) != null;
     }
+
+    /// For any game.
+    pub fn anyGame(self: Version) bool {
+        return self.game == null and self.gameEngine == null;
+    }
+
+    pub fn forGame(self: Version, id: []const u8) bool {
+        const game = self.game orelse return false;
+        for (game.ids) |i| if (std.mem.eql(u8, i, id)) return true;
+        return false;
+    }
 };
 
-/// `v1/packages/<id>.json`.
 pub const Package = struct {
-    format: u32,
-    generated: []const u8 = "",
     id: []const u8,
     kind: Kind = .plugin,
     author: []const u8 = "",
     title: []const u8 = "",
     summary: []const u8 = "",
-    description: ?[]const u8 = null,
-    license: ?[]const u8 = null,
-    homepage: ?[]const u8 = null,
-    /// Other mods use it, and it comes with them.
+    /// Other mods use it and it comes with them. Not one to list for players.
     library: bool = false,
-    /// Newest first.
+    /// The game engine's official plugin, which Wraith keeps installed and up to date for games made
+    /// with it, see `mods.essentials`.
+    essential: bool = false,
+    /// Recommended for every game, and why.
+    featured: bool = false,
+    why: ?[]const u8 = null,
+    /// Every id of each game it's recommended for.
+    featuredIn: []const []const u8 = &.{},
+    /// Every one that's out, newest first.
     versions: []const Version = &.{},
 
     pub fn find(self: Package, version: []const u8) ?Version {
         for (self.versions) |v| if (std.mem.eql(u8, v.version, version)) return v;
         return null;
     }
+
+    /// The newest that isn't yanked, whether this Wraith loads it or not.
+    pub fn newest(self: Package) ?Version {
+        for (self.versions) |v| if (!v.yanked) return v;
+        return null;
+    }
+
+    pub fn featuredFor(self: Package, id: []const u8) bool {
+        for (self.featuredIn) |i| if (std.mem.eql(u8, i, id)) return true;
+        return false;
+    }
 };
 
-const Revoked = struct {
+pub const IndexGame = struct {
+    name: []const u8,
+    /// The hub's copy of its picture.
+    image: ?[]const u8 = null,
+    /// Every id Wraith might know it by.
+    idents: []const []const u8 = &.{},
+    gameEngine: ?[]const u8 = null,
+};
+
+/// `v2/index.signed`, everything on the hub. It has more, like what works in each game, that Wraith
+/// doesn't read yet.
+pub const Index = struct {
     format: u32,
     generated: []const u8 = "",
-    sha256: []const []const u8 = &.{},
+    packages: []const Package = &.{},
+    /// Hashes of zips that were pulled.
+    revoked: []const []const u8 = &.{},
+    games: []const IndexGame = &.{},
+
+    pub fn find(self: Index, id: []const u8) ?*const Package {
+        for (self.packages) |*p| if (std.mem.eql(u8, p.id, id)) return p;
+        return null;
+    }
+
+    pub fn game(self: Index, ident: []const u8) ?*const IndexGame {
+        for (self.games) |*g| for (g.idents) |i| if (std.mem.eql(u8, i, ident)) return g;
+        return null;
+    }
+
+    pub fn isRevoked(self: Index, sha256: []const u8) bool {
+        return revokedIn(self.revoked, sha256);
+    }
 };
 
 pub const compareVersions = core.manifest.compareVersions;
@@ -171,9 +159,9 @@ pub fn latest(pkg: Package, wraith_version: []const u8, arch: ?Arch) ?Version {
 /// Whether it was tested on this copy of the game Wraith knows as `ident`. Null if it doesn't
 /// say, or it's for any game.
 pub fn testedOn(version: Version, ident: []const u8, copy: core.manifest.Copy) ?bool {
-    const game = version.game orelse return null;
-    if (!game.matches(.{ .id = ident })) return null;
-    return game.testedOn(copy);
+    const g = version.game orelse return null;
+    if (!g.matches(.{ .id = ident })) return null;
+    return g.testedOn(copy);
 }
 
 pub const Source = struct {
@@ -194,103 +182,73 @@ pub const Source = struct {
     }
 };
 
-/// Ids and game ids go in paths, so nothing that could leave the folder.
+/// Ids go in paths, so nothing that could leave the folder.
 fn safe(name: []const u8) bool {
     if (name.len == 0 or name.len > 128 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
     for (name) |c| if (c < 0x20 or std.mem.indexOfScalar(u8, "<>:\"/\\|?*", c) != null) return false;
     return true;
 }
 
-/// A game's list, by any id Wraith knows it by. Null if the hub has nothing for it.
-pub fn forGame(arena: std.mem.Allocator, io: std.Io, source: Source, ident: []const u8) !?List {
-    if (!safe(ident)) return error.BadName;
-    return read(List, arena, io, source, try std.fmt.allocPrint(arena, "v1/games/{s}.json", .{ident}));
+/// The hub's index, checked, and kept for next time. If it can't be got, the copy from last time.
+pub fn fetch(arena: std.mem.Allocator, io: std.Io, source: Source) !Index {
+    const fresh = get(arena, io, source.location, index_path, 64 << 20) catch |err| return fromCache(arena, io, source, err);
+    const index = read(arena, fresh, source.key) catch |err| return fromCache(arena, io, source, err);
+    if (source.cache_dir) |dir| writeCache(arena, io, dir, fresh) catch |err| log.warn("Couldn't keep a copy of the hub's index in {s}: {t}", .{ dir, err });
+    return index;
 }
 
-/// Packages for every game made with a game engine, like `unity`. Null if the hub has none.
-pub fn forGameEngine(arena: std.mem.Allocator, io: std.Io, source: Source, id: []const u8) !?List {
-    if (!safe(id)) return error.BadName;
-    return read(List, arena, io, source, try std.fmt.allocPrint(arena, "v1/engines/{s}.json", .{id}));
+fn fromCache(arena: std.mem.Allocator, io: std.Io, source: Source, err: anyerror) !Index {
+    const index = cached(arena, io, source) catch |cache_err| {
+        log.err("Couldn't get the hub's index from {s} ({t}), and there's no copy of it to use ({t})", .{ source.location, err, cache_err });
+        return err;
+    };
+    log.warn("Couldn't get the hub's index from {s} ({t}): using the copy from {s}", .{ source.location, err, index.generated });
+    return index;
 }
 
-/// Packages that work in any game.
-pub fn anyGame(arena: std.mem.Allocator, io: std.Io, source: Source) !List {
-    return try read(List, arena, io, source, "v1/any.json") orelse .{ .format = format };
+/// From the last time it was fetched, without going online.
+pub fn cached(arena: std.mem.Allocator, io: std.Io, source: Source) !Index {
+    const dir = source.cache_dir orelse return error.NoCache;
+    // Checked again, anyone could write to the cache
+    return read(arena, try readFile(arena, io, dir, index_path, 64 << 20), source.key);
 }
 
-/// Our picks for every game.
-pub fn featured(arena: std.mem.Allocator, io: std.Io, source: Source) !List {
-    return try read(List, arena, io, source, "v1/featured.json") orelse .{ .format = format };
-}
-
-pub fn catalog(arena: std.mem.Allocator, io: std.Io, source: Source) !Catalog {
-    return try read(Catalog, arena, io, source, "v1/games.json") orelse .{ .format = format };
-}
-
-/// Null if there's no such package.
-pub fn package(arena: std.mem.Allocator, io: std.Io, source: Source, id: []const u8) !?Package {
-    if (!safe(id)) return error.BadName;
-    return read(Package, arena, io, source, try std.fmt.allocPrint(arena, "v1/packages/{s}.json", .{id}));
-}
-
-/// Hashes of zips that were pulled.
-pub fn revoked(arena: std.mem.Allocator, io: std.Io, source: Source) ![]const []const u8 {
-    const r = try read(Revoked, arena, io, source, "v1/revoked.json") orelse return &.{};
-    return r.sha256;
-}
-
-/// From the last time it was fetched, without going online. For checking at load time.
+/// From the cached index, for checking at load time. Empty without one.
 pub fn cachedRevoked(arena: std.mem.Allocator, io: std.Io, source: Source) ![]const []const u8 {
-    const r = try readCache(Revoked, arena, io, source, "v1/revoked.json");
-    return r.sha256;
+    return (try cached(arena, io, source)).revoked;
 }
 
 pub fn isRevoked(list: []const []const u8, sha256: []const u8) bool {
+    return revokedIn(list, sha256);
+}
+
+fn revokedIn(list: []const []const u8, sha256: []const u8) bool {
     for (list) |s| if (std.ascii.eqlIgnoreCase(s, sha256)) return true;
     return false;
 }
 
-/// Checked, and kept for next time. If it can't be got, the copy from last time, if there's one.
-/// Null if the hub says there isn't one.
-fn read(comptime T: type, arena: std.mem.Allocator, io: std.Io, source: Source, path: []const u8) !?T {
-    return readFresh(T, arena, io, source, path) catch |err| switch (err) {
-        error.NotFound => null,
-        else => {
-            const cached = readCache(T, arena, io, source, path) catch |cache_err| {
-                log.err("Couldn't get {s} from {s} ({t}), and there's no copy of it to use ({t})", .{ path, source.location, err, cache_err });
-                return err;
-            };
-            log.warn("Couldn't get {s} from {s} ({t}): using the copy from {s}", .{ path, source.location, err, cached.generated });
-            return cached;
-        },
-    };
-}
-
-fn readFresh(comptime T: type, arena: std.mem.Allocator, io: std.Io, source: Source, path: []const u8) !T {
-    const text = try get(arena, io, source.location, path, 16 << 20);
-    const sig_path = try std.fmt.allocPrint(arena, "{s}.sig", .{path});
-    const signature = try get(arena, io, source.location, sig_path, 1024);
-    try verify(text, signature, source.key);
-    const value = try parse(T, arena, text);
-    if (source.cache_dir) |dir| writeCache(arena, io, dir, path, text, signature) catch |err| log.warn("Couldn't keep a copy of {s} in {s}: {t}", .{ path, dir, err });
-    return value;
-}
-
-fn readCache(comptime T: type, arena: std.mem.Allocator, io: std.Io, source: Source, path: []const u8) !T {
-    const dir = source.cache_dir orelse return error.NoCache;
-    const text = try readFile(arena, io, dir, path, 16 << 20);
-    const signature = try readFile(arena, io, dir, try std.fmt.allocPrint(arena, "{s}.sig", .{path}), 1024);
-    // Check again, anyone could write to the cache
-    try verify(text, signature, source.key);
-    return parse(T, arena, text);
-}
-
-fn writeCache(arena: std.mem.Allocator, io: std.Io, dir: []const u8, path: []const u8, text: []const u8, signature: []const u8) !void {
-    const full = try std.fs.path.join(arena, &.{ dir, path });
+fn writeCache(arena: std.mem.Allocator, io: std.Io, dir: []const u8, signed: []const u8) !void {
+    const full = try std.fs.path.join(arena, &.{ dir, index_path });
     const cwd = std.Io.Dir.cwd();
     if (std.fs.path.dirname(full)) |parent| try cwd.createDirPath(io, parent);
-    try cwd.writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}.sig", .{full}), .data = signature });
-    try cwd.writeFile(io, .{ .sub_path = full, .data = text });
+    // Beside it first, so a reader never sees half of one
+    const partial = try std.fmt.allocPrint(arena, "{s}.partial", .{full});
+    try cwd.writeFile(io, .{ .sub_path = partial, .data = signed });
+    try cwd.rename(partial, cwd, full, io);
+}
+
+/// Checks a signed index and reads it.
+pub fn read(arena: std.mem.Allocator, signed: []const u8, key: []const u8) !Index {
+    const split = std.mem.indexOfScalar(u8, signed, '\n') orelse return error.BadSignature;
+    const body = signed[split + 1 ..];
+    try verify(body, signed[0..split], key);
+    return parse(Index, arena, body);
+}
+
+/// A signed index of `body`, as the hub writes it. For tests and tools.
+pub fn sign(arena: std.mem.Allocator, body: []const u8, pair: std.crypto.sign.Ed25519.KeyPair) ![]u8 {
+    const signature = std.fmt.bytesToHex((try pair.sign(body, null)).toBytes(), .lower);
+    return std.fmt.allocPrint(arena, "{s}\n{s}", .{ &signature, body });
 }
 
 pub fn verify(text: []const u8, signature: []const u8, key: []const u8) !void {
@@ -347,7 +305,6 @@ fn download(arena: std.mem.Allocator, io: std.Io, url: []const u8, max: usize) !
     if (body.written().len > max) return error.TooBig;
     return body.written();
 }
-
 /// What `install` leaves in the plugin's folder, as `.registry.zon`.
 pub const Installed = struct {
     id: []const u8,

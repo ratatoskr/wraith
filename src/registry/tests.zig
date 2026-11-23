@@ -9,27 +9,13 @@ const io = testing.io;
 
 const Ed25519 = std.crypto.sign.Ed25519;
 
-const TestKey = struct {
-    pair: Ed25519.KeyPair,
-    hex: [64]u8,
-
-    fn init() !TestKey {
-        const pair = try Ed25519.KeyPair.generateDeterministic(@splat(7));
-        return .{ .pair = pair, .hex = std.fmt.bytesToHex(pair.public_key.toBytes(), .lower) };
-    }
-
-    fn sign(self: TestKey, text: []const u8) ![128]u8 {
-        const sig = try self.pair.sign(text, null);
-        return std.fmt.bytesToHex(sig.toBytes(), .lower);
-    }
-};
-
 /// A hub's dist folder, on disk.
 const Hub = struct {
     tmp: testing.TmpDir,
     root: [:0]u8,
     arena: std.heap.ArenaAllocator,
-    key: TestKey,
+    pair: Ed25519.KeyPair,
+    key: [64]u8,
 
     fn init() !Hub {
         var tmp = testing.tmpDir(.{});
@@ -38,7 +24,14 @@ const Hub = struct {
         try tmp.dir.writeFile(io, .{ .sub_path = "site/p/hello/1.0.0.zip", .data = @embedFile("testdata/hello.zip") });
         try tmp.dir.createDirPath(io, "site/p/kai_tables");
         try tmp.dir.writeFile(io, .{ .sub_path = "site/p/kai_tables/1.0.0.zip", .data = @embedFile("testdata/project.zip") });
-        return .{ .tmp = tmp, .root = try tmp.dir.realPathFileAlloc(io, ".", testing.allocator), .arena = .init(testing.allocator), .key = try .init() };
+        const pair = try Ed25519.KeyPair.generateDeterministic(@splat(7));
+        return .{
+            .tmp = tmp,
+            .root = try tmp.dir.realPathFileAlloc(io, ".", testing.allocator),
+            .arena = .init(testing.allocator),
+            .pair = pair,
+            .key = std.fmt.bytesToHex(pair.public_key.toBytes(), .lower),
+        };
     }
 
     fn deinit(self: *Hub) void {
@@ -51,31 +44,47 @@ const Hub = struct {
         return std.fs.path.join(self.arena.allocator(), &.{ self.root, sub }) catch unreachable;
     }
 
-    /// Signed, at `site/<file>`.
-    fn publish(self: *Hub, file: []const u8, text: []const u8) !void {
-        const a = self.arena.allocator();
-        const full = try std.fmt.allocPrint(a, "site/{s}", .{file});
-        if (std.fs.path.dirname(full)) |dir| try self.tmp.dir.createDirPath(io, dir);
-        try self.tmp.dir.writeFile(io, .{ .sub_path = full, .data = text });
-        try self.tmp.dir.writeFile(io, .{ .sub_path = try std.fmt.allocPrint(a, "{s}.sig", .{full}), .data = &try self.key.sign(text) });
-    }
-
     fn source(self: *Hub) registry.Source {
-        return .{ .location = self.path("site"), .key = &self.key.hex, .cache_dir = self.path("cache") };
+        return .{ .location = self.path("site"), .key = &self.key, .cache_dir = self.path("cache") };
     }
 
-    /// `hello`, a plugin, with these versions all pointing at the one zip.
-    fn publishHello(self: *Hub, versions: []const []const u8, sha256: []const u8) !void {
+    /// The signed index, with these packages' JSON and pulled hashes.
+    fn publish(self: *Hub, packages: []const []const u8, revoked: []const []const u8) !void {
+        const a = self.arena.allocator();
+        var hashes: std.ArrayList(u8) = .empty;
+        for (revoked, 0..) |h, i| try hashes.print(a, "{s}\"{s}\"", .{ if (i == 0) "" else ", ", h });
+        const body = try std.fmt.allocPrint(a,
+            \\{{ "format": 2, "generated": "now", "packages": [{s}], "revoked": [{s}],
+            \\  "games": [{{ "name": "One", "idents": ["steam-1", "gog-1"], "image": "https://x/one.jpg" }}] }}
+        , .{ try std.mem.join(a, ", ", packages), hashes.items });
+        try self.tmp.dir.createDirPath(io, "site/v2");
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "site/" ++ registry.index_path, .data = try registry.sign(a, body, self.pair) });
+    }
+
+    /// `hello`, a plugin, with these versions, newest first, all the one zip. `extra` goes in the
+    /// package and `version_extra` in each version.
+    fn hello(self: *Hub, versions: []const []const u8, extra: []const u8, version_extra: []const u8) ![]const u8 {
         const a = self.arena.allocator();
         var list: std.ArrayList(u8) = .empty;
         for (versions, 0..) |v, i| try list.print(a,
-            \\{s}{{ "version": "{s}", "apiVersion": 1, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true }}
-        , .{ if (i == 0) "" else ", ", v, sha256 });
-        try self.publish("v1/packages/hello.json", try std.fmt.allocPrint(a,
-            \\{{ "format": 1, "generated": "now", "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{s}] }}
-        , .{list.items}));
+            \\{s}{{ "version": "{s}", "apiVersion": 1, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true{s} }}
+        , .{ if (i == 0) "" else ", ", v, &helloSha256(), version_extra });
+        return std.fmt.allocPrint(a,
+            \\{{ "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{s}]{s} }}
+        , .{ list.items, extra });
+    }
+
+    fn index(self: *Hub) !registry.Index {
+        return registry.fetch(self.arena.allocator(), io, self.source());
     }
 };
+
+/// A package with one version, 1.0.0, that isn't to install.
+fn entry(a: std.mem.Allocator, id: []const u8, extra: []const u8, version_extra: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(a,
+        \\{{ "id": "{s}", "kind": "plugin", "title": "{s}", "versions": [{{ "version": "1.0.0", "apiVersion": 1, "url": "", "sha256": "00"{s} }}]{s} }}
+    , .{ id, id, version_extra, extra });
+}
 
 fn sha256Of(data: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
@@ -87,86 +96,68 @@ fn helloSha256() [64]u8 {
     return sha256Of(@embedFile("testdata/hello.zip"));
 }
 
-test "lists and packages" {
+test "the index, all in one signed file" {
     var hub: Hub = try .init();
     defer hub.deinit();
     const a = hub.arena.allocator();
-    try hub.publish("v1/games/steam-1.json",
-        \\{ "format": 1, "generated": "now", "game": { "name": "One", "idents": ["steam-1", "gog-1"], "links": [{ "label": "Wiki", "url": "https://w" }] },
-        \\  "packages": [{ "id": "hello", "kind": "plugin", "title": "Hello", "version": "1.0.0", "games": ["steam-1"], "builds": ["steam:5"], "featured": true }] }
-    );
-    try hub.publish("v1/games.json",
-        \\{ "format": 1, "games": [{ "name": "One", "idents": ["steam-1", "gog-1"], "packages": 1 }] }
-    );
-    try hub.publishHello(&.{ "1.0.0", "1.1.0" }, &helloSha256());
+    try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, "", "")}, &.{"ABC"});
 
-    const one = (try registry.forGame(a, io, hub.source(), "steam-1")).?;
-    try testing.expectEqualStrings("One", one.game.?.name);
-    try testing.expectEqualStrings("Wiki", one.game.?.links[0].label);
-    try testing.expect(one.packages[0].featured);
-    try testing.expectEqualStrings("steam:5", one.packages[0].builds[0]);
-    // Nothing for it on the hub
-    try testing.expectEqual(null, try registry.forGame(a, io, hub.source(), "steam-2"));
-    try testing.expectError(error.BadName, registry.forGame(a, io, hub.source(), "../steam-1"));
-    // Ones the hub hasn't written yet are just empty
-    try testing.expectEqual(0, (try registry.anyGame(a, io, hub.source())).packages.len);
-
-    const catalog = try registry.catalog(a, io, hub.source());
-    try testing.expectEqualStrings("One", catalog.find("gog-1").?.name);
-    try testing.expectEqual(null, catalog.find("gog-2"));
-
-    const hello = (try registry.package(a, io, hub.source(), "hello")).?;
+    const index = try hub.index();
+    const hello = index.find("hello").?;
     try testing.expectEqualStrings("me", hello.author);
-    try testing.expectEqual(2, hello.versions.len);
-    try testing.expectEqualStrings("1.1.0", hello.find("1.1.0").?.version);
+    try testing.expectEqualStrings("1.1.0", hello.newest().?.version);
+    try testing.expectEqualStrings("1.0.0", hello.find("1.0.0").?.version);
+    try testing.expectEqual(null, index.find("nope"));
+    try testing.expectEqualStrings("One", index.game("gog-1").?.name);
+    try testing.expect(index.isRevoked("abc"));
+    try testing.expect(!index.isRevoked("abd"));
 
-    try testing.expectError(error.RegistryTooNew, registry.parse(registry.List, a, "{\"format\": 99}"));
-    try testing.expectError(error.BadRegistry, registry.parse(registry.Package, a, "{\"format\": 1}"));
+    try testing.expectError(error.RegistryTooNew, registry.parse(registry.Index, a, "{\"format\": 99}"));
+    try testing.expectError(error.BadRegistry, registry.parse(registry.Index, a, "{\"packages\": 1}"));
 }
 
-test "a game engine's list, just the kinds of it each game is" {
+test "what's for the games asked about, their engines, any game or picked, plus what's installed" {
     var hub: Hub = try .init();
     defer hub.deinit();
     const a = hub.arena.allocator();
-    try hub.publish("v1/engines/unity.json",
-        \\{ "format": 1, "generated": "now", "gameEngine": { "id": "unity", "label": "Unity" },
-        \\  "packages": [{ "id": "any_unity", "kind": "plugin", "title": "Any", "version": "1.0.0", "gameEngine": { "id": "unity" } },
-        \\    { "id": "il2cpp_only", "kind": "plugin", "title": "IL2CPP", "version": "1.0.0", "gameEngine": { "id": "unity", "variants": ["IL2CPP"] } }] }
-    );
-    const mods_dir = hub.path("mods");
+    try hub.publish(&.{
+        try entry(a, "for_one", "", ", \"game\": { \"ids\": [\"steam-1\", \"gog-1\"] }"),
+        try entry(a, "for_two", "", ", \"game\": { \"ids\": [\"steam-2\"] }"),
+        try entry(a, "picked_for_two", ", \"featuredIn\": [\"steam-2\"]", ", \"game\": { \"ids\": [\"steam-2\"] }"),
+        try entry(a, "picked", ", \"featured\": true, \"why\": \"Pretty\"", ", \"game\": { \"ids\": [\"steam-3\"] }"),
+        try entry(a, "anywhere", "", ""),
+        try entry(a, "any_unity", "", ", \"gameEngine\": { \"id\": \"unity\" }"),
+        try entry(a, "il2cpp_only", "", ", \"gameEngine\": { \"id\": \"unity\", \"variants\": [\"IL2CPP\"] }"),
+        try entry(a, "camera", ", \"library\": true", ""),
+    }, &.{});
+    const index = try hub.index();
     const made_with: []const registry.mods.MadeWith = &.{
-        .{ .game = "steam-1", .here = .{ .game_engine = "unity", .game_engine_variant = "Mono" } },
-        .{ .game = "steam-2", .here = .{ .game_engine = "unity", .game_engine_variant = "IL2CPP" } },
+        .{ .game = "steam-5", .here = .{ .game_engine = "unity", .game_engine_variant = "Mono" } },
+        .{ .game = "steam-6", .here = .{ .game_engine = "unity", .game_engine_variant = "IL2CPP" } },
     };
-    const listing = try registry.mods.list(a, io, hub.source(), mods_dir, "1.0.0", &.{}, made_with);
-    const any = listing.find("any_unity").?;
-    try testing.expect(!any.any_game);
-    try testing.expectEqualStrings("unity", any.game_engine.?.id);
-    try testing.expectEqual(2, any.games.len);
+    const listing = try registry.mods.list(a, io, index, hub.path("mods"), "1.0.0", &.{"gog-1"}, made_with);
+    try testing.expectEqualStrings("gog-1", listing.find("for_one").?.games[0]);
+    try testing.expectEqual(null, listing.find("for_two"));
+    try testing.expectEqual(null, listing.find("picked_for_two"));
+    try testing.expectEqualStrings("Pretty", listing.find("picked").?.why.?);
+    try testing.expect(listing.find("anywhere").?.any_game);
+    try testing.expectEqual(2, listing.find("any_unity").?.games.len);
+    try testing.expectEqualStrings("unity", listing.find("any_unity").?.game_engine.?.id);
     const il2cpp = listing.find("il2cpp_only").?;
     try testing.expectEqual(1, il2cpp.games.len);
-    try testing.expectEqualStrings("steam-2", il2cpp.games[0]);
-    // None for one the hub has nothing for
-    try testing.expectEqual(null, try registry.forGameEngine(a, io, hub.source(), "godot"));
-}
-
-test "libraries in the lists are marked, so what lists mods for players can leave them out" {
-    var hub: Hub = try .init();
-    defer hub.deinit();
-    const a = hub.arena.allocator();
-    try hub.publish("v1/any.json",
-        \\{ "format": 1, "generated": "now",
-        \\  "packages": [{ "id": "camera", "kind": "plugin", "title": "Camera Tools", "version": "1.0.0", "library": true },
-        \\    { "id": "photo", "kind": "plugin", "title": "Photo", "version": "1.0.0" }] }
-    );
-    const listing = try registry.mods.list(a, io, hub.source(), hub.path("mods"), "1.0.0", &.{}, &.{});
+    try testing.expectEqualStrings("steam-6", il2cpp.games[0]);
+    // Libraries are marked, so what lists mods for players can leave them out
     try testing.expect(listing.find("camera").?.library);
-    try testing.expect(!listing.find("photo").?.library);
+    try testing.expect(!listing.find("anywhere").?.library);
+
+    // A pick for a game counts by any of its ids
+    const two = try registry.mods.list(a, io, index, hub.path("mods"), "1.0.0", &.{"steam-2"}, &.{});
+    try testing.expect(two.find("picked_for_two").?.featured);
+    try testing.expect(!two.find("for_two").?.featured);
 }
 
 test "newest runnable version" {
     const pkg: registry.Package = .{
-        .format = 1,
         .id = "p",
         .versions = &.{
             .{ .version = "1.0.0", .apiVersion = 1, .url = "", .sha256 = "" },
@@ -182,20 +173,21 @@ test "newest runnable version" {
     // Wraith is too old for 1.2.0, 1.1.0 is x86 only, and 1.3.0 was yanked
     try testing.expectEqualStrings("1.0.0", registry.latest(pkg, "0.1.0", .x64).?.version);
     try testing.expectEqualStrings("1.1.0", registry.latest(pkg, "0.1.0", .x86).?.version);
-    try testing.expectEqual(null, registry.latest(.{ .format = 1, .id = "none" }, "9.0.0", null));
+    try testing.expectEqual(null, registry.latest(.{ .id = "none" }, "9.0.0", null));
 }
 
 test "mods not made for this Wraith's API say so" {
     var hub: Hub = try .init();
     defer hub.deinit();
     const a = hub.arena.allocator();
-    try hub.publish("v1/any.json",
-        \\{ "format": 1, "generated": "now",
-        \\  "packages": [{ "id": "old", "kind": "plugin", "title": "Old", "version": "1.0.0" },
-        \\    { "id": "new", "kind": "plugin", "title": "New", "version": "1.0.0", "apiVersion": 999 },
-        \\    { "id": "ok", "kind": "plugin", "title": "OK", "version": "1.0.0", "apiVersion": 1 }] }
-    );
-    const listing = try registry.mods.list(a, io, hub.source(), hub.path("mods"), "1.0.0", &.{}, &.{});
+    try hub.publish(&.{
+        \\{ "id": "old", "kind": "plugin", "title": "Old", "versions": [{ "version": "1.0.0", "url": "", "sha256": "00" }] }
+        ,
+        \\{ "id": "new", "kind": "plugin", "title": "New", "versions": [{ "version": "1.0.0", "apiVersion": 999, "url": "", "sha256": "00" }] }
+        ,
+        try entry(a, "ok", "", ""),
+    }, &.{});
+    const listing = try registry.mods.list(a, io, try hub.index(), hub.path("mods"), "1.0.0", &.{}, &.{});
     const old = listing.find("old").?;
     try testing.expect(old.outdated);
     try testing.expectEqual(null, old.latest);
@@ -217,51 +209,37 @@ test "tested builds" {
     try testing.expectEqual(null, registry.testedOn(v, "steam-2", .{ .build = "steam:5" }));
 }
 
-test "signature checked" {
-    const key: TestKey = try .init();
-    const text = "{\"format\": 1}";
-    const sig = try key.sign(text);
-    try registry.verify(text, &sig, &key.hex);
-    try testing.expectError(error.BadSignature, registry.verify("{\"format\": 2}", &sig, &key.hex));
-    try testing.expectError(error.BadSignature, registry.verify(text, &sig, registry.public_key));
-    try testing.expectError(error.BadSignature, registry.verify(text, "nothex", &key.hex));
+test "signature checked, in the same file as what it signs" {
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    const signed = try registry.sign(a, "{\"format\": 2}", hub.pair);
+    _ = try registry.read(a, signed, &hub.key);
+    const tampered = try a.dupe(u8, signed);
+    tampered[tampered.len - 2] = '3';
+    try testing.expectError(error.BadSignature, registry.read(a, tampered, &hub.key));
+    try testing.expectError(error.BadSignature, registry.read(a, signed, registry.public_key));
+    try testing.expectError(error.BadSignature, registry.read(a, "{\"format\": 2}", &hub.key));
+    try testing.expectError(error.BadSignature, registry.verify("{}", "nothex", &hub.key));
 }
 
-test "cache fallback" {
+test "cache fallback, and the revoked list offline" {
     const saved = core.log.mute(&.{.other});
     defer core.log.setFilter(saved);
     var hub: Hub = try .init();
     defer hub.deinit();
-    const a = hub.arena.allocator();
-    try hub.publishHello(&.{"1.0.0"}, &helloSha256());
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, "", "")}, &.{"abc"});
+    try testing.expectEqualStrings("Hello", (try hub.index()).find("hello").?.title);
 
-    const first = (try registry.package(a, io, hub.source(), "hello")).?;
-    try testing.expectEqualStrings("Hello", first.title);
-
-    // Tampered, so it's refused and we use the cached copy
-    try hub.tmp.dir.writeFile(io, .{ .sub_path = "site/v1/packages/hello.json", .data = "{\"format\": 1, \"id\": \"hello\", \"title\": \"Evil\"}" });
-    const second = (try registry.package(a, io, hub.source(), "hello")).?;
-    try testing.expectEqualStrings("Hello", second.title);
+    // Tampered, so it's refused and the copy from last time is used
+    try hub.tmp.dir.writeFile(io, .{ .sub_path = "site/" ++ registry.index_path, .data = "00\n{\"format\": 2}" });
+    try testing.expectEqualStrings("Hello", (try hub.index()).find("hello").?.title);
+    try testing.expect(registry.isRevoked(try registry.cachedRevoked(hub.arena.allocator(), io, hub.source()), "abc"));
 
     // No cache either, so it errors
     var no_cache = hub.source();
     no_cache.cache_dir = null;
-    try testing.expectError(error.BadSignature, registry.package(a, io, no_cache, "hello"));
-}
-
-test "revoked, and from the cache" {
-    var hub: Hub = try .init();
-    defer hub.deinit();
-    const a = hub.arena.allocator();
-    try testing.expectEqual(0, (try registry.revoked(a, io, hub.source())).len);
-    try hub.publish("v1/revoked.json", "{ \"format\": 1, \"sha256\": [\"ABC\"] }");
-    const list = try registry.revoked(a, io, hub.source());
-    try testing.expect(registry.isRevoked(list, "abc"));
-    try testing.expect(!registry.isRevoked(list, "abd"));
-    // Offline, from what was fetched
-    var offline = hub.source();
-    offline.location = hub.path("nowhere");
-    try testing.expect(registry.isRevoked(try registry.cachedRevoked(a, io, offline), "abc"));
+    try testing.expectError(error.BadSignature, registry.fetch(hub.arena.allocator(), io, no_cache));
 }
 
 test "install and remove" {
@@ -270,8 +248,8 @@ test "install and remove" {
     var hub: Hub = try .init();
     defer hub.deinit();
     const a = hub.arena.allocator();
-    try hub.publishHello(&.{ "1.0.0", "1.1.0" }, &helloSha256());
-    const hello = (try registry.package(a, io, hub.source(), "hello")).?;
+    try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, "", "")}, &.{});
+    const hello = (try hub.index()).find("hello").?.*;
     const plugins = hub.path("plugins");
 
     try registry.install(a, io, hub.source(), plugins, hello, hello.find("1.0.0").?);
@@ -304,19 +282,42 @@ test "installed ones the hub doesn't have any more are still listed" {
     var hub: Hub = try .init();
     defer hub.deinit();
     const a = hub.arena.allocator();
-    try hub.publishHello(&.{"1.0.0"}, &helloSha256());
-    const hello = (try registry.package(a, io, hub.source(), "hello")).?;
-    const mods_dir = hub.path("mods");
-    try registry.install(a, io, hub.source(), mods_dir, hello, hello.find("1.0.0").?);
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, "", "")}, &.{});
+    const where: registry.mods.Where = .{ .source = hub.source(), .mods_dir = hub.path("mods"), .wraith = "1.0.0" };
+    _ = try registry.mods.install(a, io, try hub.index(), where, "hello", null);
 
-    try hub.tmp.dir.deleteFile(io, "site/v1/packages/hello.json");
-    var source = hub.source();
-    source.cache_dir = null;
-    const listing = try registry.mods.list(a, io, source, mods_dir, "1.0.0", &.{}, &.{});
+    try hub.publish(&.{}, &.{});
+    const listing = try registry.mods.list(a, io, try hub.index(), where.mods_dir, where.wraith, &.{}, &.{});
     const listed = listing.find("hello").?;
     try testing.expectEqualStrings("1.0.0", listed.installed.?);
     try testing.expectEqual(null, listed.latest);
     try testing.expect(!listed.hasUpdate());
+}
+
+test "updates, and takes out pulled ones" {
+    const saved = core.log.mute(&.{.other});
+    defer core.log.setFilter(saved);
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, "", "")}, &.{});
+    const where: registry.mods.Where = .{ .source = hub.source(), .mods_dir = hub.path("mods"), .wraith = "1.0.0" };
+    _ = try registry.mods.install(a, io, try hub.index(), where, "hello", null);
+    try testing.expectEqual(0, (try registry.mods.update(a, io, try hub.index(), where, null)).len);
+
+    try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, "", "")}, &.{});
+    const listing = try registry.mods.list(a, io, try hub.index(), where.mods_dir, where.wraith, &.{}, &.{});
+    try testing.expect(listing.find("hello").?.hasUpdate());
+    // What the app gets says so too
+    const json = try std.json.Stringify.valueAlloc(a, listing.find("hello").?.*, .{});
+    try testing.expect(std.mem.indexOf(u8, json, "\"has_update\":true") != null);
+    const updated = try registry.mods.update(a, io, try hub.index(), where, null);
+    try testing.expectEqualStrings("1.1.0", updated[0].version.?);
+
+    try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, "", "")}, &.{&helloSha256()});
+    const pulled = try registry.mods.update(a, io, try hub.index(), where, null);
+    try testing.expectEqual(null, pulled[0].version);
+    try testing.expectEqual(null, try registry.installed(a, io, where.mods_dir, "hello"));
 }
 
 test "only the package it says, and only plugins" {
@@ -330,7 +331,7 @@ test "only the package it says, and only plugins" {
     const version: registry.Version = .{ .version = "1.0.0", .url = "p/hello/1.0.0.zip", .sha256 = &zip_sha };
 
     // Its manifest says hello
-    const other: registry.Package = .{ .format = 1, .id = "other" };
+    const other: registry.Package = .{ .id = "other" };
     try testing.expectError(error.WrongPackage, registry.install(a, io, hub.source(), plugins, other, version));
     try testing.expectEqual(0, (try registry.installedAll(a, io, plugins)).len);
 }
@@ -341,7 +342,7 @@ test "projects install next to plugins" {
     const a = hub.arena.allocator();
     const mods = hub.path("mods");
     const project_sha = sha256Of(@embedFile("testdata/project.zip"));
-    const tables: registry.Package = .{ .format = 1, .id = "kai_tables", .kind = .project };
+    const tables: registry.Package = .{ .id = "kai_tables", .kind = .project };
     try registry.install(a, io, hub.source(), mods, tables, .{ .version = "1.0.0", .url = "p/kai_tables/1.0.0.zip", .sha256 = &project_sha });
     const all = try registry.installedAll(a, io, mods);
     try testing.expectEqual(1, all.len);
@@ -353,8 +354,8 @@ test "bad zip not installed" {
     var hub: Hub = try .init();
     defer hub.deinit();
     const a = hub.arena.allocator();
-    try hub.publishHello(&.{"1.0.0"}, &helloSha256());
-    const hello = (try registry.package(a, io, hub.source(), "hello")).?;
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, "", "")}, &.{});
+    const hello = (try hub.index()).find("hello").?.*;
     const plugins = hub.path("plugins");
     try registry.install(a, io, hub.source(), plugins, hello, hello.versions[0]);
 
@@ -379,8 +380,8 @@ test "locked plugin" {
     var hub: Hub = try .init();
     defer hub.deinit();
     const a = hub.arena.allocator();
-    try hub.publishHello(&.{"1.0.0"}, &helloSha256());
-    const hello = (try registry.package(a, io, hub.source(), "hello")).?;
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, "", "")}, &.{});
+    const hello = (try hub.index()).find("hello").?.*;
     const plugins = hub.path("plugins");
     try registry.install(a, io, hub.source(), plugins, hello, hello.versions[0]);
 
@@ -391,4 +392,41 @@ test "locked plugin" {
     theirs.close(io);
 
     try registry.remove(a, io, plugins, "hello");
+}
+
+test "an engine's essential mods, missing or out of date, but never a pulled one or one put there by hand" {
+    const saved = core.log.mute(&.{.other});
+    defer core.log.setFilter(saved);
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    const essential = ", \"essential\": true";
+    const unity_only = ", \"gameEngine\": { \"id\": \"unity\" }";
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, essential, unity_only)}, &.{});
+    const where: registry.mods.Where = .{ .source = hub.source(), .mods_dir = hub.path("mods"), .wraith = "1.0.0" };
+    const unity: []const registry.mods.MadeWith = &.{.{ .here = .{ .game_engine = "unity" } }};
+
+    try testing.expectEqual(0, (try registry.mods.essentials(a, io, try hub.index(), where, &.{.{ .here = .{ .game_engine = "unreal" } }}, null)).len);
+    const missing = try registry.mods.essentials(a, io, try hub.index(), where, unity, null);
+    try testing.expectEqual(1, missing.len);
+    try testing.expectEqual(null, missing[0].installed);
+    try testing.expectEqualStrings("1.0.0", missing[0].latest);
+    try testing.expect((try registry.mods.list(a, io, try hub.index(), where.mods_dir, where.wraith, &.{}, unity)).find("hello").?.essential);
+
+    _ = try registry.mods.install(a, io, try hub.index(), where, "hello", missing[0].latest);
+    try testing.expectEqual(0, (try registry.mods.essentials(a, io, try hub.index(), where, unity, null)).len);
+
+    try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, essential, unity_only)}, &.{});
+    const old = try registry.mods.essentials(a, io, try hub.index(), where, unity, null);
+    try testing.expectEqualStrings("1.0.0", old[0].installed.?);
+    try testing.expectEqualStrings("1.1.0", old[0].latest);
+
+    // Both versions are the one zip, so pulling it pulls the newest
+    try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, essential, unity_only)}, &.{&helloSha256()});
+    try testing.expectEqual(0, (try registry.mods.essentials(a, io, try hub.index(), where, unity, null)).len);
+
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, essential, unity_only)}, &.{});
+    try registry.remove(a, io, where.mods_dir, "hello");
+    try hub.tmp.dir.createDirPath(io, "mods/hello");
+    try testing.expectEqual(0, (try registry.mods.essentials(a, io, try hub.index(), where, unity, null)).len);
 }

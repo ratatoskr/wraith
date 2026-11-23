@@ -99,6 +99,11 @@ const Row = struct {
         return if (self.listed) |l| l.hasUpdate() else false;
     }
 
+    /// Wraith puts it back for this game's engine, so it gets turned off rather than uninstalled.
+    pub fn isEssential(self: Row) bool {
+        return if (self.listed) |l| l.essential else false;
+    }
+
     fn matches(self: Row, query: []const u8) bool {
         if (query.len == 0) return true;
         for ([_][]const u8{ self.id, self.title(), self.summary(), self.author() }) |s| {
@@ -293,6 +298,7 @@ fn drawRow(self: *ModsWindow, shell: *Shell, row: Row) void {
 
 fn drawTags(row: Row) void {
     if (row.listed) |l| if (l.featured) tag(green, "Recommended");
+    if (row.isEssential()) tag(blue, "Engine support");
     if (row.listed) |l| if (l.library) tag(blue, "Library");
     if (row.isProject()) tag(blue, "Project");
     if (row.dev) tag(blue, "Dev");
@@ -376,7 +382,7 @@ fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
             if (ui.button(icons.trash_2 ++ "  Uninstall the installed copy")) self.startOn(shell, .remove, id);
             ui.sameLine();
         }
-    } else if (row.fromHub()) {
+    } else if (row.fromHub() and !row.isEssential()) {
         if (ui.button(icons.trash_2 ++ "  Uninstall")) self.startOn(shell, .remove, id);
         ui.sameLine();
     }
@@ -464,7 +470,7 @@ fn readFolders(a: std.mem.Allocator, io: std.Io, mods_dir: []const u8) ![]const 
     return out.items;
 }
 
-const Kind = enum { refresh, install, remove, update, update_all, load, unload, reload };
+const Kind = enum { refresh, install, remove, update, update_all, load, unload, reload, essentials };
 
 const Op = struct {
     kind: Kind,
@@ -473,6 +479,15 @@ const Op = struct {
 
 fn start(self: *ModsWindow, shell: *Shell, kind: Kind) void {
     self.begin(shell, .{ .kind = kind });
+}
+
+/// Installs or updates this game's engine's official plugin in the background, with a toast for
+/// each. Once plugins have started.
+pub fn keepEssentials(self: *ModsWindow, shell: *Shell) void {
+    const loader = shell.acquireLoader() orelse return;
+    const engine = loader.here().game_engine;
+    shell.releaseLoader();
+    if (engine != null) self.start(shell, .essentials);
 }
 
 pub fn startOn(self: *ModsWindow, shell: *Shell, kind: Kind, id: []const u8) void {
@@ -507,67 +522,141 @@ fn run(self: *ModsWindow, shell: *Shell, io: std.Io, op: Op) void {
     defer self.work.busy.store(false, .release);
     const loader = shell.acquireLoader() orelse return;
     defer shell.releaseLoader();
+    defer self.doneDoing(io);
     var scratch_state: std.heap.ArenaAllocator = .init(shell.allocator);
     defer scratch_state.deinit();
     const scratch = scratch_state.allocator();
-    const where = whereOf(scratch, loader) catch |err| return self.failed(io, "Couldn't find the hub: {t}", .{err});
     const id = op.id.get();
 
     switch (op.kind) {
-        .refresh => {
-            self.setDoing(io, "Checking the hub...", .{});
-            rescan(loader);
-        },
-        .install => {
-            self.setDoing(io, "Installing {s}...", .{id});
-            _ = registry.mods.install(scratch, io, where, id, null) catch |err| {
-                self.failed(io, "Couldn't install {s}: {t}", .{ id, err });
-                return self.relist(io, loader);
-            };
-            rescan(loader);
-            if (isState(loader, id, .unloaded)) loadNow(self, io, loader, id);
-        },
-        .remove => {
-            self.setDoing(io, "Uninstalling {s}...", .{id});
-            unloadNow(self, io, loader, id);
-            registry.mods.remove(scratch, io, where.mods_dir, id) catch |err| self.failed(io, "Couldn't uninstall {s}: {t}", .{ id, err });
-            rescan(loader);
-        },
-        .update => self.updateOne(io, loader, scratch, where, id),
-        .update_all => for (self.withUpdates(io, scratch)) |each| self.updateOne(io, loader, scratch, where, each),
         .load => {
             self.setDoing(io, "Turning {s} on...", .{id});
-            loadNow(self, io, loader, id);
+            return loadNow(self, io, loader, id);
         },
         .unload => {
             self.setDoing(io, "Turning {s} off...", .{id});
-            unloadNow(self, io, loader, id);
+            return unloadNow(self, io, loader, id);
         },
         .reload => {
             self.setDoing(io, "Reloading {s}...", .{id});
             const job = loader.reload(id) catch |err| return self.failed(io, "Couldn't reload {s}: {t}", .{ id, err });
-            job.wait() catch |err| self.failed(io, "Couldn't reload {s}: {t}", .{ id, err });
+            return job.wait() catch |err| self.failed(io, "Couldn't reload {s}: {t}", .{ id, err });
         },
-    }
-    switch (op.kind) {
-        .load, .unload, .reload => {},
-        else => {
-            // After, since the hub's answer may have pulled one
-            self.relist(io, loader);
-            shell.refreshModProjects(io, loader);
+        .refresh => {
+            self.setDoing(io, "Checking the hub...", .{});
+            rescan(loader);
         },
+        .remove => {
+            self.setDoing(io, "Uninstalling {s}...", .{id});
+            unloadNow(self, io, loader, id);
+            registry.mods.remove(scratch, io, loader.plugins_dir, id) catch |err| self.failed(io, "Couldn't uninstall {s}: {t}", .{ id, err });
+            rescan(loader);
+        },
+        .install, .update, .update_all, .essentials => {},
     }
+
+    // Once for the whole thing, and the list after it shows the same
+    var fetched: Fetched = .init(loader, io);
+    if (fetched.hub()) |hub| switch (op.kind) {
+        .install => {
+            self.setDoing(io, "Installing {s}...", .{id});
+            if (registry.mods.install(scratch, io, hub.index, hub.where, id, null)) |_| {
+                rescan(loader);
+                if (isState(loader, id, .unloaded)) loadNow(self, io, loader, id);
+            } else |err| self.failed(io, "Couldn't install {s}: {t}", .{ id, err });
+        },
+        .update => self.updateOne(io, loader, scratch, hub, id),
+        .update_all => for (self.withUpdates(io, scratch)) |each| self.updateOne(io, loader, scratch, hub, each),
+        .essentials => self.essentials(shell, io, loader, scratch, hub),
+        else => {},
+    } else switch (op.kind) {
+        .install, .update, .update_all => self.failed(io, "{s}", .{fetched.problem.message()}),
+        else => {},
+    }
+    // After, since the hub's answer may have pulled one
+    self.relist(io, loader, &fetched);
+    shell.refreshModProjects(io, loader);
+}
+
+fn doneDoing(self: *ModsWindow, io: std.Io) void {
     self.work.lock.lockUncancelable(io);
     defer self.work.lock.unlock(io);
     self.work.doing = .{};
 }
 
+const Hub = struct {
+    where: registry.mods.Where,
+    index: registry.Index,
+};
+
+/// The hub's index for one operation, in the arena the listing after it keeps.
+const Fetched = struct {
+    arena: std.heap.ArenaAllocator,
+    where: ?registry.mods.Where = null,
+    index: ?registry.Index = null,
+    problem: Message(160) = .{},
+
+    fn init(loader: *PluginLoader, io: std.Io) Fetched {
+        var self: Fetched = .{ .arena = .init(loader.allocator) };
+        const a = self.arena.allocator();
+        const where = whereOf(a, loader) catch |err| {
+            self.problem.print("Couldn't find the hub: {t}", .{err});
+            return self;
+        };
+        self.where = where;
+        self.index = where.index(a, io) catch |err| {
+            log.warn("Couldn't get mods from the hub: {t}", .{err});
+            self.problem.print("Couldn't get mods from the hub: {t}", .{err});
+            return self;
+        };
+        return self;
+    }
+
+    fn hub(self: *const Fetched) ?Hub {
+        return .{ .where = self.where orelse return null, .index = self.index orelse return null };
+    }
+};
+
+/// The engine's official plugin, installed and turned on, or updated and back on if it was. A
+/// toast says so.
+fn essentials(self: *ModsWindow, shell: *Shell, io: std.Io, loader: *PluginLoader, scratch: std.mem.Allocator, hub: Hub) void {
+    const here = loader.here();
+    const engine = scratch.dupe(u8, here.game_engine orelse return) catch return;
+    const variant: ?[]const u8 = if (here.game_engine_variant) |v| scratch.dupe(u8, v) catch return else null;
+    const made_with: []const registry.mods.MadeWith = &.{.{ .here = .{ .game_engine = engine, .game_engine_variant = variant } }};
+    const found = registry.mods.essentials(scratch, io, hub.index, hub.where, made_with, Manifest.native_arch) catch |err| {
+        return log.warn("Couldn't check the hub for {s}'s plugin: {t}", .{ engine, err });
+    };
+    const toasts = &shell.overlay.host.toasts;
+    var buf: [160]u8 = undefined;
+    for (found) |e| {
+        const adding = e.installed == null;
+        self.setDoing(io, "{s} {s}...", .{ if (adding) "Adding" else "Updating", e.title });
+        const was_on = isState(loader, e.id, .loaded);
+        if (was_on) unloadNow(self, io, loader, e.id);
+        _ = registry.mods.install(scratch, io, hub.index, hub.where, e.id, e.latest) catch |err| {
+            self.failed(io, "Couldn't {s} {s}: {t}", .{ if (adding) "add" else "update", e.title, err });
+            const text = std.fmt.bufPrint(&buf, "Couldn't {s} {s}: {t}", .{ if (adding) "add" else "update", e.title, err }) catch "";
+            _ = toasts.push(.{ .kind = .warning, .title = "Mods", .text = text, .seconds = 8 });
+            if (was_on) loadNow(self, io, loader, e.id);
+            continue;
+        };
+        rescan(loader);
+        if ((adding or was_on) and isState(loader, e.id, .unloaded)) loadNow(self, io, loader, e.id);
+        const text = if (adding)
+            std.fmt.bufPrint(&buf, "Added {s} {s}, which Wraith needs in {s} games.", .{ e.title, e.latest, e.title }) catch ""
+        else
+            std.fmt.bufPrint(&buf, "Updated {s} to {s}.", .{ e.title, e.latest }) catch "";
+        _ = toasts.push(.{ .kind = .success, .title = "Mods", .text = text, .seconds = 6 });
+    }
+}
+
 /// Off while it updates, then back on if it was.
-fn updateOne(self: *ModsWindow, io: std.Io, loader: *PluginLoader, scratch: std.mem.Allocator, where: registry.mods.Where, id: []const u8) void {
+fn updateOne(self: *ModsWindow, io: std.Io, loader: *PluginLoader, scratch: std.mem.Allocator, hub: Hub, id: []const u8) void {
     self.setDoing(io, "Updating {s}...", .{id});
     const was_on = isState(loader, id, .loaded);
     if (was_on) unloadNow(self, io, loader, id);
-    const updated = registry.mods.update(scratch, io, where, id) catch |err| blk: {
+    const updated = registry.mods.update(scratch, io, hub.index, hub.where, id) catch |err| blk: {
         self.failed(io, "Couldn't update {s}: {t}", .{ id, err });
         break :blk &.{};
     };
@@ -599,8 +688,8 @@ fn whereOf(scratch: std.mem.Allocator, loader: *PluginLoader) !registry.mods.Whe
     return .{ .source = source, .mods_dir = loader.plugins_dir, .wraith = build_info.version };
 }
 
-/// What the hub has for this game and any game, with what's installed.
-fn relist(self: *ModsWindow, io: std.Io, loader: *PluginLoader) void {
+/// What the hub has for this game and any game, with what's installed. Takes `fetched`'s arena.
+fn relist(self: *ModsWindow, io: std.Io, loader: *PluginLoader, fetched: *Fetched) void {
     var folders_arena: std.heap.ArenaAllocator = .init(loader.allocator);
     const folders = readFolders(folders_arena.allocator(), io, loader.plugins_dir) catch |err| blk: {
         log.warn("Couldn't read {s}: {t}", .{ loader.plugins_dir, err });
@@ -613,40 +702,33 @@ fn relist(self: *ModsWindow, io: std.Io, loader: *PluginLoader) void {
         self.work.folders_arena = folders_arena;
         self.work.folders = folders;
     }
-    var arena: std.heap.ArenaAllocator = .init(loader.allocator);
-    var problem: Message(160) = .{};
-    const listing: ?registry.mods.Listing = blk: {
-        const a = arena.allocator();
-        const where = whereOf(a, loader) catch |err| {
-            problem.print("Couldn't find the hub: {t}", .{err});
-            break :blk null;
-        };
+    var problem = fetched.problem;
+    const listing: ?registry.mods.Listing = if (fetched.hub()) |hub| blk: {
+        const a = fetched.arena.allocator();
         const game = a.dupe(u8, loader.game_id.get()) catch break :blk null;
         const games: []const []const u8 = if (game.len > 0) &.{game} else &.{};
         const here = loader.here();
         const engine: ?[]const u8 = if (here.game_engine) |e| a.dupe(u8, e) catch break :blk null else null;
         const variant: ?[]const u8 = if (here.game_engine_variant) |v| a.dupe(u8, v) catch break :blk null else null;
         const made_with: []const registry.mods.MadeWith = &.{.{ .game = if (game.len > 0) game else null, .here = .{ .game_engine = engine, .game_engine_variant = variant } }};
-        break :blk registry.mods.list(a, io, where.source, where.mods_dir, where.wraith, games, made_with) catch |err| {
-            log.warn("Couldn't get mods from the hub: {t}", .{err});
-            problem.print("Couldn't get mods from the hub: {t}", .{err});
+        break :blk registry.mods.list(a, io, hub.index, hub.where.mods_dir, hub.where.wraith, games, made_with) catch |err| {
+            problem.print("Couldn't read the mods folder: {t}", .{err});
             break :blk null;
         };
-    };
+    } else null;
     self.work.lock.lockUncancelable(io);
     defer self.work.lock.unlock(io);
     self.work.fetched.store(true, .release);
     self.work.hub_problem = problem;
     // Keep the last good one if the hub didn't answer
     if (listing == null and self.work.listing != null) {
-        arena.deinit();
+        fetched.arena.deinit();
         return;
     }
     if (self.work.arena) |*old| old.deinit();
-    self.work.arena = arena;
+    self.work.arena = fetched.arena;
     self.work.listing = listing;
 }
-
 fn rescan(loader: *PluginLoader) void {
     const job = loader.rescan() catch |err| return log.warn("Couldn't rescan plugins: {t}", .{err});
     job.wait() catch |err| log.warn("Couldn't rescan plugins: {t}", .{err});

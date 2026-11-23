@@ -389,11 +389,11 @@ const tests = struct {
         const saved_key = revoked_key;
         revoked_key = &key;
         defer revoked_key = saved_key;
-        const text = "{ \"format\": 1, \"sha256\": [\"ABC\"] }";
-        const sig = std.fmt.bytesToHex((try pair.sign(text, null)).toBytes(), .lower);
-        try install.tmp.dir.createDirPath(io, "cache/registry/v1");
-        try install.tmp.dir.writeFile(io, .{ .sub_path = "cache/registry/v1/revoked.json", .data = text });
-        try install.tmp.dir.writeFile(io, .{ .sub_path = "cache/registry/v1/revoked.json.sig", .data = &sig });
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena.deinit();
+        const signed = try registry.sign(arena.allocator(), "{ \"format\": 2, \"revoked\": [\"ABC\"] }", pair);
+        try install.tmp.dir.createDirPath(io, "cache/registry/v2");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "cache/registry/" ++ registry.index_path, .data = signed });
 
         const saved = core.log.mute(&.{.runtime});
         defer core.log.setFilter(saved);
