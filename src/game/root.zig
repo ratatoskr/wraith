@@ -121,7 +121,7 @@ pub fn identify(arena: std.mem.Allocator, io: std.Io, exe: []const u8, options: 
 
 pub fn discover(arena: std.mem.Allocator, io: std.Io, options: Options) ![]const Game {
     var games: std.ArrayList(Game) = .empty;
-    inline for (.{ steam, gog, epic, xbox, standalone, launchers }) |store| {
+    inline for (.{ steam, gog, itch, epic, xbox, standalone, launchers }) |store| {
         store.discover(arena, io, options, &games) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => log.warn("Couldn't list {t}'s games: {t}", .{ store.store, err }),
@@ -614,5 +614,7 @@ test {
     _ = added;
     _ = anticheat;
     _ = game_engine;
+    _ = itch;
+    _ = @import("sqlite.zig");
     _ = tests;
 }

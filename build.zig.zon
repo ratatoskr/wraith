@@ -20,5 +20,9 @@
             .url = "git+https://github.com/ratatoskr/tuft.git#81e14c46523fbd647e21b58736c208207b04cdac",
             .hash = "tuft-0.0.0-DNo4yq38JgBK5MkQsM2iQLBuUhYhkxNL681-xSR01aoD",
         },
+        .sqlite = .{
+            .url = "https://sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+            .hash = "N-V-__8AAETTsABEodUZZFAyfdAm9hEyqBXuLw9pRSO0vFh9",
+        },
     },
 }

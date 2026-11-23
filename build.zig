@@ -517,6 +517,8 @@ const Modules = struct {
             .{ .name = "wraith_platform", .module = platform },
             .{ .name = "tuft_sys", .module = tuft.module("tuft_sys") },
             .{ .name = "tuft_inject", .module = tuft.module("tuft_inject") },
+            // Only listing games uses it, so it's left out of the runtime, which only identifies one
+            .{ .name = "sqlite", .module = sqlite.cApi(b, target, optimize) },
         }, false);
 
         const registry = f.module("registry", "src/registry/root.zig", &.{
@@ -668,3 +670,30 @@ fn addResources(b: *std.Build, artifact: *std.Build.Step.Compile, res: Resources
     });
     artifact.win32_manifest = res.manifest;
 }
+
+/// SQLite from its amalgamation, read-only use, for stores that keep their games in a database.
+const sqlite = struct {
+    const flags: []const []const u8 = &.{
+        "-DSQLITE_DQS=0",
+        "-DSQLITE_DEFAULT_MEMSTATUS=0",
+        "-DSQLITE_OMIT_DEPRECATED",
+        "-DSQLITE_OMIT_LOAD_EXTENSION",
+        "-DSQLITE_OMIT_SHARED_CACHE",
+        "-DSQLITE_OMIT_PROGRESS_CALLBACK",
+        "-DSQLITE_USE_ALLOCA",
+    };
+
+    fn cApi(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+        const dep = b.dependency("sqlite", .{});
+        const t = b.addTranslateC(.{ .root_source_file = dep.path("sqlite3.h"), .target = target, .optimize = optimize });
+        const mod = t.createModule();
+        const lib = b.addLibrary(.{
+            .name = "sqlite",
+            .linkage = .static,
+            .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+        });
+        lib.root_module.addCSourceFile(.{ .file = dep.path("sqlite3.c"), .flags = flags });
+        mod.linkLibrary(lib);
+        return mod;
+    }
+};

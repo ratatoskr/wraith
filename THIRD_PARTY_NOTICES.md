@@ -13,6 +13,7 @@ Wraith includes code from these projects. Thanks to everyone who works on them.
 | [Zycore](https://github.com/zyantific/zycore-c) | MIT | support library for Zydis |
 | [QuickJS-ng](https://github.com/quickjs-ng/quickjs) | MIT | runs JavaScript plugins |
 | [Lua](https://www.lua.org) | MIT | runs Lua plugins |
+| [SQLite](https://sqlite.org) | Public domain | reading stores' game databases, like itch.io's |
 | [Zig](https://ziglang.org) | MIT | built with Zig, its standard library is compiled into every binary |
 | [Inter](https://github.com/rsms/inter) | SIL OFL 1.1 | the default text font |
 | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | SIL OFL 1.1 | the workbench's code font |
@@ -275,6 +276,19 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## SQLite
+
+https://sqlite.org
+
+```text
+The author disclaims copyright to this source code. In place of
+a legal notice, here is a blessing:
+
+   May you do good and not evil.
+   May you find forgiveness for yourself and forgive others.
+   May you share freely, never taking more than you give.
 ```
 
 ## Zig
