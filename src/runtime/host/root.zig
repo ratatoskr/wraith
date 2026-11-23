@@ -67,6 +67,7 @@ test {
     _ = @import("code_area.zig");
     _ = @import("files_area.zig");
     _ = @import("game_area.zig");
+    _ = @import("photo_area.zig");
     _ = @import("managed_area.zig");
     _ = @import("sync_area.zig");
     _ = @import("hooks_area.zig");

@@ -24,8 +24,8 @@ const log = core.log.scoped(.wraith_runtime);
 
 /// In Pictures, when no folder's picked.
 pub const default_folder = "Wraith";
-/// The plugin it used to be, which doesn't load any more.
-pub const old_plugin = "screenshot";
+/// The plugin it used to be, whose settings it takes over.
+const old_plugin = "screenshot";
 const title = "Screenshot";
 const section = "Screenshots";
 

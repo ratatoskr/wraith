@@ -102,7 +102,7 @@ test "downloads from the hub once, then uses the cache" {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(zip, &digest, .{});
     const index = try std.fmt.allocPrint(a,
-        \\{{ "format": 1, "generated": "now", "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{{ "version": "1.0.0", "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1 }}] }}
+        \\{{ "format": 1, "generated": "now", "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{{ "version": "1.0.0", "apiVersion": 1, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1 }}] }}
     , .{&std.fmt.bytesToHex(digest, .lower)});
     try tmp.dir.createDirPath(io, "site/p/hello");
     try tmp.dir.createDirPath(io, "site/v1/packages");

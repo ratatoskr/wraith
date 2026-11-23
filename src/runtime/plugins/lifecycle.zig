@@ -53,9 +53,12 @@ pub fn loadNow(loader: *PluginLoader, name: []const u8) !*Loaded {
             .yes => unreachable,
             .other_game => log.info("Not loading plugin {s}: it's for {s}, not this game ({s})", .{ known.name, known.about.games.get(), loader.executable.get() }),
             .other_arch => log.info("Not loading plugin {s}: it isn't built for {t} games", .{ known.name, Manifest.native_arch }),
-            .newer_wraith => log.info("Not loading plugin {s}: it needs Wraith {s} (this is {s})", .{ known.name, known.about.wraith.get(), build_info.version }),
+            .newer_wraith => if (known.about.wraith.len() > 0)
+                log.info("Not loading plugin {s}: it needs Wraith {s} (this is {s})", .{ known.name, known.about.wraith.get(), build_info.version })
+            else
+                log.info("Not loading plugin {s}: it's made for a newer Wraith's API (this has {d})", .{ known.name, core.manifest.api_version }),
             .revoked => log.warn("Not loading plugin {s}: the hub pulled this version. Update or remove it", .{known.name}),
-            .built_in => log.info("Not loading plugin {s}: Wraith does this itself now, so it can go", .{known.name}),
+            .outdated_api => log.warn("Not loading plugin {s}: its apiVersion is missing or older than {d}, so it needs updating for this Wraith", .{ known.name, core.manifest.min_api_version }),
         }
         return reason;
     }

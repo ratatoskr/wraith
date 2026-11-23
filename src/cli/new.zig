@@ -112,6 +112,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     var manifest: Manifest = .{
         .id = id,
         .version = "0.0.0",
+        .apiVersion = core.manifest.api_version,
         .title = title,
         .summary = options.summary orelse try std.fmt.allocPrint(arena, "{s}, a Wraith plugin", .{title}),
         .author = if (author.len > 0) author else null,

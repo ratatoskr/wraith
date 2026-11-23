@@ -103,6 +103,11 @@ pub const Plugin = struct {
         // Configure runs again when they change, as this reads them then
         sp.owner.dependOnFileContents(manifest);
         const m = core_manifest.parse(b.allocator, text, null) catch |err| std.debug.panic("invalid wraith.json: {t}", .{err});
+        switch (m.apiFit()) {
+            .yes => {},
+            .outdated => std.debug.panic("wraith.json needs \"apiVersion\": {d}, the version of Wraith's API it's made for. Wraith won't load it without one", .{core_manifest.api_version}),
+            .newer => std.debug.panic("wraith.json's apiVersion {d} is newer than this Wraith's, {d}", .{ m.apiVersion.?, core_manifest.api_version }),
+        }
         if (m.descriptionFile) |file| sp.owner.dependOnFileContents(sp.owner.path(sp.owner.pathJoin(&.{ std.fs.path.dirname(sp.sub_path) orelse ".", file })));
         const stripped = (core_manifest.packaged(b.allocator, io, dir, text) catch |err| switch (err) {
             error.BothDescriptions => std.debug.panic("wraith.json has description and descriptionFile. Keep one", .{}),
@@ -553,6 +558,7 @@ const Modules = struct {
             .{ .name = "tuft_image", .module = tuft.module("tuft_image") },
             .{ .name = "tuft_vfs", .module = tuft.module("tuft_vfs") },
             .{ .name = "tuft_managed", .module = tuft.module("tuft_managed") },
+            .{ .name = "tuft_math", .module = tuft.module("tuft_math") },
         }, true);
         // The fixture plugin's schema as generated Zig, so loader tests can call into it
         runtime.addImport("wraith_test_fixture", @import("salamander").zigModule(salamander_dep, .{ .source = b.path("src/runtime/testing/schemas/fixture.sal"), .target = target, .uses = &.{"wraith"}, .instances = &.{instance_tag} }));

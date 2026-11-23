@@ -106,4 +106,7 @@ test {
     _ = @import("crash/root.zig");
     _ = @import("speed/root.zig");
     _ = @import("Screenshot.zig");
+    _ = @import("photo/Photo.zig");
+    _ = @import("photo/Camera.zig");
+    _ = @import("photo/Posing.zig");
 }

@@ -157,7 +157,7 @@ pub const View = struct {
 };
 
 /// For a game or game engine plugin, each frame once the camera's where it'll be drawn from, after
-/// Camera Tools has moved it. Any thread.
+/// the free camera has moved it. Any thread.
 pub fn setView(view_: Mat4, projection: Mat4) void {
     const owner = Owner.current() orelse return;
     owner.root.frame().setView(view_, projection);

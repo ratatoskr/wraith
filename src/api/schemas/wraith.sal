@@ -1,6 +1,8 @@
 // Everything a plugin can use, an area each. Each plugin gets its own, which stops once it's unloaded.
 trait Wraith {
     Addresses addresses();
+    // The free camera, for game and engine plugins to hand it the game's camera
+    FreeCamera camera();
     Clipboard clipboard();
     Code code();
     Config config();
@@ -20,6 +22,8 @@ trait Wraith {
     // The game's C# runtime, Mono or IL2CPP, for Unity games and others
     Managed managed();
     Memory memory();
+    // Posing characters, for game and engine plugins to hand it their skeletons
+    Posing posing();
     Settings settings();
     Sound sound();
     // Locks to share between plugins, threads and tasks

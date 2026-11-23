@@ -1,0 +1,32 @@
+// Posing characters' bones. A game's plugin, or its engine's, hands Wraith each character's skeleton
+// once the game's animated it, and Wraith puts the player's edits on it. Wraith does the rest: the
+// Posing window, picking bones, freezing, the keys and settings. Any thread.
+
+// One bone, as the game has it.
+struct PosingBone {
+    // What it's called. Edits are kept by it, so it should stay the same from frame to frame
+    string name;
+    // Its parent's place in the same list, which must come before it, or -1 for none
+    i32 parent;
+}
+
+// An actor's skeleton, this frame.
+struct PosingSkeleton {
+    // Anything that stays the same for this actor while it's around, like its address
+    u64 id;
+    // Shown in the list of actors
+    string name;
+    []PosingBone bones;
+    // From the bones' space to the world's, or the identity if they're already in the world
+    Mat4 to_world;
+}
+
+trait Posing {
+    // Whether posing wants skeletons at all right now. A game can skip building them when it's false.
+    bool active();
+    // Every frame for each actor, once the game's done with its skeleton (animation, IK and physics)
+    // and before anything follows it, like attached accessories. `matrices` has one per bone, in the
+    // same order, row-vector style, and posing changes them in place. Posing draws them with the
+    // game's camera from `frame.setView`, which the game's plugin sets too.
+    void pose(PosingSkeleton skeleton, Mat4* matrices);
+}

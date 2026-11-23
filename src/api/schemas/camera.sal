@@ -1,0 +1,47 @@
+// The free camera. A game's plugin, or its engine's, hands Wraith the game's camera each frame from
+// wherever the game sets it, and Wraith does the rest: flying, orbiting, the keys and settings, and
+// Photo mode. Any thread.
+
+// An axis and which way along it.
+enum CamAxis : u8 { pos_y, neg_y, pos_z, neg_z, pos_x, neg_x }
+
+// How the game's world is laid out, so moving and looking go the right way.
+struct CamWorld {
+    CamAxis up;
+    CamAxis look;
+    bool left_handed;
+    // How many of the game's units make a metre, like 100 in Unreal
+    f32 metre;
+}
+
+// Which of the camera's fields say where it points.
+enum CamAim : u8 {
+    // at `target`, a point in the world, tipped by `roll`
+    target,
+    // by `rotation`, a quaternion as x, y, z, w
+    rotation,
+}
+
+// The game's camera.
+struct CamState {
+    Vec3 position;
+    CamAim aim;
+    Vec3 target;
+    Vec3 up;
+    Quat rotation;
+    f32 roll;
+    // In radians
+    f32 fov;
+}
+
+trait FreeCamera {
+    // Once, before the first `camera`.
+    void world(CamWorld world);
+    // Every frame from where the game sets its camera, like a hook after its camera update. While
+    // the free camera's on, Wraith changes it to its own. Otherwise it's left as it is.
+    void camera(inout CamState camera);
+    // Turns the free camera on if it isn't, and orbits it round `point`, in the world.
+    void focus(Vec3 point);
+    // Whether the free camera's on.
+    bool active();
+}

@@ -34,6 +34,8 @@ const SettingsWindow = @import("SettingsWindow.zig");
 const AboutWindow = @import("AboutWindow.zig");
 const ShellSettings = @import("ShellSettings.zig");
 const Screenshot = @import("../../Screenshot.zig");
+const Photo = @import("../../photo/Photo.zig");
+const photo_area = @import("../../host/photo_area.zig");
 pub const DevPlugins = @import("DevPlugins.zig");
 pub const Registry = @import("../../settings/Registry.zig");
 const Chord = wraith_platform.input.Chord;
@@ -71,6 +73,8 @@ dev_plugins: DevPlugins = .{},
 own: ShellSettings = undefined,
 /// Screenshots on a key. Null without files, like in tests.
 screenshot: ?*Screenshot = null,
+/// The free camera and posing. Null without files, like in tests.
+photo: ?*Photo = null,
 /// What the overlay key brings up. Render thread.
 hub: Hub = .{},
 /// Wraith's own windows, which the bar opens. Render thread.
@@ -108,6 +112,7 @@ pub const Windows = struct {
     tweaks: TweaksWindow = .{},
     settings: SettingsWindow = .{},
     about: AboutWindow = .{},
+    photo: Photo.Window = .{},
 };
 
 pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybinds, options: Options) !*Shell {
@@ -151,7 +156,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
     self.windows.mods.shell = self;
     self.windows.tweaks.shell = self;
     self.windows.settings.shell = self;
-    inline for (.{ "mods", "tweaks", "settings", "about" }) |name| try self.windows.system.add(&@field(self.windows, name));
+    inline for (.{ "mods", "tweaks", "settings", "about", "photo" }) |name| try self.windows.system.add(&@field(self.windows, name));
     self.own = try ShellSettings.add(self, registry);
     errdefer self.own.remove();
     if (options.io) |io| {
@@ -164,6 +169,16 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
         s.deinit();
         allocator.destroy(s);
     };
+    if (options.io != null) {
+        self.photo = try Photo.create(allocator, registry, overlay, keybinds);
+        photo_area.set(self.photo);
+    }
+    errdefer if (self.photo) |p| {
+        photo_area.set(null);
+        p.destroy();
+    };
+    self.windows.photo.photo = self.photo;
+    self.windows.photo.screenshot = self.screenshot;
     self.applyFrameSettings(self.own.frameStats());
     self.applyThemeSetting();
     Workbench.keys.apply(self.own.workbenchKeys());
@@ -228,6 +243,11 @@ pub fn destroy(self: *Shell) void {
     self.registry.remove(self.overlay_key);
     self.registry.remove(self.workbench_key);
     self.own.remove();
+    // Plugins stop reaching it first, then it waits for its frame in flight
+    if (self.photo) |p| {
+        photo_area.set(null);
+        p.destroy();
+    }
     // Waits for one saving
     if (self.screenshot) |s| {
         s.deinit();

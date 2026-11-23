@@ -298,12 +298,12 @@ fn drawTags(row: Row) void {
         .loading => tag(amber, "Loading"),
         .unloading => tag(amber, "Unloading"),
         .failed => tag(red, "Failed"),
-        .unsupported => tag(amber, "Can't run here"),
+        .unsupported => tag(amber, if (p.last_error != null and p.last_error.? == error.OutdatedApi) "Outdated" else "Can't run here"),
         .unloaded => tag(.{ 0.6, 0.6, 0.6, 1 }, "Off"),
     };
     if (row.listed) |l| {
         if (l.revoked) tag(red, "Pulled from the hub") else if (l.hasUpdate()) tag(amber, "Update");
-        if (l.latest == null and l.installed == null) tag(amber, "Needs a newer Wraith");
+        if (l.latest == null and l.installed == null) tag(amber, if (l.outdated) "Not updated for this Wraith" else "Needs a newer Wraith");
     }
 }
 
@@ -321,13 +321,16 @@ fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
         if (row.over) |o| ui.textColored(amber, "Loaded instead of the installed copy{s}{s}. Stop loading from here to go back to it.", .{ if (o.version.len > 0) ", " else "", o.version });
         if (p.about.games.len() > 0) ui.textDisabled("For {s}", .{p.about.games.get()});
         if (p.last_error) |err| {
-            if (p.needs.len() > 0) ui.textColored(red, "{t}: needs {s}", .{ err, p.needs.get() }) else ui.textColored(red, "{t}", .{err});
+            if (err == error.OutdatedApi) {
+                ui.textColored(amber, "Made for an older Wraith, so it's off until its author updates it", .{});
+            } else if (p.needs.len() > 0) ui.textColored(red, "{t}: needs {s}", .{ err, p.needs.get() }) else ui.textColored(red, "{t}", .{err});
         }
     }
     if (row.listed) |l| {
         if (l.why) |why| ui.textWrapped("{s}", .{why});
         if (l.installed) |have| if (l.latest) |latest| if (!std.mem.eql(u8, have, latest)) ui.textDisabled("{s} is out, this is {s}", .{ latest, have });
-        if (l.needs_wraith) |needs| ui.textColored(amber, "Needs Wraith {s} or newer", .{needs});
+        if (l.outdated) ui.textColored(amber, "Its newest version isn't made for this Wraith yet", .{});
+        if (l.needs_wraith) |needs| if (needs.len > 0) ui.textColored(amber, "Needs Wraith {s} or newer", .{needs}) else ui.textColored(amber, "Needs a newer Wraith", .{});
     }
 
     const off = ui.disabled(self.work.isBusy());

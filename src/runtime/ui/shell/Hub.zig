@@ -65,6 +65,7 @@ const Button = struct {
 const buttons = [_]Button{
     .{ .field = "mods", .label = "Mods", .icon = icons.puzzle },
     .{ .field = "tweaks", .label = "Tweaks", .icon = icons.sliders_horizontal },
+    .{ .field = "photo", .label = "Photo mode", .icon = icons.camera },
     .{ .field = "settings", .label = "Settings", .icon = icons.settings },
     .{ .field = "about", .label = "About", .icon = icons.info },
 };

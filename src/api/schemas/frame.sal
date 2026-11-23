@@ -132,7 +132,7 @@ trait Frame {
     // Whether this is the thread ticks run on. False everywhere till the first tick.
     bool onGameThread();
     // From a game or game engine plugin each frame, once the camera's where it'll be drawn from,
-    // after Camera Tools has moved it. See `GameView` for which way round. Any thread.
+    // after the free camera has moved it. See `GameView` for which way round. Any thread.
     void setView(Mat4 view, Mat4 projection);
     // The last view set. Any thread.
     GameView view();

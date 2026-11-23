@@ -82,10 +82,34 @@ pub const GameEngine = struct {
 
 pub const Kind = enum { plugin, project, provider };
 
+/// The version of Wraith's API this Wraith has. It goes up when plugins and projects need
+/// updating for it, and packages say which they're made for with `apiVersion`.
+pub const api_version: u32 = 1;
+/// The oldest `apiVersion` this Wraith still loads.
+pub const min_api_version: u32 = 1;
+
+/// Whether this Wraith loads a package made for `apiVersion`.
+pub const ApiFit = enum {
+    yes,
+    /// It doesn't say, or it's for an older API. It needs updating by its author.
+    outdated,
+    /// It's for a newer Wraith.
+    newer,
+
+    pub fn of(version: ?u32) ApiFit {
+        const v = version orelse return .outdated;
+        if (v < min_api_version) return .outdated;
+        if (v > api_version) return .newer;
+        return .yes;
+    }
+};
+
 pub const Manifest = struct {
     id: []const u8 = "",
     kind: Kind = .plugin,
     version: ?[]const u8 = null,
+    /// The version of Wraith's API it's made for, see `api_version`. Without it, it won't load.
+    apiVersion: ?u32 = null,
     title: ?[]const u8 = null,
     summary: ?[]const u8 = null,
     description: ?[]const u8 = null,
@@ -126,6 +150,10 @@ pub const Manifest = struct {
         return satisfies(version, self.wraith orelse return true);
     }
 
+    pub fn apiFit(self: Manifest) ApiFit {
+        return .of(self.apiVersion);
+    }
+
     /// As the file, with the schema first and what's empty or a default left out.
     pub fn write(self: Manifest, w: *std.Io.Writer) std.Io.Writer.Error!void {
         const Out = struct {
@@ -133,6 +161,7 @@ pub const Manifest = struct {
             id: []const u8,
             kind: Kind,
             version: ?[]const u8 = null,
+            apiVersion: ?u32 = null,
             title: ?[]const u8 = null,
             summary: ?[]const u8 = null,
             description: ?[]const u8 = null,
@@ -166,6 +195,7 @@ pub const Manifest = struct {
             .id = self.id,
             .kind = self.kind,
             .version = text(self.version),
+            .apiVersion = self.apiVersion,
             .title = text(self.title),
             .summary = text(self.summary),
             .description = text(self.description),
@@ -361,6 +391,7 @@ test "written as the file, read back the same" {
         .id = "kai",
         .kind = .project,
         .version = "0.1.0",
+        .apiVersion = api_version,
         .title = "Kai",
         .author = "",
         .game = .{ .ids = &.{"steam-1"}, .exes = &.{"kai.exe"} },
@@ -372,6 +403,7 @@ test "written as the file, read back the same" {
     for ([_][]const u8{ "author", "builds", "library", "tags" }) |left_out| try std.testing.expect(std.mem.indexOf(u8, text, left_out) == null);
     const back = try parse(a, text, null);
     try std.testing.expectEqual(.project, back.kind);
+    try std.testing.expectEqual(api_version, back.apiVersion.?);
     try std.testing.expect(!back.autoLoad);
     try std.testing.expect(back.isFor(.{ .exe = "kai.exe" }));
 }
@@ -404,6 +436,14 @@ test "manifest parsing" {
     try std.testing.expect(any.builtFor(.x86));
     try std.testing.expect(any.runsOn("0.0.0"));
     try std.testing.expect(m.runsOn(dev_version));
+}
+
+test "only packages made for this API load" {
+    try std.testing.expectEqual(.outdated, ApiFit.of(null));
+    try std.testing.expectEqual(.outdated, ApiFit.of(min_api_version - 1));
+    try std.testing.expectEqual(.yes, ApiFit.of(min_api_version));
+    try std.testing.expectEqual(.yes, ApiFit.of(api_version));
+    try std.testing.expectEqual(.newer, ApiFit.of(api_version + 1));
 }
 
 test "bad manifests say why" {

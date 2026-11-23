@@ -199,8 +199,8 @@ pub const Support = enum {
     newer_wraith,
     /// The hub pulled the copy that's installed.
     revoked,
-    /// Wraith does what it did itself now.
-    built_in,
+    /// It doesn't say which `apiVersion` it's for, or it's for one this Wraith doesn't load any more.
+    outdated_api,
 
     pub fn reason(self: Support) ?anyerror {
         return switch (self) {
@@ -209,13 +209,10 @@ pub const Support = enum {
             .other_arch => error.UnsupportedArch,
             .newer_wraith => error.NeedsNewerWraith,
             .revoked => error.Revoked,
-            .built_in => error.BuiltIntoWraith,
+            .outdated_api => error.OutdatedApi,
         };
     }
 };
-
-/// Plugins Wraith took in, which would clash with it, like on the same key. Tests swap it.
-pub var built_in: []const []const u8 = &.{@import("../Screenshot.zig").old_plugin};
 
 /// Needs `op_lock` held so `known` stays put.
 pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
@@ -244,10 +241,14 @@ pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
     if (known.dir) |old| loader.allocator.free(old);
     known.dir = source_dir;
     keep_dir = true;
-    if (isListed(built_in, manifest.value.id)) return .built_in;
     if (!manifest.value.isFor(loader.here())) return .other_game;
     if (!manifest.value.builtFor(Manifest.native_arch)) return .other_arch;
     if (!manifest.value.runsOn(build_info.version)) return .newer_wraith;
+    switch (manifest.value.apiFit()) {
+        .yes => {},
+        .outdated => return .outdated_api,
+        .newer => return .newer_wraith,
+    }
     if (isRevoked(loader, source_dir)) return .revoked;
     return .yes;
 }
@@ -407,20 +408,28 @@ const tests = struct {
         try testing.expectEqual(1, loader.count());
     }
 
-    test "a plugin Wraith took in isn't loaded" {
+    test "only plugins made for this API load" {
         const options = @import("test_options");
         var install: Install = undefined;
         try install.init(.{ .plugins = &.{.{ "fixture", options.fixture_plugin }} });
         defer install.deinit();
         const loader = &install.loader;
-        const saved_list = built_in;
-        built_in = &.{"fixture"};
-        defer built_in = saved_list;
+        const saved = core.log.mute(&.{.runtime});
+        defer core.log.setFilter(saved);
 
+        // Without one, it's taken as made before there were API versions
+        try install.pluginManifest("fixture", "\"apiVersion\": null");
         try loader.start(&.{});
         try testing.expectEqual(0, loader.count());
         try testing.expectEqual(.unsupported, install.info("fixture").?.state);
-        try testing.expectError(error.BuiltIntoWraith, (try loader.load("fixture")).wait());
+        try testing.expectError(error.OutdatedApi, (try loader.load("fixture")).wait());
+
+        try install.pluginManifest("fixture", std.fmt.comptimePrint("\"apiVersion\": {d}", .{core.manifest.api_version + 1}));
+        try testing.expectError(error.NeedsNewerWraith, (try loader.load("fixture")).wait());
+
+        try install.pluginManifest("fixture", std.fmt.comptimePrint("\"apiVersion\": {d}", .{core.manifest.api_version}));
+        try (try loader.load("fixture")).wait();
+        try testing.expectEqual(1, loader.count());
     }
 
     test "no manifest, no load" {

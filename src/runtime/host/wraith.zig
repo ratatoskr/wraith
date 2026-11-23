@@ -18,6 +18,7 @@ const memory_area = @import("memory_area.zig");
 const code_area = @import("code_area.zig");
 const files_area = @import("files_area.zig");
 const game_area = @import("game_area.zig");
+const photo_area = @import("photo_area.zig");
 const hooks_area = @import("hooks_area.zig");
 const managed_area = @import("managed_area.zig");
 const sync_area = @import("sync_area.zig");
@@ -35,6 +36,8 @@ pub const Setting = W.Setting;
 pub const Config = W.Config;
 pub const Frame = W.Frame;
 pub const Game = game_area.Game;
+pub const FreeCamera = photo_area.FreeCamera;
+pub const Posing = photo_area.Posing;
 pub const SchemaArea = host.schemas.Area;
 pub const FrameSubscription = W.FrameSubscription;
 pub const TickDriver = W.TickDriver;
@@ -93,6 +96,8 @@ pub const Tables = struct {
     diagnostics: *const sal.Table(Diagnostics),
     frame: *const sal.Table(Frame),
     game: *const sal.Table(Game),
+    camera: *const sal.Table(FreeCamera),
+    posing: *const sal.Table(Posing),
     schema: *const sal.Table(SchemaArea),
     frame_subscription: *const sal.Table(FrameSubscription),
     tick_driver: *const sal.Table(TickDriver),
@@ -165,6 +170,8 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .diagnostics = h.adopt(Diagnostics, sal.implement(Diagnostics, DiagnosticsImpl), o) catch return null,
         .frame = h.adopt(Frame, sal.implement(Frame, FrameImpl), o) catch return null,
         .game = h.adopt(Game, sal.implement(Game, game_area.Impl), o) catch return null,
+        .camera = h.adopt(FreeCamera, sal.implement(FreeCamera, photo_area.CameraImpl), o) catch return null,
+        .posing = h.adopt(Posing, sal.implement(Posing, photo_area.PosingImpl), o) catch return null,
         .schema = h.adopt(SchemaArea, sal.implement(SchemaArea, host.schemas.SchemaImpl), o) catch return null,
         .frame_subscription = h.adopt(FrameSubscription, sal.implement(FrameSubscription, SubscriptionImpl), o) catch return null,
         .tick_driver = h.adopt(TickDriver, sal.implement(TickDriver, TickDriverImpl), o) catch return null,
@@ -245,6 +252,14 @@ const Root = struct {
 
     pub fn game(loaded: *Loaded) sal.Object(Game) {
         return area(loaded, Game, "game");
+    }
+
+    pub fn camera(loaded: *Loaded) sal.Object(FreeCamera) {
+        return area(loaded, FreeCamera, "camera");
+    }
+
+    pub fn posing(loaded: *Loaded) sal.Object(Posing) {
+        return area(loaded, Posing, "posing");
     }
 
     pub fn diagnostics(loaded: *Loaded) sal.Object(Diagnostics) {

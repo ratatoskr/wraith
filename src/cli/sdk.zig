@@ -35,8 +35,9 @@ pub const usage =
     \\                                       installed, or downloaded from the hub into the cache
     \\                                       (not with --offline)
     \\  sdk js info, sdk lua info            this wraith, as JSON, for a plugin's build or editor:
-    \\                                       its version, folder (dir) and mods_dir (where
-    \\                                       installed mods go)
+    \\                                       its version, folder (dir), mods_dir (where
+    \\                                       installed mods go), and the apiVersion range it loads
+    \\                                       (api_version, min_api_version)
 ;
 
 const Language = enum { js, lua };
@@ -105,7 +106,13 @@ fn info(ctx: ops.Context, arena: std.mem.Allocator) !u8 {
     const locations = try ops.locations(arena);
     var buf: [2048]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(ctx.io, &buf);
-    try std.json.Stringify.value(.{ .version = build_info.version, .dir = ctx.dir, .mods_dir = locations.mods }, .{}, &stdout.interface);
+    try std.json.Stringify.value(.{
+        .version = build_info.version,
+        .dir = ctx.dir,
+        .mods_dir = locations.mods,
+        .api_version = core.manifest.api_version,
+        .min_api_version = core.manifest.min_api_version,
+    }, .{}, &stdout.interface);
     try stdout.interface.writeByte('\n');
     try stdout.interface.flush();
     return 0;

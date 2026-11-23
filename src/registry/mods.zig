@@ -27,7 +27,12 @@ pub const Listed = struct {
     why: ?[]const u8,
     /// Newest version this Wraith can run. Null if it can't.
     latest: ?[]const u8,
+    /// The Wraith it needs, if that's why `latest` is null. Empty when it's for a newer Wraith's
+    /// API, without saying which.
     needs_wraith: ?[]const u8,
+    /// Its newest isn't made for this Wraith's API, see `core.manifest.api_version`, so it's
+    /// waiting on its author to update it.
+    outdated: bool = false,
     installed: ?[]const u8,
     /// The installed copy was pulled. `updateAll` takes it out, and Wraith won't load it.
     revoked: bool,
@@ -65,7 +70,9 @@ const Gather = struct {
     /// `game` is one asked about it was listed for.
     fn add(self: *Gather, e: registry.Entry, game: ?[]const u8) !void {
         const l = self.find(e.id) orelse blk: {
-            const runs = registry.satisfies(self.wraith, e.wraith orelse "0.0.0");
+            const api = core.manifest.ApiFit.of(e.apiVersion);
+            const wraith_ok = registry.satisfies(self.wraith, e.wraith orelse "0.0.0");
+            const runs = wraith_ok and api == .yes;
             try self.listed.append(self.arena, .{
                 .id = e.id,
                 .kind = e.kind,
@@ -78,7 +85,8 @@ const Gather = struct {
                 .featured = false,
                 .why = null,
                 .latest = if (runs) e.version else null,
-                .needs_wraith = if (runs) null else e.wraith,
+                .needs_wraith = if (!wraith_ok) e.wraith else if (api == .newer) e.wraith orelse "" else null,
+                .outdated = wraith_ok and api == .outdated,
                 .installed = null,
                 .revoked = false,
                 .library = e.library,
@@ -144,6 +152,7 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []co
                 .summary = pkg.summary,
                 .version = if (newest) |v| v.version else have.version,
                 .wraith = if (newest) |v| v.wraith else null,
+                .apiVersion = if (newest) |v| v.apiVersion else null,
                 .games = if (newest) |v| if (v.game) |g| g.ids else &.{} else &.{},
                 .gameEngine = if (newest) |v| v.gameEngine else null,
                 .library = pkg.library,
@@ -185,11 +194,21 @@ fn installWith(arena: std.mem.Allocator, io: std.Io, where: Where, id: []const u
         log.err("{s} has no version {s}", .{ id, wanted });
         return error.NoSuchVersion;
     } else registry.latest(pkg, where.wraith, null) orelse {
+        if (pkg.versions.len > 0 and core.manifest.ApiFit.of(pkg.versions[0].apiVersion) == .outdated) {
+            log.err("{s} hasn't been updated for this Wraith's API ({d}) yet", .{ id, core.manifest.api_version });
+            return error.OutdatedApi;
+        }
         log.err("No version of {s} runs on this Wraith ({s}): update Wraith", .{ id, where.wraith });
         return error.NeedsNewerWraith;
     };
+    if (core.manifest.ApiFit.of(chosen.apiVersion) == .outdated) {
+        log.err("{s} {s} is made for an older Wraith API, so this Wraith won't load it", .{ id, chosen.version });
+        return error.OutdatedApi;
+    }
     if (!chosen.runsOn(where.wraith)) {
-        log.err("{s} {s} needs Wraith {s} (this is {s}): update Wraith", .{ id, chosen.version, chosen.wraith.?, where.wraith });
+        if (chosen.wraith) |needs| {
+            log.err("{s} {s} needs Wraith {s} (this is {s}): update Wraith", .{ id, chosen.version, needs, where.wraith });
+        } else log.err("{s} {s} is made for a newer Wraith's API: update Wraith", .{ id, chosen.version });
         return error.NeedsNewerWraith;
     }
     const revoked = registry.revoked(arena, io, where.source) catch &.{};

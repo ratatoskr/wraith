@@ -160,6 +160,8 @@ pub fn toJson(arena: std.mem.Allocator, d: Details) ![]u8 {
         .id = d.id,
         .kind = .project,
         .version = d.version,
+        // Saved from this Wraith's Workbench, so it's made for this API
+        .apiVersion = core.manifest.api_version,
         .title = d.title,
         .summary = d.summary,
         .description = d.description,

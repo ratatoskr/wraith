@@ -32,6 +32,17 @@ pub fn read(arena: std.mem.Allocator, io: std.Io, mods_dir: []const u8, here: co
         const manifest = (Manifest.read(arena, io, folder) catch continue) orelse continue;
         const m = manifest.value;
         if (m.kind != .project or !m.isFor(here)) continue;
+        switch (m.apiFit()) {
+            .yes => {},
+            .outdated => {
+                log.warn("Not using {s}'s tweaks: its apiVersion is missing or older than {d}, so it needs updating for this Wraith", .{ m.id, core.manifest.min_api_version });
+                continue;
+            },
+            .newer => {
+                log.info("Not using {s}'s tweaks: it's made for a newer Wraith's API (this has {d})", .{ m.id, core.manifest.api_version });
+                continue;
+            },
+        }
         if (discovery.installedRevoked(arena, io, revoked, mods_dir, entry.name)) {
             log.warn("Not using {s}'s tweaks: the hub pulled this version. Update or remove it", .{m.id});
             continue;
@@ -107,14 +118,18 @@ pub fn refresh(tweaks: *Tweaks, gpa: std.mem.Allocator, io: std.Io, mods_dir: []
 test "only projects for this game, with their tweak files" {
     const testing = std.testing;
     const io = testing.io;
+    const muted = core.log.mute(&.{.runtime});
+    defer core.log.setFilter(muted);
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     const files = [_][2][]const u8{
-        .{ "tables/wraith.json", "{ \"id\": \"tables\", \"kind\": \"project\", \"title\": \"Tables\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
+        .{ "tables/wraith.json", "{ \"id\": \"tables\", \"kind\": \"project\", \"apiVersion\": 1, \"title\": \"Tables\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
         .{ "tables/tweaks/speed.rwt", "@js" },
         .{ "tables/tweaks/readme.md", "no" },
-        .{ "elsewhere/wraith.json", "{ \"id\": \"elsewhere\", \"kind\": \"project\", \"game\": { \"ids\": [\"steam-2\"] } }" },
+        .{ "elsewhere/wraith.json", "{ \"id\": \"elsewhere\", \"kind\": \"project\", \"apiVersion\": 1, \"game\": { \"ids\": [\"steam-2\"] } }" },
         .{ "elsewhere/tweaks/a.rwt", "@js" },
+        .{ "old/wraith.json", "{ \"id\": \"old\", \"kind\": \"project\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
+        .{ "old/tweaks/a.rwt", "@js" },
         .{ "plug/wraith.json", "{ \"id\": \"plug\" }" },
         .{ "plug/tweaks/a.rwt", "@js" },
     };

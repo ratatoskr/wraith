@@ -35,6 +35,8 @@ pub const Entry = struct {
     summary: []const u8 = "",
     version: []const u8 = "",
     wraith: ?[]const u8 = null,
+    /// The version of Wraith's API it's made for. Null for ones from before there were any.
+    apiVersion: ?u32 = null,
     /// Empty, with no `gameEngine` either, means any game.
     games: []const []const u8 = &.{},
     /// Every game made with this game engine, instead of `games`.
@@ -46,7 +48,7 @@ pub const Entry = struct {
     /// Why it's picked, in the featured list.
     why: ?[]const u8 = null,
     updated: ?[]const u8 = null,
-    /// Other mods use it, like Camera Tools, and it comes with them. Not one to list for players.
+    /// Other mods use it, like an engine's helpers, and it comes with them. Not one to list for players.
     library: bool = false,
 };
 
@@ -102,6 +104,7 @@ pub const Version = struct {
     /// Hidden from new installs.
     yanked: bool = false,
     wraith: ?[]const u8 = null,
+    apiVersion: ?u32 = null,
     /// Null, with no `gameEngine` either, means any game.
     game: ?Game = null,
     gameEngine: ?GameEngine = null,
@@ -110,7 +113,9 @@ pub const Version = struct {
     provider: ?[]const u8 = null,
     depends: []const []const u8 = &.{},
 
+    /// Whether this Wraith, at `wraith_version`, loads it.
     pub fn runsOn(self: Version, wraith_version: []const u8) bool {
+        if (core.manifest.ApiFit.of(self.apiVersion) != .yes) return false;
         return satisfies(wraith_version, self.wraith orelse return true);
     }
 
@@ -152,7 +157,7 @@ const Revoked = struct {
 pub const compareVersions = core.manifest.compareVersions;
 pub const satisfies = core.manifest.satisfies;
 
-/// The newest that isn't yanked and runs here. Null `arch` means either.
+/// The newest that isn't yanked and this Wraith loads. Null `arch` means either.
 pub fn latest(pkg: Package, wraith_version: []const u8, arch: ?Arch) ?Version {
     var best: ?Version = null;
     for (pkg.versions) |v| {

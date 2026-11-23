@@ -69,7 +69,7 @@ const Hub = struct {
         const a = self.arena.allocator();
         var list: std.ArrayList(u8) = .empty;
         for (versions, 0..) |v, i| try list.print(a,
-            \\{s}{{ "version": "{s}", "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true }}
+            \\{s}{{ "version": "{s}", "apiVersion": 1, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true }}
         , .{ if (i == 0) "" else ", ", v, sha256 });
         try self.publish("v1/packages/hello.json", try std.fmt.allocPrint(a,
             \\{{ "format": 1, "generated": "now", "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{s}] }}
@@ -165,17 +165,45 @@ test "libraries in the lists are marked, so what lists mods for players can leav
 }
 
 test "newest runnable version" {
-    const pkg: registry.Package = .{ .format = 1, .id = "p", .versions = &.{
-        .{ .version = "1.0.0", .url = "", .sha256 = "" },
-        .{ .version = "1.2.0", .wraith = "0.2.0", .url = "", .sha256 = "" },
-        .{ .version = "1.1.0", .arches = &.{.x86}, .url = "", .sha256 = "" },
-        .{ .version = "1.3.0", .yanked = true, .url = "", .sha256 = "" },
-    } };
+    const pkg: registry.Package = .{
+        .format = 1,
+        .id = "p",
+        .versions = &.{
+            .{ .version = "1.0.0", .apiVersion = 1, .url = "", .sha256 = "" },
+            .{ .version = "1.2.0", .apiVersion = 1, .wraith = "0.2.0", .url = "", .sha256 = "" },
+            .{ .version = "1.1.0", .apiVersion = 1, .arches = &.{.x86}, .url = "", .sha256 = "" },
+            .{ .version = "1.3.0", .apiVersion = 1, .yanked = true, .url = "", .sha256 = "" },
+            // Made before there were API versions, and for a newer Wraith's
+            .{ .version = "1.4.0", .url = "", .sha256 = "" },
+            .{ .version = "1.5.0", .apiVersion = core.manifest.api_version + 1, .url = "", .sha256 = "" },
+        },
+    };
     try testing.expectEqualStrings("1.2.0", registry.latest(pkg, "0.2.0", null).?.version);
     // Wraith is too old for 1.2.0, 1.1.0 is x86 only, and 1.3.0 was yanked
     try testing.expectEqualStrings("1.0.0", registry.latest(pkg, "0.1.0", .x64).?.version);
     try testing.expectEqualStrings("1.1.0", registry.latest(pkg, "0.1.0", .x86).?.version);
     try testing.expectEqual(null, registry.latest(.{ .format = 1, .id = "none" }, "9.0.0", null));
+}
+
+test "mods not made for this Wraith's API say so" {
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    try hub.publish("v1/any.json",
+        \\{ "format": 1, "generated": "now",
+        \\  "packages": [{ "id": "old", "kind": "plugin", "title": "Old", "version": "1.0.0" },
+        \\    { "id": "new", "kind": "plugin", "title": "New", "version": "1.0.0", "apiVersion": 999 },
+        \\    { "id": "ok", "kind": "plugin", "title": "OK", "version": "1.0.0", "apiVersion": 1 }] }
+    );
+    const listing = try registry.mods.list(a, io, hub.source(), hub.path("mods"), "1.0.0", &.{}, &.{});
+    const old = listing.find("old").?;
+    try testing.expect(old.outdated);
+    try testing.expectEqual(null, old.latest);
+    const new = listing.find("new").?;
+    try testing.expect(!new.outdated);
+    try testing.expectEqual(null, new.latest);
+    try testing.expectEqualStrings("", new.needs_wraith.?);
+    try testing.expectEqualStrings("1.0.0", listing.find("ok").?.latest.?);
 }
 
 test "tested builds" {
