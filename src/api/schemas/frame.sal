@@ -136,6 +136,11 @@ trait Frame {
     void setView(Mat4 view, Mat4 projection);
     // The last view set. Any thread.
     GameView view();
+    // From a game or game engine plugin that knows how the game's output is encoded, like Unreal
+    // saying HDR's on. Wraith goes by it where the swap chain can't say, like a 10-bit one Wraith
+    // joined late. What the game sets on its swap chain itself still wins. Gone with the plugin.
+    // Any thread.
+    void setColorSpace(ColorSpace space);
     // Any thread. Posted from inside a task, it waits a frame.
     void!FrameError post(keep FrameTask task);
     // The next frame drawn at `point`, copied only because someone asked. Any thread.

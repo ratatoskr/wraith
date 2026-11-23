@@ -163,6 +163,14 @@ pub fn setView(view_: Mat4, projection: Mat4) void {
     owner.root.frame().setView(view_, projection);
 }
 
+/// For a game or game engine plugin that knows how the game's output is encoded, like HDR10 when
+/// the game's HDR is on. Wraith goes by it where the swap chain can't say, like a 10-bit one Wraith
+/// joined late. What the game sets on its swap chain itself still wins. Any thread.
+pub fn setColorSpace(space: W.ColorSpace) void {
+    const owner = Owner.current() orelse return;
+    owner.root.frame().setColorSpace(space);
+}
+
 /// The game's camera as its plugin last set it, or null if it hasn't lately. Any thread.
 pub fn view() ?View {
     const owner = Owner.current() orelse return null;

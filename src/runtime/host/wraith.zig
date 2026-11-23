@@ -550,6 +550,10 @@ const FrameImpl = struct {
         return frame.view();
     }
 
+    pub fn setColorSpace(loaded: *Loaded, space: W.ColorSpace) void {
+        frame.setColorSpace(loaded, space);
+    }
+
     pub fn post(loaded: *Loaded, task: frame.Task) sal.Plain(Frame, "post") {
         frame.post(loaded, task) catch |err| return frameError(err);
     }

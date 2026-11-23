@@ -25,7 +25,6 @@ const Mat4 = math.Mat4;
 const Vec3 = math.Vec3;
 
 /// Listed under it in Settings.
-
 const Show = enum { posed, everyone, nobody };
 const show_options = [_][]const u8{ "The one being posed", "Everyone", "No one" };
 

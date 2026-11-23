@@ -11,6 +11,9 @@ const sync = @import("tuft_sys").sync;
 
 const host = @import("root.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
+const Owner = @import("tuft_event").Owner;
+const OnGone = @import("Owned.zig").OnGone;
+const gfx = @import("tuft_gfx");
 
 const Bus = core.Event(fn () void);
 const W = api.wraith;
@@ -93,6 +96,26 @@ pub fn view() W.GameView {
     var v = game_view;
     v.known = v.known and core.timing.now() -| view_at < view_ns;
     return v;
+}
+
+/// Whose `setColorSpace` it is, so it goes with them.
+var hint_owner: Atomic(usize) = .init(0);
+var hint_cleanup: OnGone(.closing, hintGone) = .{};
+
+pub fn setColorSpace(loaded: *Loaded, space: W.ColorSpace) void {
+    const lease = hint_cleanup.lease(&loaded.owner) orelse return;
+    defer lease.end();
+    hint_owner.store(@intFromPtr(&loaded.owner), .release);
+    gfx.color_space_hint.set(switch (space) {
+        .srgb => .srgb,
+        .scrgb => .scrgb,
+        .hdr10 => .hdr10,
+        _ => null,
+    });
+}
+
+fn hintGone(owner: *Owner) void {
+    if (hint_owner.cmpxchgStrong(@intFromPtr(owner), 0, .acq_rel, .acquire) == null) gfx.color_space_hint.set(null);
 }
 
 /// Skipped if a tick's already running on another thread.
@@ -626,6 +649,20 @@ const tests = struct {
         // A plugin that's stopped saying doesn't leave an old one
         view_at -|= 2 * view_ns;
         try testing.expectEqual(null, sdk.frame.view());
+    }
+
+    test "a plugin's colour space hint goes with it" {
+        var a: FakePlugin = undefined;
+        a.init("a");
+        {
+            const acting = a.owner().enter();
+            defer acting.end();
+            sdk.frame.setColorSpace(.hdr10);
+        }
+        try testing.expectEqual(gfx.ColorSpace.hdr10, gfx.color_space_hint.get().?);
+        a.loaded.owner.close();
+        try testing.expectEqual(null, gfx.color_space_hint.get());
+        a.loaded.deinitForTest();
     }
 
     test "drivers take ticks by rank, and hand them back as they go" {
