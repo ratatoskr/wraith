@@ -46,6 +46,8 @@ pub const Entry = struct {
     /// Why it's picked, in the featured list.
     why: ?[]const u8 = null,
     updated: ?[]const u8 = null,
+    /// Other mods use it, like Camera Tools, and it comes with them. Not one to list for players.
+    library: bool = false,
 };
 
 pub const Link = struct {
@@ -130,6 +132,8 @@ pub const Package = struct {
     description: ?[]const u8 = null,
     license: ?[]const u8 = null,
     homepage: ?[]const u8 = null,
+    /// Other mods use it, and it comes with them.
+    library: bool = false,
     /// Newest first.
     versions: []const Version = &.{},
 

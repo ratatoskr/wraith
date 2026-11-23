@@ -154,6 +154,8 @@ fn list(ctx: ops.Context, arena: std.mem.Allocator, game_arg: ?[]const u8) !u8 {
     for (shown.items) |e| {
         const runs = registry.satisfies(build_info.version, e.wraith orelse "0.0.0");
         const have = try registry.installed(arena, io, at.mods_dir, e.id);
+        // Libraries come with the mods that need them, so only once they're here
+        if (e.library and have == null) continue;
         log.print("{s: <20} {s: <10} {s}{s}", .{ e.id, e.version, e.title, if (e.featured) "  (recommended)" else "" });
         if (have) |h| {
             const outdated = runs and registry.compareVersions(e.version, h.version) == .gt;

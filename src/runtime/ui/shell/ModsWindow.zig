@@ -212,7 +212,8 @@ pub fn collect(self: *ModsWindow, section: Section, query: []const u8) []const R
             };
         },
         .browse => if (listing) |l| for (l.mods) |*m| {
-            if (m.installed != null or self.findPlugin(m.id) != null) continue;
+            // They come with the mods that need them
+            if (m.library or m.installed != null or self.findPlugin(m.id) != null) continue;
             const row: Row = .{ .id = m.id, .listed = m };
             if (n < max_rows and row.matches(query)) {
                 self.rows[n] = row;
@@ -285,6 +286,7 @@ fn drawRow(self: *ModsWindow, shell: *Shell, row: Row) void {
 
 fn drawTags(row: Row) void {
     if (row.listed) |l| if (l.featured) tag(green, "Recommended");
+    if (row.listed) |l| if (l.library) tag(blue, "Library");
     if (row.isProject()) tag(blue, "Project");
     if (row.dev) tag(blue, "Dev");
     if (row.over) |o| {

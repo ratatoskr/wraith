@@ -150,6 +150,20 @@ test "a game engine's list, just the kinds of it each game is" {
     try testing.expectEqual(null, try registry.forGameEngine(a, io, hub.source(), "godot"));
 }
 
+test "libraries in the lists are marked, so what lists mods for players can leave them out" {
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    try hub.publish("v1/any.json",
+        \\{ "format": 1, "generated": "now",
+        \\  "packages": [{ "id": "camera", "kind": "plugin", "title": "Camera Tools", "version": "1.0.0", "library": true },
+        \\    { "id": "photo", "kind": "plugin", "title": "Photo", "version": "1.0.0" }] }
+    );
+    const listing = try registry.mods.list(a, io, hub.source(), hub.path("mods"), "1.0.0", &.{}, &.{});
+    try testing.expect(listing.find("camera").?.library);
+    try testing.expect(!listing.find("photo").?.library);
+}
+
 test "newest runnable version" {
     const pkg: registry.Package = .{ .format = 1, .id = "p", .versions = &.{
         .{ .version = "1.0.0", .url = "", .sha256 = "" },

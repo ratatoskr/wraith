@@ -31,6 +31,9 @@ pub const Listed = struct {
     installed: ?[]const u8,
     /// The installed copy was pulled. `updateAll` takes it out, and Wraith won't load it.
     revoked: bool,
+    /// Other mods use it and it comes with them, so it's not one to offer on its own. It's still
+    /// here when installed, so it gets updated.
+    library: bool = false,
 
     pub fn hasUpdate(self: Listed) bool {
         const have = self.installed orelse return false;
@@ -78,6 +81,7 @@ const Gather = struct {
                 .needs_wraith = if (runs) null else e.wraith,
                 .installed = null,
                 .revoked = false,
+                .library = e.library,
             });
             break :blk &self.listed.items[self.listed.items.len - 1];
         };
@@ -142,6 +146,7 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, source: Source, mods_dir: []co
                 .wraith = if (newest) |v| v.wraith else null,
                 .games = if (newest) |v| if (v.game) |g| g.ids else &.{} else &.{},
                 .gameEngine = if (newest) |v| v.gameEngine else null,
+                .library = pkg.library,
             }, null);
         }
         const l = gather.find(have.id) orelse continue;
