@@ -12,6 +12,10 @@ Pre-release. Expect breaking changes.
 
 Using it in online games can get you banned. Use it offline or in single-player.
 
+## Want to download?
+
+Get the Wraith app from [wraith.io](https://wraith.io). It installs Wraith, finds your games, and installs mods from the [Hub](https://hub.wraith.io). New to it? [Start here](https://docs.wraith.io/play/).
+
 ## Features
 
 - Injects into a game, or loads as a proxy DLL.
