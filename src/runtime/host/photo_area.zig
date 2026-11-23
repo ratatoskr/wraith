@@ -70,6 +70,14 @@ pub const PosingImpl = struct {
         defer lock.unlockShared();
         if (photo) |p| p.posing.pose(@intFromPtr(&loaded.owner), skeleton, matrices);
     }
+
+    pub fn shapes(loaded: *Loaded, actor: u64, list: []const W.PosingShape, weights: *f32) void {
+        const lease = posing_cleanup.lease(&loaded.owner) orelse return;
+        defer lease.end();
+        lock.lockShared();
+        defer lock.unlockShared();
+        if (photo) |p| p.posing.shapes(actor, list, weights);
+    }
 };
 
 var posing_cleanup: OnGone(.closing, posingOwnerGone) = .{};

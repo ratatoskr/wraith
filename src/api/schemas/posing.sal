@@ -1,6 +1,7 @@
-// Posing characters' bones. A game's plugin, or its engine's, hands Wraith each character's skeleton
-// once the game's animated it, and Wraith puts the player's edits on it. Wraith does the rest: the
-// Posing window, picking bones, freezing, the keys and settings. Any thread.
+// Posing characters' bones and blend shapes. A game's plugin, or its engine's, hands Wraith each
+// character's skeleton, and its blend shapes if it has any, once the game's animated it, and Wraith
+// puts the player's edits on them. Wraith does the rest: the Posing window, picking bones, freezing,
+// the keys and settings. Any thread.
 
 // One bone, as the game has it.
 struct PosingBone {
@@ -21,6 +22,14 @@ struct PosingSkeleton {
     Mat4 to_world;
 }
 
+// One blend shape, or morph target, on one of an actor's meshes.
+struct PosingShape {
+    // What it's called. Edits are kept by it and its mesh, so both should stay the same
+    string name;
+    // Which of the actor's meshes it's on, like the face or the body
+    string mesh;
+}
+
 trait Posing {
     // Whether posing wants skeletons at all right now. A game can skip building them when it's false.
     bool active();
@@ -29,4 +38,8 @@ trait Posing {
     // same order, row-vector style, and posing changes them in place. Posing draws them with the
     // game's camera from `frame.setView`, which the game's plugin sets too.
     void pose(PosingSkeleton skeleton, Mat4* matrices);
+    // Every frame for each actor with blend shapes, after `pose` for it and before it's skinned.
+    // `weights` has one per shape, in the same order, 0 for none of it and 1 for all of it, and
+    // posing changes them in place. `actor` is the skeleton's id.
+    void shapes(u64 actor, []PosingShape list, f32* weights);
 }

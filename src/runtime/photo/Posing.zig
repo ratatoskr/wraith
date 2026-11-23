@@ -92,8 +92,11 @@ gizmo_matrix: Mat4 = .identity,
 drag_base: Mat4 = .identity,
 /// Labels for the actor list, which ImGui wants null terminated
 labels: [poses.max_actors][56:0]u8 = undefined,
-/// Narrows the actors and bones down by name
+/// Narrows the actors, bones and shapes down by name
 search: [64:0]u8 = @splat(0),
+/// The Shapes tab's
+link_shapes: bool = true,
+changed_only: bool = false,
 
 /// Keep it where it is, since its keys point at it.
 pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, camera: *Camera) !void {
@@ -151,6 +154,13 @@ pub fn pose(self: *Posing, owner: usize, skeleton: W.PosingSkeleton, matrices: *
     if (self.store.byId(skeleton.id)) |a| a.owner = owner;
 }
 
+pub fn shapes(self: *Posing, actor: u64, list: []const W.PosingShape, weights: *f32) void {
+    const many: [*]f32 = @ptrCast(weights);
+    self.acquire();
+    defer self.release();
+    self.store.shape(actor, list, many[0..list.len]);
+}
+
 /// Drops what `owner` handed over, when it's going.
 pub fn forget(self: *Posing, owner: usize) void {
     self.acquire();
@@ -204,6 +214,7 @@ fn grab(self: *Posing, on: bool) void {
 fn setFrozen(a: *poses.Actor, on: bool) void {
     a.frozen = on;
     a.base_count = 0;
+    a.shape_base_count = 0;
 }
 
 /// Once a frame.
@@ -223,7 +234,7 @@ fn draw(self: *Posing) void {
     defer self.release();
     const store = &self.store;
     store.frame +%= 1;
-    self.wanted.store(open or store.edit_count > 0 or store.anyFrozen(), .monotonic);
+    self.wanted.store(open or store.anyEdits() or store.anyFrozen(), .monotonic);
     if (!open) return;
     // The game's plugin sets it each frame
     const v = frame.view();
@@ -349,7 +360,7 @@ fn drawWindow(self: *Posing, store: *poses.Store) void {
     var live: usize = 0;
     var selected: usize = 0;
     ui.setNextItemWidth(ui.fill);
-    _ = ui.inputTextHint("##search", "Search actors and bones", &self.search);
+    _ = ui.inputTextHint("##search", "Search actors, bones and shapes", &self.search);
     const text = self.searchText();
     for (store.actors) |*a| {
         if (!store.isLive(a)) continue;
@@ -383,6 +394,21 @@ fn drawWindow(self: *Posing, store: *poses.Store) void {
         if (ui.smallButton("Reset actor")) store.resetActor(a.id);
     }
 
+    // Tabs only when there's more than bones
+    if (a.shape_count == 0) return self.bonesTab(store, a);
+    const tabs = ui.tabBar("parts") orelse return;
+    defer tabs.end();
+    if (ui.tabItem("Bones", .{})) |t| {
+        defer t.end();
+        self.bonesTab(store, a);
+    }
+    if (ui.tabItem("Shapes", .{})) |t| {
+        defer t.end();
+        self.shapesTab(store, a);
+    }
+}
+
+fn bonesTab(self: *Posing, store: *poses.Store, a: *poses.Actor) void {
     if (ui.child("bones", .{ 0, ui.scaled(220) }, .{ .border = true })) |c| {
         defer c.end();
         self.boneList(store, a);
@@ -416,6 +442,66 @@ fn drawWindow(self: *Posing, store: *poses.Store) void {
     ui.textDisabled("In the bone's own axes. Double-click a box to type.", .{});
 }
 
+/// A slider for each blend shape. Linked, one stands for every mesh's shape of the same name.
+fn shapesTab(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
+    _ = ui.checkbox("Same name on every mesh", &self.link_shapes);
+    ui.tooltip("One slider for each name, so the lashes blink along with the face.", .{});
+    ui.sameLine();
+    _ = ui.checkbox("Changed only", &self.changed_only);
+    if (store.hasShapeEdits(a.id)) {
+        ui.sameLine();
+        if (ui.smallButton("Reset shapes")) store.resetShapes(a.id);
+    }
+    ui.textDisabled("Ctrl-click a slider to type, even past 0 or 1. Right-click to reset.", .{});
+
+    const c = ui.child("shapes", .{ 0, 0 }, .{ .border = true }) orelse return;
+    defer c.end();
+    const text = self.searchText();
+    var buf: [112:0]u8 = undefined;
+    var shown: usize = 0;
+    for (0..a.shape_count) |i| {
+        const name = a.shape_names[i].get();
+        const mesh = a.shape_meshes[i].get();
+        const key = poses.shapeKey(name);
+        if (self.link_shapes) {
+            const seen = for (a.shape_names[0..i]) |*n| {
+                if (std.mem.eql(u8, poses.shapeKey(n.get()), key)) break true;
+            } else false;
+            if (seen) continue;
+        }
+        if (text.len > 0 and std.ascii.findIgnoreCase(name, text) == null) continue;
+        const changed = store.shapeEditFor(a.id, mesh, name) != null;
+        if (self.changed_only and !changed) continue;
+        shown += 1;
+
+        const edit_mesh = if (self.link_shapes) "" else mesh;
+        const edit_name = if (self.link_shapes) key else name;
+        const mark = if (changed) " *" else "";
+        const label = if (self.link_shapes)
+            std.fmt.bufPrintSentinel(&buf, "{s}{s}##{d}", .{ key, mark, i }, 0) catch continue
+        else
+            std.fmt.bufPrintSentinel(&buf, "{s} ({s}){s}##{d}", .{ name, mesh, mark, i }, 0) catch continue;
+        const row = ui.id(@as(i32, @intCast(i)));
+        defer row.end();
+        var weight = a.weights[i];
+        if (ui.sliderWith(label, &weight, 0, 1, .{ .format = "%.2f" })) {
+            // Linked, it has to win over each mesh's own
+            if (self.link_shapes) store.resetShapeOnMeshes(a.id, key);
+            if (store.shapeEdit(a.id, edit_mesh, edit_name)) |e| e.weight = weight else ui.textDisabled("Too many changed shapes", .{});
+        }
+        if (ui.contextMenu("reset")) |m| {
+            defer m.end();
+            if (ui.menuItem("Reset", .{ .enabled = changed })) {
+                if (self.link_shapes) store.resetShapeOnMeshes(a.id, key);
+                store.resetShape(a.id, edit_mesh, edit_name);
+            }
+        }
+    }
+    if (shown == 0) {
+        if (self.changed_only) ui.textDisabled("No changed shapes.", .{}) else ui.textDisabled("No shapes called that.", .{});
+    }
+}
+
 /// The bones as an indented tree, with posed ones marked. Only the ones that match while
 /// searching, still indented.
 fn boneList(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
@@ -442,10 +528,11 @@ fn searchText(self: *const Posing) []const u8 {
     return std.mem.trim(u8, std.mem.sliceTo(&self.search, 0), " \t");
 }
 
-/// By its name, or one of its bones'.
+/// By its name, or one of its bones' or shapes'.
 fn matchesActor(a: *const poses.Actor, text: []const u8) bool {
     if (text.len == 0 or std.ascii.findIgnoreCase(a.name.get(), text) != null) return true;
     for (a.names[0..a.count]) |*n| if (std.ascii.findIgnoreCase(n.get(), text) != null) return true;
+    for (a.shape_names[0..a.shape_count]) |*n| if (std.ascii.findIgnoreCase(n.get(), text) != null) return true;
     return false;
 }
 

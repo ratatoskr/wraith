@@ -12,6 +12,8 @@ const Mat4 = math.Mat4;
 pub const max_bones = 512;
 pub const max_actors = 32;
 pub const max_edits = 256;
+pub const max_shapes = 512;
+pub const max_shape_edits = 256;
 /// Render frames an actor stays listed after the game last posed it.
 pub const stale_frames = 120;
 
@@ -66,6 +68,28 @@ pub const Edit = struct {
         return std.meta.eql(e.rotation, Vec3.zero) and std.meta.eql(e.position, Vec3.zero) and std.meta.eql(e.scale, Vec3.one);
     }
 };
+
+/// One blend shape's weight, set outright. With no mesh it's every mesh's shape of that name.
+pub const ShapeEdit = struct {
+    actor: u64,
+    /// Empty for every mesh
+    mesh: Name = .{},
+    /// The whole name for one mesh, or `shapeKey` of it for every mesh
+    shape: Name,
+    weight: f32 = 0,
+
+    fn fits(e: *const ShapeEdit, mesh: []const u8, shape: []const u8) bool {
+        if (e.mesh.len == 0) return e.shape.eql(shapeKey(shape));
+        return e.mesh.eql(mesh) and e.shape.eql(shape);
+    }
+};
+
+/// What a shape's called once what's before the last dot is gone, so `Face.blink` and `Lashes.blink`
+/// count as the same, the way exporters often name them.
+pub fn shapeKey(name: []const u8) []const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return name;
+    return if (dot + 1 < name.len) name[dot + 1 ..] else name;
+}
 
 pub fn euler(degrees: Vec3) Quat {
     const x = Quat.fromAxisAngle(Vec3.unit_x, math.degToRad(degrees.x));
@@ -135,6 +159,14 @@ pub const Actor = struct {
     /// What it's held at while frozen, from before the edits. 0 means take the next frame's
     base_count: u32 = 0,
     base: [max_bones]Mat4 = undefined,
+    shape_count: u32 = 0,
+    shape_names: [max_shapes]Name = undefined,
+    shape_meshes: [max_shapes]Name = undefined,
+    /// As posed
+    weights: [max_shapes]f32 = undefined,
+    /// Like `base`, for the weights
+    shape_base_count: u32 = 0,
+    shape_base: [max_shapes]f32 = undefined,
 
     /// Where a bone is in the world.
     pub fn position(a: *const Actor, bone: usize) Vec3 {
@@ -153,6 +185,8 @@ pub const Store = struct {
     actors: []Actor,
     edits: [max_edits]Edit = undefined,
     edit_count: usize = 0,
+    shape_edits: [max_shape_edits]ShapeEdit = undefined,
+    shape_edit_count: usize = 0,
     /// Counts render frames
     frame: u64 = 0,
     view: Mat4 = .identity,
@@ -217,6 +251,97 @@ pub const Store = struct {
         if (slot) |a| @memcpy(a.world[0..count], world);
     }
 
+    /// `shapes` are anything with a `name` and a `mesh`, and `weights` one for each. After `pose`
+    /// for the same actor, which gives it its slot.
+    pub fn shape(s: *Store, id: u64, shapes: anytype, weights: []f32) void {
+        const count: u32 = @intCast(@min(shapes.len, weights.len, max_shapes));
+        const w = weights[0..count];
+        const slot = s.byId(id);
+        if (slot) |a| {
+            if (a.shape_count != count) a.shape_base_count = 0;
+            a.shape_count = count;
+            for (shapes[0..count], 0..) |sh, i| {
+                a.shape_names[i] = .init(textOf(sh.name));
+                a.shape_meshes[i] = .init(textOf(sh.mesh));
+            }
+            if (a.frozen) {
+                if (a.shape_base_count == count) @memcpy(w, a.shape_base[0..count]) else {
+                    @memcpy(a.shape_base[0..count], w);
+                    a.shape_base_count = count;
+                }
+            }
+        }
+        if (s.hasShapeEdits(id)) for (shapes[0..count], w) |sh, *weight| {
+            // Cut short like the names the window has, so long ones still match
+            const mesh: Name = .init(textOf(sh.mesh));
+            const name: Name = .init(textOf(sh.name));
+            if (s.shapeEditFor(id, mesh.get(), name.get())) |e| weight.* = e.weight;
+        };
+        if (slot) |a| @memcpy(a.weights[0..count], w);
+    }
+
+    /// What goes on a shape: its mesh's own edit, else one for every mesh.
+    pub fn shapeEditFor(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) ?*ShapeEdit {
+        var every: ?*ShapeEdit = null;
+        for (s.shape_edits[0..s.shape_edit_count]) |*e| {
+            if (e.actor != actor or !e.fits(mesh, shape_name)) continue;
+            if (e.mesh.len > 0) return e;
+            every = e;
+        }
+        return every;
+    }
+
+    /// Exactly this one, by mesh, empty for every mesh, and shape.
+    pub fn findShapeEdit(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) ?*ShapeEdit {
+        for (s.shape_edits[0..s.shape_edit_count]) |*e| {
+            if (e.actor == actor and e.mesh.eql(mesh) and e.shape.eql(shape_name)) return e;
+        }
+        return null;
+    }
+
+    /// Made if it isn't there. Null when there are too many.
+    pub fn shapeEdit(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) ?*ShapeEdit {
+        if (s.findShapeEdit(actor, mesh, shape_name)) |e| return e;
+        if (s.shape_edit_count == max_shape_edits) return null;
+        const e = &s.shape_edits[s.shape_edit_count];
+        e.* = .{ .actor = actor, .mesh = .init(mesh), .shape = .init(shape_name) };
+        s.shape_edit_count += 1;
+        return e;
+    }
+
+    pub fn resetShape(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) void {
+        const e = s.findShapeEdit(actor, mesh, shape_name) orelse return;
+        s.shape_edit_count -= 1;
+        e.* = s.shape_edits[s.shape_edit_count];
+    }
+
+    /// Every mesh's own edit of a shape by its key, so one for every mesh isn't hidden by them.
+    pub fn resetShapeOnMeshes(s: *Store, actor: u64, key: []const u8) void {
+        var i: usize = 0;
+        while (i < s.shape_edit_count) {
+            const e = &s.shape_edits[i];
+            if (e.actor == actor and e.mesh.len > 0 and std.mem.eql(u8, shapeKey(e.shape.get()), key)) {
+                s.shape_edit_count -= 1;
+                e.* = s.shape_edits[s.shape_edit_count];
+            } else i += 1;
+        }
+    }
+
+    pub fn resetShapes(s: *Store, actor: u64) void {
+        var i: usize = 0;
+        while (i < s.shape_edit_count) {
+            if (s.shape_edits[i].actor == actor) {
+                s.shape_edit_count -= 1;
+                s.shape_edits[i] = s.shape_edits[s.shape_edit_count];
+            } else i += 1;
+        }
+    }
+
+    pub fn hasShapeEdits(s: *const Store, actor: u64) bool {
+        for (s.shape_edits[0..s.shape_edit_count]) |e| if (e.actor == actor) return true;
+        return false;
+    }
+
     /// Its own slot, a free one, or the longest gone that has nothing to lose. Null when they're all in use.
     fn slotFor(s: *Store, id: u64) ?*Actor {
         for (s.actors) |*a| if (a.used and a.id == id) return a;
@@ -267,11 +392,17 @@ pub const Store = struct {
                 s.edits[i] = s.edits[s.edit_count];
             } else i += 1;
         }
+        s.resetShapes(actor);
     }
 
+    /// Bones or shapes.
     pub fn hasEdits(s: *const Store, actor: u64) bool {
         for (s.edits[0..s.edit_count]) |e| if (e.actor == actor) return true;
-        return false;
+        return s.hasShapeEdits(actor);
+    }
+
+    pub fn anyEdits(s: *const Store) bool {
+        return s.edit_count > 0 or s.shape_edit_count > 0;
     }
 
     pub fn anyFrozen(s: *const Store) bool {
@@ -398,4 +529,70 @@ test "an owner going takes its actors' edits with it, and no one else's" {
     frame = .{ at(0, 0, 0), at(0, 1, 0) };
     store.pose(7, "Rean", &bones, &frame, .identity);
     try testing.expect(frame[1].getTranslation().approxEql(.init(0, 1, 0), 1e-5));
+}
+
+const TestShape = struct { name: []const u8, mesh: []const u8 };
+
+test "a shape edit for every mesh goes on each that has it, and a mesh's own wins" {
+    var store: Store = try .init(testing.allocator);
+    defer store.deinit(testing.allocator);
+    const bones = [_]TestBone{.{ .name = "root", .parent = -1 }};
+    var frame = [_]Mat4{at(0, 0, 0)};
+    store.pose(7, "Rean", &bones, &frame, .identity);
+    const shapes = [_]TestShape{
+        .{ .name = "Face.blink", .mesh = "Face" },
+        .{ .name = "Lashes.blink", .mesh = "Lashes" },
+        .{ .name = "smile", .mesh = "Face" },
+    };
+
+    store.shapeEdit(7, "", "blink").?.weight = 1;
+    var weights = [_]f32{ 0.2, 0.3, 0.4 };
+    store.shape(7, &shapes, &weights);
+    try testing.expectEqualSlices(f32, &.{ 1, 1, 0.4 }, &weights);
+    try testing.expectEqualSlices(f32, &.{ 1, 1, 0.4 }, store.byId(7).?.weights[0..3]);
+
+    store.shapeEdit(7, "Lashes", "Lashes.blink").?.weight = 0.5;
+    weights = .{ 0.2, 0.3, 0.4 };
+    store.shape(7, &shapes, &weights);
+    try testing.expectEqualSlices(f32, &.{ 1, 0.5, 0.4 }, &weights);
+
+    // Another actor's the same names aren't touched
+    store.pose(8, "Agnes", &bones, &frame, .identity);
+    var other = [_]f32{ 0.2, 0.3, 0.4 };
+    store.shape(8, &shapes, &other);
+    try testing.expectEqualSlices(f32, &.{ 0.2, 0.3, 0.4 }, &other);
+
+    store.resetShapeOnMeshes(7, "blink");
+    weights = .{ 0.2, 0.3, 0.4 };
+    store.shape(7, &shapes, &weights);
+    try testing.expectEqualSlices(f32, &.{ 1, 1, 0.4 }, &weights);
+
+    store.resetActor(7);
+    weights = .{ 0.2, 0.3, 0.4 };
+    store.shape(7, &shapes, &weights);
+    try testing.expectEqualSlices(f32, &.{ 0.2, 0.3, 0.4 }, &weights);
+}
+
+test "freezing holds the weights from before the edits" {
+    var store: Store = try .init(testing.allocator);
+    defer store.deinit(testing.allocator);
+    const bones = [_]TestBone{.{ .name = "root", .parent = -1 }};
+    var frame = [_]Mat4{at(0, 0, 0)};
+    const shapes = [_]TestShape{ .{ .name = "blink", .mesh = "Face" }, .{ .name = "smile", .mesh = "Face" } };
+    store.pose(7, "Rean", &bones, &frame, .identity);
+    store.byId(7).?.frozen = true;
+    store.shapeEdit(7, "Face", "smile").?.weight = 0.9;
+
+    var weights = [_]f32{ 0.1, 0.1 };
+    store.shape(7, &shapes, &weights);
+    // The game blinks on, but it's held, edit and all
+    weights = .{ 1, 0 };
+    store.shape(7, &shapes, &weights);
+    try testing.expectEqualSlices(f32, &.{ 0.1, 0.9 }, &weights);
+}
+
+test "a shape's key is what's after its last dot" {
+    try testing.expectEqualStrings("blink", shapeKey("Face_BS.blink"));
+    try testing.expectEqualStrings("blink", shapeKey("blink"));
+    try testing.expectEqualStrings("odd.", shapeKey("odd."));
 }
