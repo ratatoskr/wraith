@@ -609,6 +609,9 @@ fn look(self: *Camera, options: Options, pad: ?tuft_input.Axes, dt: f32, typing:
         .always => true,
     };
     const looking = button and (self.holding or !uiHasMouse());
+    // Clicking out in the game to look around is like clicking away from a window, so the keys
+    // move the camera rather than going to whatever window last had focus
+    if (looking and !self.holding and options.mouse_look != .always) ui.clearWindowFocus();
     self.holdMouse(looking);
     self.hideFromGame(self.hiding(options));
     if (looking) {

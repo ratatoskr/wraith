@@ -194,6 +194,7 @@ pub const captureKeyboard = tuft_ui.captureKeyboard;
 pub const getIO = tuft_ui.getIO;
 pub const getVersion = tuft_ui.getVersion;
 pub const setWindowFocus = tuft_ui.setWindowFocus;
+pub const clearWindowFocus = tuft_ui.clearWindowFocus;
 pub const setNextWindowFocus = tuft_ui.setNextWindowFocus;
 pub const setNextWindowCollapsed = tuft_ui.setNextWindowCollapsed;
 pub const showDemoWindow = tuft_ui.showDemoWindow;
