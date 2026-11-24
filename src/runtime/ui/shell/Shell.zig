@@ -472,7 +472,8 @@ fn startCentred(_: *anyopaque) void {
 /// Straight into the overlay, without letting go of the input, so the welcome leads somewhere.
 pub fn openAfterWelcome(self: *Shell) void {
     self.hub.open = true;
-    self.hub.dim.takeOver(self.overlay, &self.welcome.dim);
+    self.hub.dim.takeOver(&self.welcome.dim);
+    self.hub.hold.takeOver(self.overlay, &self.welcome.hold);
     self.welcome.open = false;
     self.welcome.leaving = false;
 }
@@ -885,6 +886,43 @@ const tests = struct {
         for (0..3) |_| rig.present();
         try testing.expectEqual(0, rig.overlay.takes.getPtrConst(.gamepad).load(.acquire));
         rig.overlay.ui_takes_gamepad.store(false, .release);
+    }
+
+    test "a game that leaves the mouse free keeps it while the hub's open" {
+        var rig: Rig = undefined;
+        try rig.init(.{});
+        defer rig.deinit();
+        const shell = try Shell.create(testing.allocator, rig.overlay, rig.keybinds, .{});
+        defer shell.destroy();
+        rig.present();
+        rig.overlay.setMouseFreeHint(true);
+        defer rig.overlay.setMouseFreeHint(false);
+
+        shell.hub.open = true;
+        for (0..3) |_| rig.present();
+        try testing.expect(!rig.overlay.taken(.keyboard));
+        try testing.expect(!rig.overlay.taken(.mouse));
+        try testing.expect(!rig.overlay.cursorRequested());
+
+        // The player's setting wins, and counts while it's open
+        rig.overlay.setMouseFreeChoice(.taken);
+        rig.present();
+        try testing.expect(rig.overlay.taken(.mouse));
+        rig.overlay.setMouseFreeChoice(.auto);
+        rig.present();
+        try testing.expect(!rig.overlay.taken(.mouse));
+
+        shell.hub.open = false;
+        for (0..3) |_| rig.present();
+        try testing.expectEqual(0, rig.overlay.takes.getPtrConst(.mouse).load(.acquire));
+
+        // The welcome has to be answered, so it takes them anyway
+        shell.welcome.open = true;
+        for (0..3) |_| rig.present();
+        try testing.expect(rig.overlay.taken(.keyboard));
+        try testing.expect(rig.overlay.taken(.mouse));
+        shell.welcome.dismiss(rig.overlay);
+        try testing.expect(!rig.overlay.taken(.mouse));
     }
 
     test "the bar's tiles move within their group and stay put" {

@@ -138,7 +138,7 @@ const PressKey = struct {
 const Options = struct {
     speed: f32,
     smoothing: f32,
-    take_input: bool,
+    hide: Hide,
     sensitivity: f32,
     mouse_look: MouseLook,
     gamepad: bool,
@@ -150,6 +150,21 @@ const min_distance = 0.2;
 const max_distance = 100;
 
 const MouseLook = enum { right, middle, left, always };
+
+/// What the game stops seeing while it's on.
+const Hide = enum { controls, everything, nothing };
+const hide_options = [_][]const u8{ "Only the camera's controls", "Everything", "Nothing" };
+
+/// What it's hidden from the game, to change only what changed.
+const Hidden = struct {
+    everything: bool = false,
+    keys: bool = false,
+    button: ?tuft_input.MouseButton = null,
+    wheel: bool = false,
+    /// While looking, or always for mouse-look that's always on
+    mouse: bool = false,
+    pad: bool = false,
+};
 const mouse_look_options = [_][]const u8{ "While the right button's held", "While the middle button's held", "While the left button's held", "Always" };
 
 const Corner = enum { top_left, top_right, bottom_left, bottom_right };
@@ -161,7 +176,7 @@ keybinds: *Keybinds,
 shared: Shared = .{},
 speed: *Registry.Setting = undefined,
 smoothing: *Registry.Setting = undefined,
-take_input: *Registry.Setting = undefined,
+hide_from_game: *Registry.Setting = undefined,
 sensitivity: *Registry.Setting = undefined,
 mouse_look: *Registry.Setting = undefined,
 gamepad: *Registry.Setting = undefined,
@@ -184,7 +199,7 @@ added_len: usize = 0,
 // Render thread only from here down
 
 on: bool = false,
-taken: bool = false,
+hidden: Hidden = .{},
 /// Where the pose is heading, which it eases toward
 goal: rig.Pose = undefined,
 velocity: V3 = @splat(0),
@@ -208,7 +223,7 @@ pub fn init(self: *Camera, registry: *Registry, overlay: *Overlay, keybinds: *Ke
     errdefer self.removeSettings();
     self.speed = try self.number("speed", "Speed", "In metres a second. Faster and Slower change it while they're held, and so does the mouse wheel.", 3, 0.1, 100);
     self.smoothing = try self.number("smoothing", "Smoothing", "Seconds it takes to catch up with the controls. 0 is instant.", 0.3, 0, 2);
-    self.take_input = try self.add("take_input", "Keep the game from seeing the controls", "", .{ .toggle = true });
+    self.hide_from_game = try self.add("hide_from_game", "What the game stops seeing while it's on", "Only its controls leaves the rest of the keyboard and mouse to the game: the keys bound here, the button you look with and the wheel. Everything takes them all, for games that read input in ways that get past that.", .{ .choice = .{ .default = hide_options[0], .options = &hide_options } });
     self.mouse_look = try self.add("mouse_look", "Look with the mouse", "", .{ .choice = .{ .default = mouse_look_options[0], .options = &mouse_look_options } });
     self.sensitivity = try self.number("sensitivity", "Mouse sensitivity", "Degrees a pixel.", 0.15, 0.01, 1);
     self.gamepad = try self.add("gamepad", "Use a controller", "The left stick moves, the right stick looks, and the triggers go down and up. Its buttons are with the keys, like RB for Faster.", .{ .toggle = false });
@@ -218,7 +233,7 @@ pub fn init(self: *Camera, registry: *Registry, overlay: *Overlay, keybinds: *Ke
     inline for (comptime std.enums.values(Hold)) |h| {
         const name, const keys = h.def();
         const slot = self.holds.getPtr(h);
-        // The game still sees them while the camera's off. Taking the input hides them while it's on
+        // The game still sees them while the camera's off, and hiding its controls hides them while it's on
         slot.setting = self.track(try self.registry.add(.{
             .id = idOf(@tagName(h)),
             .name = name,
@@ -249,7 +264,7 @@ pub fn deinit(self: *Camera) void {
     self.shared.on = false;
     self.shared.release();
     self.on_flag.store(false, .release);
-    self.takeInput(false);
+    self.hideFromGame(.{});
     self.holdMouse(false);
     self.removeSettings();
 }
@@ -391,7 +406,7 @@ fn turnOn(self: *Camera) void {
     self.orbiting = false;
     self.velocity = @splat(0);
     self.last_ns = core.timing.now();
-    self.takeInput(self.readOptions().take_input);
+    self.hideFromGame(self.hiding(self.readOptions()));
     self.toast(.info, "On");
 }
 
@@ -401,8 +416,8 @@ fn turnOff(self: *Camera) void {
     self.shared.release();
     self.on = false;
     self.on_flag.store(false, .release);
-    self.takeInput(false);
     self.holdMouse(false);
+    self.hideFromGame(.{});
     self.toast(.info, "Off");
 }
 
@@ -440,12 +455,50 @@ fn holdMouse(self: *Camera, hold: bool) void {
     self.holding = hold;
 }
 
-fn takeInput(self: *Camera, take: bool) void {
-    if (self.taken == take) return;
-    self.overlay.take(.keyboard, take);
-    self.overlay.take(.mouse, take);
-    self.overlay.take(.gamepad, take);
-    self.taken = take;
+/// What options hides while it's on.
+fn hiding(self: *const Camera, options: Options) Hidden {
+    return switch (options.hide) {
+        .nothing => .{},
+        .everything => .{ .everything = true },
+        .controls => .{
+            .keys = true,
+            .button = switch (options.mouse_look) {
+                .right => .right,
+                .middle => .middle,
+                .left => .left,
+                .always => null,
+            },
+            .wheel = true,
+            // The cursor goes back to the middle each frame while looking, which the game shouldn't see
+            .mouse = options.mouse_look == .always or self.holding,
+            .pad = options.gamepad,
+        },
+    };
+}
+
+/// Changes only what's different from what's hidden now.
+fn hideFromGame(self: *Camera, want: Hidden) void {
+    const have = self.hidden;
+    const o = self.overlay;
+    if (want.everything != have.everything) {
+        o.take(.keyboard, want.everything);
+        o.take(.mouse, want.everything);
+        o.take(.gamepad, want.everything);
+    }
+    if (want.keys != have.keys) {
+        const consume: ?bool = if (want.keys) true else null;
+        for (&self.holds.values) |*h| self.registry.setConsume(h.setting, consume);
+        // The toggle hides its key always
+        for (&self.presses.values) |*p| if (p.which != .toggle) self.registry.setConsume(p.setting, consume);
+    }
+    if (want.button != have.button) {
+        if (have.button) |b| o.consumeButton(b, false);
+        if (want.button) |b| o.consumeButton(b, true);
+    }
+    if (want.wheel != have.wheel) o.consumeWheel(want.wheel);
+    if (want.mouse != have.mouse) o.take(.mouse, want.mouse);
+    if (want.pad != have.pad) o.take(.gamepad, want.pad);
+    self.hidden = want;
 }
 
 fn toast(self: *Camera, kind: ui.Toasts.Kind, text: []const u8) void {
@@ -457,7 +510,7 @@ fn readOptions(self: *Camera) Options {
     return .{
         .speed = @floatCast(r.get(self.speed).number),
         .smoothing = @floatCast(r.get(self.smoothing).number),
-        .take_input = r.get(self.take_input).toggle,
+        .hide = choice(Hide, r.get(self.hide_from_game).choice, &hide_options),
         .sensitivity = @floatCast(r.get(self.sensitivity).number),
         .mouse_look = choice(MouseLook, r.get(self.mouse_look).choice, &mouse_look_options),
         .gamepad = r.get(self.gamepad).toggle,
@@ -490,7 +543,6 @@ pub fn tick(self: *Camera) void {
     const dt: f32 = @floatCast(@min(@as(f64, @floatFromInt(now -| self.last_ns)) / std.time.ns_per_s, 0.1));
     self.last_ns = now;
     const options = self.readOptions();
-    self.takeInput(options.take_input);
 
     self.shared.acquire();
     const basis = self.shared.basis;
@@ -558,6 +610,7 @@ fn look(self: *Camera, options: Options, pad: ?tuft_input.Axes, dt: f32, typing:
     };
     const looking = button and (self.holding or !uiHasMouse());
     self.holdMouse(looking);
+    self.hideFromGame(self.hiding(options));
     if (looking) {
         const pushed = self.overlay.mouseMotion();
         const k = std.math.degreesToRadians(options.sensitivity);

@@ -128,6 +128,10 @@ trait Ui {
     // Shows the mouse cursor while any plugin asks
     void showCursor(bool show);
     void setCursorHint(CursorHint hint);
+    // The game leaves its cursor free while it shows, like FFXIV, so Wraith's windows leave the
+    // game the mouse and keyboard, and only take clicks over them and keys typed into them. For
+    // game plugins. The player's setting can say otherwise
+    void setMouseFree(bool free);
     // Keeps the game from seeing it while any plugin asks
     void takeInput(InputDevice device, bool take);
     bool inputTaken(InputDevice device);

@@ -301,12 +301,15 @@ fn checkChoices(s: SalSchema, a: *const SalSchema.Annotation, source: []const u8
     const id = if (a.args.len > 1) a.args[1].name() orelse return diag.fail(source, a.at, usage, .{}) else "id";
     const name = if (a.args.len > 2) a.args[2].name() orelse return diag.fail(source, a.at, usage, .{}) else "name";
     const path = a.args[0].string;
-    var parts = std.mem.splitScalar(u8, path, '.');
-    const root = parts.first();
+    // Its type can be in a namespace, so it's the longest start that names one
+    const dot = s.typePrefix(path) orelse std.mem.indexOfScalar(u8, path, '.') orelse path.len;
+    var parts = std.mem.splitScalar(u8, if (dot < path.len) path[dot + 1 ..] else "", '.');
+    const root = path[0..dot];
     var t = s.findType(root) orelse return diag.fail(source, a.at, "[Choices] starts at a type, and there's no {s}", .{root});
     if (s.staticOf(t, "instance") == null) return diag.fail(source, a.at, "[Choices] starts at a type with [Instance], and {s} has none", .{root});
     var list: ?SalSchema.Ref = null;
     while (parts.next()) |part| {
+        if (part.len == 0) continue;
         if (list != null) return diag.fail(source, a.at, "[Choices] path {s} goes on past its list", .{path});
         const f = s.findField(t, part) orelse return diag.fail(source, a.at, "{s} has no field {s}", .{ t.name, part });
         var ty = f.type;

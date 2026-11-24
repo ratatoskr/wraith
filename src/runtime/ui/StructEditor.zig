@@ -298,7 +298,7 @@ pub fn choicesOf(schema: *const Schema, a: *const Schema.Annotation) []const Twe
 fn readChoices(schema: *const Schema, a: *const Schema.Annotation, path: []const u8, arena: std.mem.Allocator) ![]const TweakFields.Choice {
     const id_field = if (a.args.len > 1) a.args[1].name() orelse return error.BadChoices else "id";
     const name_field = if (a.args.len > 2) a.args[2].name() orelse return error.BadChoices else "name";
-    const dot = std.mem.indexOfScalar(u8, path, '.') orelse return error.BadChoices;
+    const dot = schema.typePrefix(path) orelse return error.BadChoices;
     const type_name = path[0..dot];
     const ptr = instanceOf(schema, type_name) orelse return error.NotThere;
     return readList(Ref.of(schema, type_name, ptr), path[dot + 1 ..], id_field, name_field, arena);

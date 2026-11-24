@@ -47,6 +47,11 @@ registry: ?*Registry,
 overlay_scale: ?*Registry.Setting = null,
 overlay_viewports: ?*Registry.Setting = null,
 allow_gamepad_capture: ?*Registry.Setting = null,
+mouse_free: ?*Registry.Setting = null,
+
+/// What `wraith.mouse_free`'s choices mean, in order.
+const mouse_free_options = [_][]const u8{ "As the game's plugin says", "The game keeps them", "Wraith takes them" };
+const mouse_free_values = [_]Overlay.MouseFree{ .auto, .free, .taken };
 
 /// `game_settings` must outlive the game, since what it does is saved to it.
 pub const Options = struct {
@@ -67,6 +72,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, game_settings: *core.Con
     self.overlay_scale = null;
     self.overlay_viewports = null;
     self.allow_gamepad_capture = null;
+    self.mouse_free = null;
     errdefer self.removeSettings();
     var scale: f32 = 1.25;
     var viewports = true;
@@ -147,6 +153,16 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, game_settings: *core.Con
             .kind = .{ .toggle = true },
         }, .{ .changed = .{ .ctx = self, .call = allowGamepadChanged } });
         self.overlay.setEnabled(.gamepad, r.get(self.allow_gamepad_capture.?).toggle);
+        self.mouse_free = try r.add(.{
+            .id = "wraith.mouse_free",
+            .name = "The mouse and keyboard while Wraith's open",
+            .help = "Some games leave their cursor free, like FFXIV, so Wraith can leave them the mouse and keyboard while its windows are open. Wraith then only takes clicks over its windows and keys typed into them.",
+            .group = Settings.group,
+            .section = "Controls",
+            .scope = .game,
+            .kind = .{ .choice = .{ .default = mouse_free_options[0], .options = &mouse_free_options } },
+        }, .{ .changed = .{ .ctx = self, .call = mouseFreeChanged } });
+        self.applyMouseFree();
     }
 
     self.shell = try Shell.create(allocator, self.overlay, self.keybinds, .{
@@ -195,12 +211,28 @@ fn allowGamepadChanged(ctx: *anyopaque, setting: *Registry.Setting) void {
     self.overlay.setEnabled(.gamepad, r.get(setting).toggle);
 }
 
+fn mouseFreeChanged(ctx: *anyopaque, _: *Registry.Setting) void {
+    const self: *Game = @ptrCast(@alignCast(ctx));
+    self.applyMouseFree();
+}
+
+fn applyMouseFree(self: *Game) void {
+    const r = self.registry orelse return;
+    const s = self.mouse_free orelse return;
+    const picked = r.get(s).choice;
+    for (mouse_free_options, mouse_free_values) |o, v| {
+        if (std.mem.eql(u8, o, picked)) return self.overlay.setMouseFreeChoice(v);
+    }
+}
+
 /// Call after plugins are gone.
 pub fn destroy(self: *Game) void {
     self.shell.destroy();
     // Its change hook uses the overlay
     if (self.registry) |r| if (self.allow_gamepad_capture) |s| r.remove(s);
     self.allow_gamepad_capture = null;
+    if (self.registry) |r| if (self.mouse_free) |s| r.remove(s);
+    self.mouse_free = null;
     // Anything still registered stops using the game's keys
     if (self.registry) |r| r.setKeybinds(null);
     host.keybinds.setKeybinds(null);
@@ -237,7 +269,9 @@ fn removeSettings(self: *Game) void {
     if (self.overlay_scale) |s| r.remove(s);
     if (self.overlay_viewports) |s| r.remove(s);
     if (self.allow_gamepad_capture) |s| r.remove(s);
+    if (self.mouse_free) |s| r.remove(s);
     self.overlay_scale = null;
     self.overlay_viewports = null;
     self.allow_gamepad_capture = null;
+    self.mouse_free = null;
 }

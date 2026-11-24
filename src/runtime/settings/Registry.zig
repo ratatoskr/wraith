@@ -143,6 +143,8 @@ pub const Setting = struct {
     hooks: Hooks,
     /// Key settings with a key, once bound.
     binding: ?*Keybinds.Binding = null,
+    /// Overrides its key's `consume` while it's set, see `setConsume`. 0 leaves it, 1 is off, 2 on.
+    consume_now: std.atomic.Value(u8) = .init(0),
     /// Taken out, but kept till the registry goes so nobody holding it reads freed memory.
     removed: bool = false,
     /// Its change hook running, which `remove` waits for.
@@ -450,10 +452,30 @@ fn bindKey(self: *Registry, s: *Setting) void {
     // Named in full, like `Mira: set 999999`, since keys are listed without their headings
     var name_buf: [256]u8 = undefined;
     const name = if (s.def.section.len > 0) std.fmt.bufPrint(&name_buf, "{s}: {s}", .{ s.def.section, s.def.name }) catch s.def.name else s.def.name;
-    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = name, .keys = c, .consume = key.consume, .while_typing = key.while_typing, .held = key.held }, s, Setting.fire) catch |err| blk: {
+    s.binding = keybinds.bindUnscoped(.{ .id = s.def.id, .name = name, .keys = c, .consume = consumes(s, key), .while_typing = key.while_typing, .held = key.held }, s, Setting.fire) catch |err| blk: {
         log.warn("Couldn't bind {f} for {s}: {t}", .{ c.first(), s.def.id, err });
         break :blk null;
     };
+}
+
+fn consumes(s: *const Setting, key: anytype) bool {
+    return switch (s.consume_now.load(.acquire)) {
+        1 => false,
+        2 => true,
+        else => key.consume,
+    };
+}
+
+/// Whether a key setting hides its key from the game, over what it was added with, like a mode's
+/// keys only while it's on. Null goes back to that. Any thread.
+pub fn setConsume(self: *Registry, s: *Setting, on: ?bool) void {
+    _ = self;
+    s.consume_now.store(if (on) |o| (if (o) 2 else 1) else 0, .release);
+    const key = switch (s.def.kind) {
+        .key => |k| k,
+        else => return,
+    };
+    if (s.binding) |b| b.setConsume(consumes(s, key));
 }
 
 /// Under the lock, or before anyone else has it.

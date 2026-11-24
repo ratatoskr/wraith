@@ -241,3 +241,42 @@ test "the game's camera goes through untouched till the free camera's on, then i
     try testing.expectEqual(50, state.position.x);
     try testing.expect(!photo.posing.active());
 }
+
+test "the free camera hides only its controls from the game, unless it's set to hide everything" {
+    const Rig = @import("../testing/Rig.zig");
+    const W = @import("wraith_api").wraith;
+    var rig: Rig = undefined;
+    try rig.init(.{});
+    defer rig.deinit();
+    const registry = try Registry.create(testing.allocator, .{ .keybinds = rig.keybinds });
+    defer registry.destroy();
+    const photo = try Photo.create(testing.allocator, registry, rig.overlay, rig.keybinds);
+    defer photo.destroy();
+    const cam = &photo.camera;
+    cam.world(.{ .up = .pos_y, .look = .pos_z, .left_handed = true, .metre = 1 });
+    var state: W.CamState = .{ .position = .{}, .aim = .rotation, .target = .{}, .up = .{ .y = 1 }, .rotation = .identity, .roll = 0, .fov = 1 };
+    cam.camera(&state);
+    rig.present(); // attaches
+
+    const forward = cam.holds.getPtrConst(.forward).setting.binding.?;
+    try testing.expect(!forward.consume.load(.acquire));
+    cam.flip();
+    // Its keys, the button it looks with and the wheel, and nothing else
+    try testing.expect(forward.consume.load(.acquire));
+    try testing.expectEqual(@import("tuft_input").Blocker.buttonBit(.right), rig.blocker.consume_buttons.load(.acquire));
+    try testing.expect(rig.blocker.consume_wheel.load(.acquire));
+    try testing.expect(!rig.overlay.taken(.keyboard));
+    try testing.expect(!rig.overlay.taken(.mouse));
+
+    try registry.set(cam.hide_from_game, .{ .choice = "Everything" });
+    rig.present();
+    try testing.expect(rig.overlay.taken(.keyboard));
+    try testing.expect(rig.overlay.taken(.mouse));
+    try testing.expect(!forward.consume.load(.acquire));
+    try testing.expectEqual(0, rig.blocker.consume_buttons.load(.acquire));
+
+    cam.flip();
+    rig.present();
+    try testing.expect(!rig.overlay.taken(.keyboard));
+    try testing.expect(!rig.blocker.consume_wheel.load(.acquire));
+}

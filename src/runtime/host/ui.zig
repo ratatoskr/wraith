@@ -175,6 +175,17 @@ fn deviceOf(device: api.InputDevice) Overlay.Device {
 }
 
 var hint_owner: Atomic(?*Loaded) = .init(null);
+var mouse_free_owner: Atomic(?*Loaded) = .init(null);
+
+/// Till the plugin that said so goes. Any thread.
+pub fn setMouseFree(loaded: *Loaded, free: bool) void {
+    const o = overlay orelse return;
+    const lease = requests.lease(&loaded.owner) orelse return;
+    defer lease.end();
+    _ = Requests.of(loaded) orelse return;
+    mouse_free_owner.store(if (free) loaded else null, .release);
+    o.setMouseFreeHint(free);
+}
 
 pub fn setCursorHint(loaded: *Loaded, hint: api.CursorHint) void {
     const o = overlay orelse return;
@@ -292,6 +303,9 @@ const Requests = struct {
     pub fn stop(self: *Requests) void {
         if (hint_owner.cmpxchgStrong(self.loaded, null, .acq_rel, .acquire) == null) {
             if (overlay) |o| o.setCursorHint(.auto);
+        }
+        if (mouse_free_owner.cmpxchgStrong(self.loaded, null, .acq_rel, .acquire) == null) {
+            if (overlay) |o| o.setMouseFreeHint(false);
         }
         if (self.shows_cursor.swap(false, .acq_rel)) {
             if (overlay) |o| o.requestCursor(false);

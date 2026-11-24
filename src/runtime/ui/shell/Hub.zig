@@ -1,6 +1,6 @@
 //! The Wraith overlay's bar. The overlay key slides it in from the bottom of the screen, or the
 //! top, with buttons for Wraith's windows, plugins' and the workbench. It holds the mouse and
-//! keyboard while it's up. The windows are the shell's, in a `ui.WindowSystem`, so they stay up
+//! keyboard while it's up, unless the game leaves its mouse free. The windows are the shell's, in a `ui.WindowSystem`, so they stay up
 //! till they're closed and the bar just opens and closes them. Tiles drag about within their group,
 //! or move from their right-click menu, and the order's kept. Render thread.
 
@@ -13,11 +13,13 @@ const ui = @import("wraith_ui");
 const MenuItems = @import("../MenuItems.zig");
 const icons = @import("../fonts.zig").icons;
 const Dim = @import("Dim.zig");
+const UiHold = @import("UiHold.zig");
 const Shell = @import("Shell.zig");
 
 open: bool = false,
-/// The bar's slide, and holding the input while it's up. Nothing's drawn.
+/// The bar's slide. Nothing's drawn.
 dim: Dim = .{},
+hold: UiHold = .{},
 /// Last frame's, to slide it by.
 bar_height: f32 = 0,
 /// Last frame, so Escape only closes it when no window has the keys.
@@ -85,7 +87,8 @@ pub fn toggle(self: *Hub) void {
 }
 
 pub fn draw(self: *Hub, shell: *Shell) void {
-    const fade = self.dim.update(shell.overlay, self.open, .none, "##wraith.hub");
+    self.hold.set(shell.overlay, self.open);
+    const fade = self.dim.update(self.open, .none, "##wraith.hub");
     const tweaks = &shell.windows.tweaks;
     if (!tweaks.window.open) tweaks.drawOnScreen(shell, self.open);
     if (fade == 0) return;
@@ -101,7 +104,7 @@ pub fn draw(self: *Hub, shell: *Shell) void {
 }
 
 pub fn deinit(self: *Hub, shell: *Shell) void {
-    self.dim.release(shell.overlay);
+    self.hold.release(shell.overlay);
     self.reorder.deinit();
     self.order.deinit();
 }

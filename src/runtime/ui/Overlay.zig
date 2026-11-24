@@ -107,6 +107,14 @@ holds: Atomic(u32) = .init(0),
 holding: Atomic(bool) = .init(false),
 /// Off leaves a device with the game, whoever takes it and whatever ImGui wants.
 enabled: std.EnumArray(Device, Atomic(bool)) = .initFill(.init(true)),
+/// The game leaves its cursor free while it shows, like FFXIV, so Wraith's windows don't take the
+/// mouse and keyboard from it. What plugins say, then the player's setting over it.
+mouse_free_hint: Atomic(bool) = .init(false),
+mouse_free_choice: Atomic(MouseFree) = .init(.auto),
+/// Mouse buttons whose presses are hidden from the game while the rest stays its, counted per
+/// button. See `consumeButton`.
+consumes: std.EnumArray(tuft_input.MouseButton, Atomic(u32)) = .initFill(.init(0)),
+consumes_wheel: Atomic(u32) = .init(0),
 /// What ImGui is using right now. Written after each frame, read on the window thread.
 wants: std.EnumArray(Device, Atomic(bool)) = .initFill(.init(false)),
 /// Whether the overlay's own UI takes controllers while it's open. From the shell's settings.
@@ -215,6 +223,8 @@ pub fn destroy(self: *Overlay) void {
     self.subscriptions.deinit();
     _ = self.queue.close();
     self.blocker.capture(.empty);
+    self.blocker.consumeButtons(0);
+    self.blocker.consumeWheel(false);
 
     // Saves imgui.ini, here since ImGui doesn't write it itself
     self.saveIniNow();
@@ -288,6 +298,58 @@ pub fn mouseMotion(self: *const Overlay) input.Point {
 pub fn setEnabled(self: *Overlay, device: Device, on: bool) void {
     self.enabled.getPtr(device).store(on, .release);
     self.updateCapture();
+    if (device == .mouse) self.updateConsumed();
+}
+
+/// Whether the game leaves the mouse free, as the player's setting picks.
+pub const MouseFree = enum(u8) {
+    /// As the game's plugin says
+    auto,
+    free,
+    taken,
+};
+
+/// What game plugins say. Any thread.
+pub fn setMouseFreeHint(self: *Overlay, free: bool) void {
+    self.mouse_free_hint.store(free, .release);
+}
+
+/// The player's setting, over the hint. Any thread.
+pub fn setMouseFreeChoice(self: *Overlay, choice: MouseFree) void {
+    self.mouse_free_choice.store(choice, .release);
+}
+
+/// The game leaves its cursor free, so Wraith's windows leave the mouse and keyboard with it and
+/// only take what's over them or typed into them. Any thread.
+pub fn mouseFree(self: *const Overlay) bool {
+    return switch (self.mouse_free_choice.load(.acquire)) {
+        .auto => self.mouse_free_hint.load(.acquire),
+        .free => true,
+        .taken => false,
+    };
+}
+
+/// Hides `button`'s presses from the game, each till it's let go, while the rest of the mouse stays
+/// the game's. Counted like `take`. Any thread.
+pub fn consumeButton(self: *Overlay, button: tuft_input.MouseButton, on: bool) void {
+    count(self.consumes.getPtr(button), on);
+    self.updateConsumed();
+}
+
+/// Hides the wheel from the game. Counted like `take`. Any thread.
+pub fn consumeWheel(self: *Overlay, on: bool) void {
+    count(&self.consumes_wheel, on);
+    self.updateConsumed();
+}
+
+fn updateConsumed(self: *Overlay) void {
+    var bits: u8 = 0;
+    for (std.enums.values(tuft_input.MouseButton)) |b| {
+        if (self.consumes.getPtrConst(b).load(.acquire) != 0) bits |= Blocker.buttonBit(b);
+    }
+    const on = self.enabled.getPtrConst(.mouse).load(.acquire);
+    self.blocker.consumeButtons(if (on) bits else 0);
+    self.blocker.consumeWheel(on and self.consumes_wheel.load(.acquire) != 0);
 }
 
 /// Controllers reach ImGui from now on. `gamepads` has to outlive the overlay.
@@ -630,7 +692,7 @@ fn deltaTime(self: *Overlay) f32 {
 
 fn releaseMouse(io: *c.ImGuiIO) void {
     imgui_input.feed(io, .mouse_leave);
-    for (std.enums.values(input.MouseButton)) |b| imgui_input.feed(io, .{ .mouse_button = .{ .button = b, .down = false } });
+    for (std.enums.values(tuft_input.MouseButton)) |b| imgui_input.feed(io, .{ .mouse_button = .{ .button = b, .down = false } });
 }
 
 /// Feeds the mouse from hardware state, for games that suppress mouse messages.
@@ -640,7 +702,7 @@ fn pollMouse(io: *c.ImGuiIO, window: ?tuft_window.Handle) void {
     } else {
         if (input.screenCursorPosition()) |p| imgui_input.feed(io, .{ .mouse_move = p });
     }
-    for ([_]input.MouseButton{ .left, .right, .middle }) |b| {
+    for ([_]tuft_input.MouseButton{ .left, .right, .middle }) |b| {
         imgui_input.feed(io, .{ .mouse_button = .{ .button = b, .down = input.isButtonDown(b) } });
     }
 }

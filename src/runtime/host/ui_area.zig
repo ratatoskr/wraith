@@ -270,6 +270,10 @@ pub const UiImpl = struct {
         });
     }
 
+    pub fn setMouseFree(loaded: *Loaded, free: bool) void {
+        host.ui.setMouseFree(loaded, free);
+    }
+
     pub fn takeInput(loaded: *Loaded, device: W.InputDevice, take: bool) void {
         host.ui.takeInput(loaded, deviceOf(device) orelse return, take);
     }

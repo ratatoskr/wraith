@@ -8,12 +8,15 @@ const Chord = @import("wraith_platform").input.Chord;
 
 const Overlay = @import("../Overlay.zig");
 const Dim = @import("Dim.zig");
+const UiHold = @import("UiHold.zig");
 
 /// Showing, or fading out.
 open: bool = false,
 /// Continue was clicked, so it's on its way out.
 leaving: bool = false,
 dim: Dim = .{},
+/// Even in a game that leaves its mouse free, since it has to be answered
+hold: UiHold = .{ .always = true },
 choices: Choices = .{},
 
 /// What's picked in it, from the settings to start.
@@ -24,11 +27,12 @@ pub const Choices = struct {
 const width = 480;
 
 /// What was picked, the frame Continue's clicked. The caller takes over its dim and input then,
-/// with `Dim.takeOver`, or calls `dismiss`.
+/// with `Dim.takeOver` and `UiHold.takeOver`, or calls `dismiss`.
 pub fn draw(self: *Welcome, overlay: *Overlay) ?Choices {
     if (!self.open) return null;
     // Covers any plugin windows too, so only this takes clicks
-    const fade = self.dim.update(overlay, !self.leaving, .blocking, "##wraith.welcome_dim");
+    self.hold.set(overlay, !self.leaving);
+    const fade = self.dim.update(!self.leaving, .blocking, "##wraith.welcome_dim");
     if (fade == 0) {
         self.open = false;
         return null;
@@ -72,10 +76,10 @@ fn drawChoices(self: *Welcome) void {
 /// Fades it out and gives the game its input back.
 pub fn dismiss(self: *Welcome, overlay: *Overlay) void {
     self.leaving = true;
-    self.dim.release(overlay);
+    self.hold.release(overlay);
 }
 
 /// Gives back anything it's holding.
 pub fn deinit(self: *Welcome, overlay: *Overlay) void {
-    self.dim.release(overlay);
+    self.hold.release(overlay);
 }
