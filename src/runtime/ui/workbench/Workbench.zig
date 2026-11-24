@@ -384,7 +384,7 @@ pub fn destroy(self: *Workbench) void {
     self.allocator.destroy(self);
 }
 
-/// The first time makes its window and thread. Render thread.
+/// The first time makes its window and thread, without waiting for them. Render thread.
 pub fn open(self: *Workbench) void {
     if (self.app == null) {
         // Its thread keeps the address list going from here
@@ -417,6 +417,13 @@ pub fn open(self: *Workbench) void {
 
 /// What has to keep going before its thread does, like holds and hotkeys. Render thread.
 pub fn tickUnopened(self: *Workbench) void {
+    if (self.app) |app| if (app.failed()) |err| {
+        // Its window couldn't be made, so the address list comes back here, and opening tries again
+        log.err("Couldn't open the workbench: {t}", .{err});
+        app.destroy();
+        self.app = null;
+        self.panels.addresses.handOver(false);
+    };
     self.panels.addresses.tickUnopened();
 }
 

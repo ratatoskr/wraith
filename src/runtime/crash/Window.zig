@@ -36,7 +36,8 @@ const workbench_choice: Choice = .workbench;
 /// Tests pick this once it's drawn a few frames, so it really shows and closes.
 pub var test_pick: ?Choice = null;
 
-/// Until something's picked. Closing it is `crash`, and so is a window that couldn't open.
+/// Until something's picked. Closing it is `crash`, and so is a window that couldn't open, found
+/// once its thread gives up.
 /// `up` gets set once it's drawn something, so a caller can tell it from a hang.
 pub fn run(report: *const Report, summary: []const u8, logs_dir: []const u8, can_open_workbench: bool, up: *Atomic(bool)) Choice {
     var self: Window = .{ .report = report, .summary = summary, .logs_dir = logs_dir, .can_open_workbench = can_open_workbench };
@@ -51,6 +52,7 @@ pub fn run(report: *const Report, summary: []const u8, logs_dir: []const u8, can
     defer app.destroy();
     app.show();
     while (app.isOpen()) {
+        if (app.failed() != null) return .crash;
         if (self.picked.load(.acquire)) |choice| return choice.*;
         if (app.frameCount() > 0) up.store(true, .release);
         if (@import("builtin").is_test) if (test_pick) |p| if (app.frameCount() >= 3) return p;
