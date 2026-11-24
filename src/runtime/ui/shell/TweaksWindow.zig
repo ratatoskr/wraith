@@ -141,11 +141,19 @@ fn drawList(self: *TweaksWindow, shell: *Shell, tweaks: *Tweaks, arena: std.mem.
             defer scope.end();
             switch (e.what) {
                 .source => |s| {
-                    if (!self.anyShown(all[i + 1 ..], query)) {
+                    if (!self.anyShown(all[i + 1 ..], e.depth, query)) {
                         skip_below = e.depth;
                         continue;
                     }
                     self.drawHeading(layout, e, s.title, folds);
+                    if (folds and e.folded) skip_below = e.depth;
+                },
+                .section => |name| {
+                    if (!self.anyShown(all[i + 1 ..], e.depth, query)) {
+                        skip_below = e.depth;
+                        continue;
+                    }
+                    self.drawSection(layout, e, name, folds);
                     if (folds and e.folded) skip_below = e.depth;
                 },
                 .tweak => |t| {
@@ -183,14 +191,28 @@ fn showsTweak(self: *const TweaksWindow, t: *const Info, query: []const u8) bool
     return !self.only_on or isActive(t);
 }
 
-/// Anything under a heading, up to the next one.
-fn anyShown(self: *const TweaksWindow, rest: []const Entry, query: []const u8) bool {
-    for (rest) |*e| switch (e.what) {
-        .source => return false,
-        .tweak => |t| if (self.showsTweak(t, query)) return true,
-        .structure => |s| if (self.showsStruct(s, query)) return true,
-    };
+/// Anything under a heading or section, up to the next one as deep or shallower.
+fn anyShown(self: *const TweaksWindow, rest: []const Entry, depth: u32, query: []const u8) bool {
+    for (rest) |*e| {
+        if (e.depth <= depth) return false;
+        switch (e.what) {
+            .source, .section => {},
+            .tweak => |t| if (self.showsTweak(t, query)) return true,
+            .structure => |s| if (self.showsStruct(s, query)) return true,
+        }
+    }
     return false;
+}
+
+/// A plugin's heading inside its own, in bold, folding what's under it.
+fn drawSection(self: *TweaksWindow, layout: *TweakLayout, e: *const Entry, name: []const u8, folds: bool) void {
+    ui.tableNextRow();
+    _ = ui.tableNextColumn();
+    _ = ui.tableNextColumn();
+    const bold = ui.bold();
+    defer bold.end();
+    if (ui.Outline.node(&self.reorder, .{ .id = e.id, .parent = e.parent, .label = name, .open = !(folds and e.folded) }, .folds) and folds) layout.toggle(e.id);
+    _ = ui.tableNextColumn();
 }
 
 /// Where they're from, as a bar across the row. Clicking folds it, and it drags to put a source
@@ -261,7 +283,9 @@ fn drawRow(self: *TweaksWindow, gpa: std.mem.Allocator, tweaks: *Tweaks, layout:
     ui.tableNextRow();
     _ = ui.tableNextColumn();
     // The same size as a checkbox, so they line up
-    if (isAction(t)) {
+    if (t.opens) {
+        if (ui.iconButton(icons.app_window ++ "##open", "Opens it")) tweaks.setOn(t.name, true);
+    } else if (isAction(t)) {
         if (ui.iconButton(icons.play ++ "##run", "Runs it once")) tweaks.setOn(t.name, true);
     } else {
         var on = t.on;
@@ -274,7 +298,7 @@ fn drawRow(self: *TweaksWindow, gpa: std.mem.Allocator, tweaks: *Tweaks, layout:
     }
 
     _ = ui.tableNextColumn();
-    const indent: f32 = if (nested) @floatFromInt(t.depth * 16) else 0;
+    const indent: f32 = if (nested) @floatFromInt((e.depth -| 1) * 16) else 0;
     if (indent > 0) ui.indent(indent);
     defer if (indent > 0) ui.unindent(indent);
     const has_fields = !t.is_group and t.fields.len > 0;
@@ -347,7 +371,7 @@ pub fn drawOnScreen(self: *TweaksWindow, shell: *Shell, interactive: bool) void 
     defer win.end();
     for (shown[0..n]) |t| {
         const colour = if (t.problem != null) red else if (t.on and t.running) green else if (t.on) amber else dim;
-        ui.textColored(colour, "{s}", .{if (isAction(t)) icons.play else if (t.on) icons.circle_check else icons.circle});
+        ui.textColored(colour, "{s}", .{if (t.opens) icons.app_window else if (isAction(t)) icons.play else if (t.on) icons.circle_check else icons.circle});
         ui.sameLine();
         ui.textColored(if (t.on) colour else dim, "{s}", .{t.title});
         if (t.key) |k| {

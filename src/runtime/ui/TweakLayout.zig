@@ -29,6 +29,8 @@ pub const Entry = struct {
     folded: bool = false,
     what: union(enum) {
         source: Source,
+        /// A plugin's heading inside its own, with its tweaks after it
+        section: []const u8,
         tweak: *const Info,
         structure: *const Summary,
     },
@@ -76,6 +78,10 @@ pub fn structId(source: []const u8, type_name: []const u8) u64 {
     return hashed(&.{ "struct", source, type_name });
 }
 
+pub fn sectionId(source: []const u8, section: []const u8) u64 {
+    return hashed(&.{ "section", source, section });
+}
+
 fn hashed(parts: []const []const u8) u64 {
     var h = std.hash.Wyhash.init(0);
     for (parts) |p| {
@@ -120,14 +126,28 @@ pub fn entries(self: *TweakLayout, arena: std.mem.Allocator, list: []const Info,
     for (list) |*t| try addSource(arena, &sources, .{ .id = t.source_id, .title = t.source_title });
     for (structs) |*s| try addSource(arena, &sources, .{ .id = s.source, .title = s.source_title });
 
-    var out: std.ArrayList(Entry) = try .initCapacity(arena, sources.items.len + list.len + structs.len);
+    var out: std.ArrayList(Entry) = try .initCapacity(arena, sources.items.len + 2 * list.len + structs.len);
     for (sources.items) |s| {
         const heading = sourceId(s.id);
         out.appendAssumeCapacity(.{ .id = heading, .parent = 0, .depth = 0, .what = .{ .source = s } });
         for (list) |*t| {
-            if (!std.mem.eql(u8, t.source_id, s.id)) continue;
+            if (!std.mem.eql(u8, t.source_id, s.id) or t.section.len > 0) continue;
             const parent = if (t.group) |g| tweakId(g) else heading;
             out.appendAssumeCapacity(.{ .id = tweakId(t.name), .parent = parent, .depth = t.depth + 1, .what = .{ .tweak = t } });
+        }
+        // A plugin's headings, each where its first tweak is, with its tweaks after it
+        for (list, 0..) |*first, i| {
+            if (!std.mem.eql(u8, first.source_id, s.id) or first.section.len == 0) continue;
+            const seen = for (list[0..i]) |*t| {
+                if (std.mem.eql(u8, t.source_id, s.id) and std.mem.eql(u8, t.section, first.section)) break true;
+            } else false;
+            if (seen) continue;
+            const section = sectionId(s.id, first.section);
+            out.appendAssumeCapacity(.{ .id = section, .parent = heading, .depth = 1, .what = .{ .section = first.section } });
+            for (list[i..]) |*t| {
+                if (!std.mem.eql(u8, t.source_id, s.id) or !std.mem.eql(u8, t.section, first.section)) continue;
+                out.appendAssumeCapacity(.{ .id = tweakId(t.name), .parent = section, .depth = 2, .what = .{ .tweak = t } });
+            }
         }
         // A plugin's structs go after its other tweaks, to start with
         for (structs) |*e| {
@@ -145,6 +165,35 @@ pub fn entries(self: *TweakLayout, arena: std.mem.Allocator, list: []const Info,
 fn addSource(arena: std.mem.Allocator, sources: *std.ArrayList(Source), s: Source) !void {
     for (sources.items) |have| if (std.mem.eql(u8, have.id, s.id)) return;
     try sources.append(arena, s);
+}
+
+test "a plugin's sections are headings in its own, each with its tweaks" {
+    const testing = std.testing;
+    var layout: TweakLayout = .{};
+    defer layout.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const off: Info = .{ .name = "", .title = "", .path = "", .mode = .toggle, .on = false, .running = false, .key = null, .own_key = false, .problem = null, .fields = &.{}, .source = .plugin, .source_id = "kai", .source_title = "Kai" };
+    var list = [_]Info{ off, off, off, off };
+    list[0].name = "kai:hit";
+    list[0].section = "Combat";
+    list[1].name = "kai:spawn";
+    list[2].name = "kai:exp";
+    list[2].section = "Experience";
+    list[3].name = "kai:guard";
+    list[3].section = "Combat";
+
+    const all = try layout.entries(arena.allocator(), &list, &.{});
+    const want = [_][]const u8{ "Kai", "kai:spawn", "Combat", "kai:hit", "kai:guard", "Experience", "kai:exp" };
+    try testing.expectEqual(want.len, all.len);
+    for (want, all) |w, e| try testing.expectEqualStrings(w, switch (e.what) {
+        .source => |s| s.title,
+        .section => |s| s,
+        .tweak => |t| t.name,
+        .structure => |s| s.type_name,
+    });
+    try testing.expectEqual(sectionId("kai", "Combat"), all[3].parent);
+    try testing.expectEqual(2, all[3].depth);
 }
 
 test "sources, groups and structs keep the order they're put in" {
@@ -194,6 +243,7 @@ test "sources, groups and structs keep the order they're put in" {
     var names: [8][]const u8 = undefined;
     for (all, &names) |e, *n| n.* = switch (e.what) {
         .source => |s| s.title,
+        .section => |s| s,
         .tweak => |t| t.name,
         .structure => |s| s.type_name,
     };

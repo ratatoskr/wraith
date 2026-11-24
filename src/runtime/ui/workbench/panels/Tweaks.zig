@@ -103,6 +103,7 @@ pub fn draw(self: *TweaksPanel) void {
         }
         switch (e.what) {
             .source => if (!headings) continue,
+            .section => {},
             .tweak => |t| if (!t.is_group) {
                 shown.append(arena.allocator(), e) catch return;
                 continue;
@@ -138,6 +139,18 @@ pub fn draw(self: *TweaksPanel) void {
                     if (s.id.len == 0) ui.textDisabled("{s}", .{s.title}) else ui.textDisabled("From {s}", .{s.title});
                     continue;
                 },
+                .section => |name| {
+                    ui.tableNextRow();
+                    _ = ui.tableNextColumn();
+                    _ = picking.row(i, "##row");
+                    self.reorder.item(.{ .id = e.id, .parent = e.parent, .label = name });
+                    _ = ui.tableNextColumn();
+                    ui.indent(16);
+                    if (ui.Outline.arrow(!e.folded)) lay.toggle(e.id);
+                    ui.text("{s}", .{name});
+                    ui.unindent(16);
+                    continue;
+                },
                 .structure => continue,
             };
             ui.tableNextRow();
@@ -151,9 +164,9 @@ pub fn draw(self: *TweaksPanel) void {
             const clicked = ui.checkbox("##on", &on);
             mixed.end();
             if (clicked) tweaks.setOn(t.name, on);
-            if (t.mode == .action) ui.tooltip("Runs it once", .{}) else if (t.partial) ui.tooltip("Off, but something in it is on, so its shared part is up", .{});
+            if (t.opens) ui.tooltip("Opens it", .{}) else if (t.mode == .action) ui.tooltip("Runs it once", .{}) else if (t.partial) ui.tooltip("Off, but something in it is on, so its shared part is up", .{});
             _ = ui.tableNextColumn();
-            const indent: f32 = @floatFromInt(t.depth * 16);
+            const indent: f32 = @floatFromInt((e.depth -| 1) * 16);
             if (indent > 0) ui.indent(indent);
             if (self.renaming == e.id) {
                 self.drawRename(t);
@@ -205,7 +218,7 @@ fn drawStatus(t: *const Tweaks.Info) void {
     } else if (t.on) {
         ui.textDisabled("starting", .{});
     } else {
-        ui.textDisabled("{s}", .{if (t.mode == .action) "runs once" else "off"});
+        ui.textDisabled("{s}", .{if (t.opens) "opens" else if (t.mode == .action) "runs once" else "off"});
     }
 }
 

@@ -229,6 +229,8 @@ fn syncPlugins(tw: *Tweaks) void {
         };
         const fresh = t.source_hash == null;
         copyDefinition(tw, t, e.def);
+        t.section = t.parsed.allocator().dupe(u8, e.section) catch "";
+        t.opens = e.opens;
         if (fresh) startIfWanted(tw, t);
     }
 }

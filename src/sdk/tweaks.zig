@@ -10,9 +10,12 @@
 //!     };
 //!     try sdk.tweaks.action(ctx, .{ .id = "give_mira", .title = "Give Mira" }, Give, self, giveMira);
 //!
+//!     // Opens a window of the plugin's
+//!     try sdk.tweaks.opens(ctx, .{ .id = "party", .title = "Party" }, &self.party.window);
+//!
 //! A field's default is its first value. `fields` can say more about each, like `.min`, `.max`,
 //! `.label`, `.hex` or `.key`. Bools are checkboxes and enums dropdowns. Callbacks can fail, and the
-//! tweak stays off showing why.
+//! tweak stays off showing why. A definition's `section` puts it under a heading, like `Combat`.
 //!
 //! For anything else there's `ctx.wraith.tweaks()` itself.
 
@@ -20,6 +23,7 @@ const std = @import("std");
 
 const api = @import("wraith_api");
 const plugin = @import("plugin.zig");
+const ui = @import("wraith_ui");
 
 const W = api.wraith;
 const Context = plugin.Context;
@@ -31,6 +35,8 @@ pub const Definition = struct {
     title: []const u8 = "",
     /// Like `Ctrl+F8`. Empty is none, and the user can pick one.
     key: []const u8 = "",
+    /// A heading in the plugin's list, like `Combat`. Empty is none.
+    section: []const u8 = "",
 };
 
 /// What `fields` can say about a field.
@@ -68,6 +74,17 @@ pub fn action(ctx: *Context, definition: Definition, comptime Args: type, owner:
         }
     }, .action);
     try State.add(ctx, definition, owner);
+}
+
+/// Opens `window`, a `ui.Window`, from the Tweaks list, like a plugin's own Party window. It shows
+/// with an open button. `window` must stay put.
+pub fn opens(ctx: *Context, definition: Definition, window: *ui.Window) !void {
+    const Handler = struct {
+        fn handle(w: *ui.Window, event: W.TweakEvent) W.TweakError!void {
+            if (event.kind == .on) w.focus();
+        }
+    };
+    try add(ctx, definition, .open, &.{}, W.TweakHandler.init(window, Handler.handle));
 }
 
 /// On and off, with the fields as `Args`. `callbacks` has `on(owner, args)`, `off(owner)`, and
@@ -124,13 +141,16 @@ fn Stateful(comptime Args: type, comptime Owner: type, comptime callbacks: anyty
 const tweaks_add = add;
 
 fn add(ctx: *Context, definition: Definition, mode: W.TweakMode, fields: []const W.TweakField, handler: W.TweakHandler) !void {
-    try ctx.wraith.tweaks().add(.{
+    const def: W.TweakDefinition = .{
         .id = definition.id,
         .title = definition.title,
         .key = definition.key,
         .mode = mode,
         .fields = fields,
-    }, handler);
+    };
+    // Plain `add` without one, so older Wraiths still list it
+    if (definition.section.len == 0) return ctx.wraith.tweaks().add(def, handler);
+    try ctx.wraith.tweaks().addIn(definition.section, def, handler);
 }
 
 /// Shown in the overlay as why it's off.

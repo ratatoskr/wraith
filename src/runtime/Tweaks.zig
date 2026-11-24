@@ -81,6 +81,10 @@ pub const Info = struct {
     is_group: bool = false,
     /// The name of the group it's in.
     group: ?[]const u8 = null,
+    /// A plugin's heading for it. Empty for none.
+    section: []const u8 = "",
+    /// An action that opens something of a plugin's, like a window.
+    opens: bool = false,
     /// How many groups it's in, for indenting.
     depth: u32 = 0,
     mode: format.Mode,
@@ -335,6 +339,8 @@ pub fn snapshot(self: *Tweaks, arena: std.mem.Allocator) ![]Info {
             .source_title = try arena.dupe(u8, self.sourceTitle(t)),
             .is_group = t.is_group,
             .group = if (t.group) |g| try arena.dupe(u8, g.name) else null,
+            .section = try arena.dupe(u8, t.section),
+            .opens = t.opens,
             .depth = t.depth(),
             .mode = t.def.mode,
             .on = t.isOn(),

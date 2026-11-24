@@ -70,6 +70,10 @@ source: Source = .{},
 is_group: bool = false,
 /// The group it's in, the file's or a nested one.
 group: ?*Tweak = null,
+/// A plugin's heading for it, in `parsed`. Empty for none.
+section: []const u8 = "",
+/// A plugin's action that opens something, like a window.
+opens: bool = false,
 /// The file's own entry, for anything in a group's file. Everything in it runs in its session.
 file: ?*Tweak = null,
 /// Its path in its group's file, like `Combat/Title`, which is what the provider knows it by.

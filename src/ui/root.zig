@@ -7,6 +7,9 @@ const tuft_ui = @import("tuft_ui");
 pub const WindowSystem = @import("WindowSystem.zig");
 pub const Window = WindowSystem.Window;
 pub const Clip = @import("Clip.zig");
+/// A searchable dropdown that Shift+click types a value into.
+pub const choose = @import("choose.zig").choose;
+pub const choiceText = @import("choose.zig").choiceText;
 /// What copying is on unless it's been changed, in the Workbench's views and plugins' panels.
 pub const copy_chord: tuft_ui.Chord = .{ .key = .c, .ctrl = true };
 

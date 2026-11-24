@@ -28,6 +28,10 @@ pub const Entry = struct {
     /// Its title, for people.
     plugin_title: []const u8,
     id: []const u8,
+    /// The heading it's under in the plugin's list. Empty for none.
+    section: []const u8 = "",
+    /// An action that opens something, like a window.
+    opens: bool = false,
     /// Parsed, in `arena` like the names. Like a file's, with no sections.
     def: api.tweak.Tweak,
     handler: Handler,
@@ -80,13 +84,14 @@ fn place(owner: *Owner, entry: *Entry) api.TweakError!void {
     if (old) |e| finish(e);
 }
 
-/// Through `tweaks.sal`. The handler's released if it fails.
-pub fn add(loaded: *Loaded, definition: W.TweakDefinition, handler: Handler) api.TweakError!void {
+/// Through `tweaks.sal`, under `section` if it's not empty. The handler's released if it fails.
+pub fn add(loaded: *Loaded, section: []const u8, definition: W.TweakDefinition, handler: Handler) api.TweakError!void {
     const entry = typed(loaded, definition, handler) catch |err| {
         handler.release();
         return err;
     };
     errdefer entry.release();
+    entry.section = try entry.arena.allocator().dupe(u8, section);
     const lease = cleanup.lease(&loaded.owner) orelse return error.OwnerGone;
     defer lease.end();
     try place(&loaded.owner, entry);
@@ -116,13 +121,15 @@ fn typed(loaded: *Loaded, d: W.TweakDefinition, handler: Handler) api.TweakError
             .choices = choices,
         };
     }
-    return build(&arena, &loaded.owner, loaded.name, loaded.displayName(), .{
+    const entry = try build(&arena, &loaded.owner, loaded.name, loaded.displayName(), .{
         .id = try a.dupe(u8, d.id),
         .title = try a.dupe(u8, d.title),
         .key = try a.dupe(u8, d.key),
-        .mode = if (d.mode == .action) .action else .toggle,
+        .mode = if (d.mode == .toggle) .toggle else .action,
         .fields = fields,
     }, handler);
+    entry.opens = d.mode == .open;
+    return entry;
 }
 
 /// Takes `arena` once it's made, which `def` points into.

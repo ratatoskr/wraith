@@ -454,7 +454,11 @@ const SettingImpl = struct {
 
 const TweaksImpl = struct {
     pub fn add(loaded: *Loaded, definition: W.TweakDefinition, handler: host.tweaks.Handler) sal.Plain(Tweaks, "add") {
-        host.tweaks.add(loaded, definition, handler) catch |err| return switch (err) {
+        return addIn(loaded, "", definition, handler);
+    }
+
+    pub fn addIn(loaded: *Loaded, section: []const u8, definition: W.TweakDefinition, handler: host.tweaks.Handler) sal.Plain(Tweaks, "addIn") {
+        host.tweaks.add(loaded, section, definition, handler) catch |err| return switch (err) {
             error.InvalidId => error.InvalidId,
             error.InvalidDefinition => error.InvalidDefinition,
             error.OutOfMemory, error.OwnerGone => error.Failed,

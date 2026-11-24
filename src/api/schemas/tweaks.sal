@@ -15,6 +15,8 @@ enum TweakMode : u8 {
     toggle,
     // Runs once, then everything it did goes back
     action,
+    // An action that opens something of the plugin's, like a window. Shown with an open button.
+    open,
 }
 
 enum TweakFieldType : u8 { f64, f32, i64, i32, i16, i8, u64, u32, u16, u8, bool }
@@ -88,6 +90,8 @@ trait Tweaks {
     // Listed with the project's tweaks until it's removed or the plugin goes. The same id again
     // replaces it and keeps it on.
     void!TweakError add(TweakDefinition definition, keep TweakHandler handler);
+    // Like `add`, under a heading of its own in the plugin's list, like `Combat`. Empty is none.
+    void!TweakError addIn(string section, TweakDefinition definition, keep TweakHandler handler);
     // Waits for its handler if it's running, unless it's from inside it.
     void remove(string id);
     // Whether a tweak's box is on, by its saved name like `kai/Combat/Max bravery`. A group's own
