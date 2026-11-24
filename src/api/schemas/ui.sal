@@ -84,6 +84,34 @@ trait MenuItem {
     void remove();
 }
 
+enum GizmoTool : u8 { move, rotate, scale }
+
+// Handles over the game, drawn by Wraith on the render thread with the camera the game's plugin
+// sets. Only one shows at a time, the one shown last, so posing's and yours never both do. Every
+// call's fine from any thread, like your game tick. Draggable while the overlay has the mouse.
+trait Gizmo {
+    // Shows it, in front of any other, like when something's picked for it. It needs a `place`.
+    void show();
+    // Till the next `show`, like when what it's for isn't picked or its panel's closed. Whichever
+    // was shown before it shows again.
+    void hide();
+    // Where it is in the world, each tick so it keeps up. Row-vector, like `GameView`. While it's
+    // dragged it stays where it's dragged to.
+    void place(Mat4 world);
+    void setTool(GizmoTool tool);
+    // Along the world's axes rather than its own
+    void setWorldAxes(bool on);
+    // Where it's been dragged to since you last asked, or null. Move yours there, and keep placing
+    // it as usual. The end of a drag comes through too.
+    ?Mat4 moved();
+    // Being dragged right now.
+    bool dragging();
+    // The mouse was on it last frame, so a click there is for it.
+    bool hovered();
+    // Never shows again. Fine to call twice.
+    void remove();
+}
+
 // Plugins built against an older order still work, since tables are matched up by name
 trait Ui {
     // The overlay
@@ -141,6 +169,10 @@ trait Ui {
     // How far the mouse was pushed since last frame while it's held, in pixels. Right and down are
     // positive. In a frame callback.
     Point mouseMotion();
+
+    // Handles over the game for moving, turning or scaling something of yours, drawn by Wraith with
+    // the game's camera. Gone with the plugin. Any thread.
+    Gizmo addGizmo();
 
     // Wraith's own UI
 

@@ -34,8 +34,11 @@ pub const Panel = struct {
     let_go: Atomic(bool) = .init(false),
     /// Asked for from any thread, done by the Workbench.
     focus_wanted: Atomic(bool) = .init(false),
-    /// Set by the Workbench each frame.
+    /// Set by the Workbench each frame, from whether it was drawn the frame before, so it's never
+    /// briefly false in between for another thread to see.
     shown: Atomic(bool) = .init(false),
+    /// Drawn this Workbench frame. Workbench thread.
+    drawn: bool = false,
     /// Workbench thread.
     warned: bool = false,
     /// Freed while this thread held it, so its `release` frees it. Only that thread touches it.
@@ -170,6 +173,17 @@ pub fn version() u32 {
 
 /// The ones still going, `engine` ones or the rest, into `out`. Each is held, so it can't go till
 /// `release`, and nothing on this thread waits on it meanwhile. Workbench thread.
+/// None of them are showing, for a Workbench that's closed and so drawing nothing to say so.
+/// Workbench thread.
+pub fn hideAll() void {
+    lock.lockShared();
+    defer lock.unlockShared();
+    for (list.items) |p| {
+        p.drawn = false;
+        p.shown.store(false, .release);
+    }
+}
+
 pub fn take(engine: bool, out: []*Panel) []*Panel {
     lock.lockShared();
     defer lock.unlockShared();

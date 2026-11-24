@@ -19,6 +19,7 @@ const Settings = @import("../Settings.zig");
 const Photo = @import("Photo.zig");
 const Overlay = @import("../ui/Overlay.zig");
 const frame = @import("../host/frame.zig");
+const Gizmos = @import("../ui/Gizmos.zig");
 const Camera = @import("Camera.zig");
 const icons = @import("../ui/icons.zig");
 const poses = @import("pose.zig");
@@ -87,10 +88,11 @@ grabbed: bool = false,
 /// What the gizmo does, and whether it goes along the world's axes or the bone's
 tool: Tool = .rotate,
 world_axes: bool = false,
-/// While the gizmo's dragged, the bone where it's dragged to, in the world. It's ours, since the
-/// bones only catch up when the game poses them next
-dragging: bool = false,
-gizmo_matrix: Mat4 = .identity,
+/// The skeletons and gizmo over the game, off for a clear look at the pose
+overlay_on: bool = true,
+/// Posing's handles, drawn by Wraith's gizmos like a plugin's, and whether it's said to show
+gizmo: *Gizmos.Gizmo = undefined,
+gizmo_shown: bool = false,
 /// Where the bone would be without its own edit, as the drag started
 drag_base: Mat4 = .identity,
 /// Narrows the actors, bones and shapes down by name
@@ -103,6 +105,8 @@ changed_only: bool = false,
 pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, camera: *Camera) !void {
     self.* = .{ .registry = registry, .overlay = overlay, .camera = camera };
     self.store = try .init(std.heap.page_allocator);
+    self.gizmo = try Gizmos.create();
+    errdefer Gizmos.destroy(self.gizmo);
     self.show = try registry.add(.{ .id = "wraith.posing.show", .name = "Draw skeletons of", .help = "While Photo mode's open.", .group = Settings.group, .section = Photo.section, .heading = "Posing", .kind = .{ .choice = .{ .default = show_options[0], .options = &show_options } } }, .{});
     errdefer registry.remove(self.show);
     self.thickness = try registry.add(.{ .id = "wraith.posing.thickness", .name = "Line thickness", .group = Settings.group, .section = Photo.section, .heading = "Posing", .kind = .{ .number = .{ .default = 1.5, .min = 0.5, .max = 5, .step = 0 } } }, .{});
@@ -130,6 +134,7 @@ pub fn deinit(self: *Posing) void {
     self.registry.remove(self.thickness);
     self.grab(false);
     self.wanted.store(false, .monotonic);
+    Gizmos.destroy(self.gizmo);
 }
 
 fn acquire(self: *Posing) void {
@@ -247,10 +252,17 @@ fn draw(self: *Posing) void {
     const store = &self.store;
     store.frame +%= 1;
     self.wanted.store(open or store.anyEdits() or store.anyFrozen(), .monotonic);
-    if (!open) return;
+    if (!open) {
+        _ = self.hideGizmo();
+        return;
+    }
     // The game's plugin sets it each frame
     const v = frame.view();
     if (v.known) store.setCamera(v.view, v.projection) else store.view_proj = null;
+    if (!self.overlay_on) {
+        _ = self.hideGizmo();
+        return;
+    }
     {
         const t = core.timing.scope("posing skeletons");
         defer t.end();
@@ -275,6 +287,8 @@ pub fn select(self: *Posing, a: *const poses.Actor, bone: ?u32) void {
         self.bone = a.names[b];
         self.has_bone = true;
     } else self.has_bone = false;
+    // In front again, even over a Scene panel's
+    self.gizmo_shown = false;
 }
 fn drawSkeletons(self: *Posing, store: *poses.Store) void {
     const show = choice(Show, self.registry.get(self.show).choice, &show_options);
@@ -315,7 +329,7 @@ fn drawSkeletons(self: *Posing, store: *poses.Store) void {
 
     if (posed) |a| if (self.currentBone(a)) |b| if (project(vp, a.position(b))) |at| dl.addCircle(at, 7, picked_colour, 2);
     // On the gizmo, a click's for it, not for picking another bone
-    const on_gizmo = self.drawGizmo(store, posed, dl);
+    const on_gizmo = self.updateGizmo(store, posed);
     if (hover) |h| if (!on_gizmo) {
         dl.addCircle(h.at, 6, hover_colour, 1.5);
         ui.mouseTooltip("{s}", .{h.actor.names[h.bone].get()});
@@ -323,46 +337,41 @@ fn drawSkeletons(self: *Posing, store: *poses.Store) void {
     };
 }
 
-/// Handles on the picked bone, which edit it like the boxes do. True while the mouse is on them.
-fn drawGizmo(self: *Posing, store: *poses.Store, posed: ?*poses.Actor, dl: ui.DrawList) bool {
-    const gizmo = ui.gizmo;
-    gizmo.beginFrame();
-    const a = posed orelse return self.stopDragging();
-    const b = self.currentBone(a) orelse return self.stopDragging();
+/// Handles on the picked bone, which edit it like the boxes do. Wraith's gizmos draw them after
+/// this frame's done, so what's dragged comes back here next frame. True while the mouse is on them.
+fn updateGizmo(self: *Posing, store: *poses.Store, posed: ?*poses.Actor) bool {
+    const a = posed orelse return self.hideGizmo();
+    const b = self.currentBone(a) orelse return self.hideGizmo();
+    const g = self.gizmo;
+    if (!self.gizmo_shown) {
+        g.show();
+        self.gizmo_shown = true;
+    }
     const name = a.names[b].get();
-    const view = ui.mainViewport();
-    // Its own, apart from other plugins' gizmos
-    const id = gizmo.id("posing");
-    defer id.end();
-    gizmo.setDrawList(dl);
-    gizmo.setRect(view.pos, view.size);
-    gizmo.setOrthographic(false);
-
-    if (!self.dragging) {
+    g.setTool(switch (self.tool) {
+        .rotate => .rotate,
+        .move => .move,
+        .scale => .scale,
+    });
+    g.setWorldAxes(self.world_axes);
+    if (g.takeMoved()) |m| {
+        // Back into the bones' space, then less where it'd be anyway, leaves its own edit
+        const from_world = a.to_world.inverse() orelse return true;
+        const undo_base = self.drag_base.inverse() orelse return true;
+        if (store.edit(a.id, name)) |e| e.setMatrix(m.mul(from_world).mul(undo_base));
+    }
+    // Where it'd be without its own edit, as a drag starts
+    if (!g.isDragging()) {
         const own = if (store.findEdit(a.id, name)) |e| e.matrix() else Mat4.identity;
-        self.gizmo_matrix = a.world[b].mul(a.to_world);
         self.drag_base = (own.inverse() orelse Mat4.identity).mul(a.world[b]);
     }
-    const operation: gizmo.Operation = switch (self.tool) {
-        .rotate => .rotate,
-        .move => .translate,
-        .scale => .scale,
-    };
-    _ = gizmo.manipulate(&store.view, &store.projection, operation, if (self.world_axes) .world else .local, &self.gizmo_matrix, .{});
-    if (!gizmo.isUsing()) {
-        self.dragging = false;
-        return gizmo.isOver();
-    }
-    self.dragging = true;
-    // Back into the bones' space, then less where it'd be anyway, leaves its own edit
-    const from_world = a.to_world.inverse() orelse return true;
-    const undo_base = self.drag_base.inverse() orelse return true;
-    if (store.edit(a.id, name)) |e| e.setMatrix(self.gizmo_matrix.mul(from_world).mul(undo_base));
-    return true;
+    g.place(a.world[b].mul(a.to_world));
+    return g.isHovered();
 }
 
-fn stopDragging(self: *Posing) bool {
-    self.dragging = false;
+fn hideGizmo(self: *Posing) bool {
+    if (self.gizmo_shown) self.gizmo.hide();
+    self.gizmo_shown = false;
     return false;
 }
 
@@ -395,7 +404,7 @@ pub fn drawActorRows(self: *Posing, selected: bool) bool {
         const mark = if (store.hasEdits(a.id)) " *" else "";
         const label = std.fmt.bufPrintSentinel(&buf, "{s}  {s}{s}##actor{d}", .{ icon, a.name.get(), mark, a.id }, 0) catch continue;
         if (ui.selectable(label, selected and self.actor == a.id)) {
-            if (self.actor != a.id) self.select(a, null);
+            if (self.actor != a.id) self.select(a, null) else self.gizmo_shown = false;
             clicked = true;
         }
     }
@@ -436,19 +445,26 @@ pub fn drawActorPanel(self: *Posing) void {
     }
 }
 
-/// The toolbar's posing buttons: the gizmo, freezing, focusing and resetting.
+/// The toolbar's posing buttons: the skeletons and gizmo, freezing, focusing and resetting.
 pub fn drawTools(self: *Posing) void {
     self.acquire();
     defer self.release();
     const store = &self.store;
     const posed = self.current(store);
+    const shown = self.overlay_on;
+    if (Photo.toolButton(if (shown) icons.eye ++ "##posing_overlay" else icons.eye_off ++ "##posing_overlay", shown, "{s} the skeletons and gizmo", .{if (shown) "Hide" else "Show"})) self.overlay_on = !shown;
+    ui.sameLine();
     const off = ui.disabled(posed == null);
     defer off.end();
-    inline for (.{ .{ Tool.rotate, icons.rotate_3d, "Rotate" }, .{ Tool.move, icons.move_3d, "Move" }, .{ Tool.scale, icons.scale_3d, "Scale" } }) |t| {
-        if (Photo.toolButton(t[1] ++ "##posing_" ++ t[2], self.tool == t[0], t[2] ++ " with the gizmo", .{})) self.tool = t[0];
-        ui.sameLine();
+    {
+        const hidden = ui.disabled(!shown);
+        defer hidden.end();
+        inline for (.{ .{ Tool.rotate, icons.rotate_3d, "Rotate" }, .{ Tool.move, icons.move_3d, "Move" }, .{ Tool.scale, icons.scale_3d, "Scale" } }) |t| {
+            if (Photo.toolButton(t[1] ++ "##posing_" ++ t[2], self.tool == t[0], t[2] ++ " with the gizmo", .{})) self.tool = t[0];
+            ui.sameLine();
+        }
+        if (Photo.toolButton(icons.globe ++ "##posing_world", self.world_axes, "Line the gizmo up with the world, not the bone", .{})) self.world_axes = !self.world_axes;
     }
-    if (Photo.toolButton(icons.globe ++ "##posing_world", self.world_axes, "Line the gizmo up with the world, not the bone", .{})) self.world_axes = !self.world_axes;
     Photo.gap();
     const frozen = if (posed) |a| a.frozen else false;
     if (Photo.toolButton(icons.snowflake ++ "##posing_freeze", frozen, "{s} the actor. {s}", .{ if (frozen) "Unfreeze" else "Freeze", self.keyName(.freeze) })) {

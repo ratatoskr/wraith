@@ -330,7 +330,6 @@ var creating: sync.RwLock = .{};
 
 const tests = struct {
     const testing = std.testing;
-
     test "scoped window names" {
         var a: [256]u8 = undefined;
         var b: [256]u8 = undefined;

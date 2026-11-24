@@ -494,6 +494,8 @@ pub fn tick(self: *Workbench) void {
         self.opening_until_ns = now + opening_timeout_ns;
     }
     const app = self.app orelse return self.holdGameInput(false);
+    // A closed Workbench draws nothing, so its plugins' panels would still say they're open
+    if (!app.isOpen()) plugin_panels.hideAll();
     const active = app.isActive();
     // Held from opening till it's been in front and you've clicked back into the game
     if (active or !app.isOpen() or now >= self.opening_until_ns) self.awaiting_focus = false;

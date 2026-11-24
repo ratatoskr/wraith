@@ -58,8 +58,9 @@ pub fn poll(self: *PanelGroup, something_to_show: bool) void {
     const taken = panels.take(self.engine, &buf);
     defer panels.release(taken);
     for (taken) |p| {
-        // Drawing it sets it again
-        p.shown.store(false, .release);
+        // What the last frame drew, so it never reads as closed while it's showing
+        p.shown.store(p.drawn, .release);
+        p.drawn = false;
         if (p.focus_wanted.swap(false, .acq_rel)) {
             self.pick_label = std.hash.Wyhash.hash(0, p.label);
             self.window.focus();
@@ -103,6 +104,7 @@ pub fn draw(self: *PanelGroup) void {
         const picked = if (self.pick_label) |h| h == std.hash.Wyhash.hash(0, p.label) else false;
         const tab = ui.tabItem(p.label, .{ .select = picked }) orelse continue;
         defer tab.end();
+        p.drawn = true;
         p.shown.store(true, .release);
         const part = ui.child(p.label, .{ 0, 0 }, .{}) orelse continue;
         defer part.end();

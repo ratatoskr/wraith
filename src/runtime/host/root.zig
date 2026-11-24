@@ -73,4 +73,5 @@ test {
     _ = @import("hooks_area.zig");
     _ = @import("cpu.zig");
     _ = @import("../ui/MenuItems.zig");
+    _ = @import("../ui/Gizmos.zig");
 }

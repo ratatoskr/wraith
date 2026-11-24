@@ -13,6 +13,7 @@ const wraith = @import("wraith.zig");
 const imgui = @import("../ui/imgui.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const MenuItems = @import("../ui/MenuItems.zig");
+const Gizmos = @import("../ui/Gizmos.zig");
 const StructEditor = @import("../ui/StructEditor.zig");
 const struct_tweaks = @import("struct_tweaks.zig");
 
@@ -21,6 +22,7 @@ const sal = api.salamander;
 const W = api.wraith;
 pub const Ui = W.Ui;
 pub const MenuItem = W.MenuItem;
+pub const Gizmo = W.Gizmo;
 pub const WorkbenchPanel = W.WorkbenchPanel;
 pub const DrawList = W.ImDrawList;
 
@@ -43,8 +45,11 @@ pub const State = struct {
     workbench_inputs: std.StringHashMapUnmanaged(*Input) = .empty,
     lock: sync.RwLock = .{},
     menus: std.ArrayList(*Menu) = .empty,
+    gizmos: std.ArrayList(*Gizmos.Gizmo) = .empty,
 
     pub fn deinit(self: *State, a: std.mem.Allocator) void {
+        for (self.gizmos.items) |g| Gizmos.destroy(g);
+        self.gizmos.deinit(gpa);
         inline for (.{ &self.inputs, &self.workbench_inputs }) |inputs| {
             var it = inputs.iterator();
             while (it.next()) |e| {
@@ -291,6 +296,18 @@ pub const UiImpl = struct {
         return .{ .x = p.x, .y = p.y };
     }
 
+    pub fn addGizmo(loaded: *Loaded) sal.Object(Gizmo) {
+        const t = wraith.tablesOf(loaded) orelse return .{};
+        const g = Gizmos.create() catch return .{};
+        t.ui.lock.lock();
+        defer t.ui.lock.unlock();
+        t.ui.gizmos.append(gpa, g) catch {
+            Gizmos.destroy(g);
+            return .{};
+        };
+        return .init(g, t.gizmo);
+    }
+
     pub fn imguiProc(_: *Loaded, name: []const u8) usize {
         return @intFromPtr(host.ui.getProc(name));
     }
@@ -444,6 +461,51 @@ pub const MenuItemImpl = struct {
     pub fn remove(m: *Menu) void {
         if (@atomicRmw(bool, &m.removed, .Xchg, true, .acq_rel)) return;
         MenuItems.remove(&m.item);
+    }
+};
+
+/// Freed with the plugin, so a removed one's still safe to call.
+pub const GizmoImpl = struct {
+    const G = Gizmos.Gizmo;
+
+    pub fn show(g: *G) void {
+        g.show();
+    }
+
+    pub fn hide(g: *G) void {
+        g.hide();
+    }
+
+    pub fn place(g: *G, world: W.Mat4) void {
+        g.place(world);
+    }
+
+    pub fn setTool(g: *G, tool: W.GizmoTool) void {
+        g.setTool(switch (tool) {
+            .rotate => .rotate,
+            .scale => .scale,
+            else => .move,
+        });
+    }
+
+    pub fn setWorldAxes(g: *G, on: bool) void {
+        g.setWorldAxes(on);
+    }
+
+    pub fn moved(g: *G) ?W.Mat4 {
+        return g.takeMoved();
+    }
+
+    pub fn dragging(g: *G) bool {
+        return g.isDragging();
+    }
+
+    pub fn hovered(g: *G) bool {
+        return g.isHovered();
+    }
+
+    pub fn remove(g: *G) void {
+        g.remove();
     }
 };
 

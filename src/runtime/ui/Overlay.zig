@@ -22,6 +22,8 @@ const Themes = @import("Themes.zig");
 const fonts = @import("fonts.zig");
 const Graphics = @import("../graphics/Graphics.zig");
 const FrameStats = @import("../FrameStats.zig");
+const Gizmos = @import("Gizmos.zig");
+const host_frame = @import("../host/frame.zig");
 const Window = @import("tuft_input").Window;
 const Blocker = @import("tuft_input").Blocker;
 const Keybinds = @import("tuft_input").Keybinds;
@@ -473,6 +475,8 @@ fn onFrame(self: *Overlay, frame: *const Graphics.Frame) void {
     if (!self.host.beginFrame(frame, self.deltaTime())) return self.headlessUpdate();
     self.draw.fire(.{});
     self.update.fire(.{});
+    // After plugins' frames and posing, so whatever they placed this frame is where it's drawn
+    drawGizmos(self);
     // After plugins' frames, so one asked for in there is this frame
     self.requestCaptures();
     self.host.endFrame(frame);
@@ -538,6 +542,13 @@ fn failCaptures(self: *Overlay) void {
 fn onCaptured(self: *Overlay, event: tuft_imgui.capture.Event) void {
     const captures = self.captures orelse return;
     captures.event(event, @fromBackingInt(@intCast(self.api.load(.acquire))));
+}
+
+/// The gizmo in front, with the game's camera. Draggable only while the overlay has the mouse, so
+/// clicks go to the game otherwise.
+fn drawGizmos(self: *Overlay) void {
+    const v = host_frame.view();
+    Gizmos.draw(if (v.known) .{ .view = v.view, .projection = v.projection } else null, self.taken(.mouse));
 }
 
 fn onSurfaceChange(self: *Overlay, _: *const Graphics.Frame) void {

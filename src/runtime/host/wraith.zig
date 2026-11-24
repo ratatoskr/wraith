@@ -127,6 +127,7 @@ pub const Tables = struct {
     imgui: *const sal.Table(ImGui),
     ui_area: *const sal.Table(ui_area.Ui),
     menu_item: *const sal.Table(ui_area.MenuItem),
+    gizmo: *const sal.Table(ui_area.Gizmo),
     workbench_panel: *const sal.Table(ui_area.WorkbenchPanel),
     draw_list: *const sal.Table(ui_area.DrawList),
     /// What its UI keeps between frames.
@@ -199,6 +200,7 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .imgui = h.adopt(ImGui, imgui_table, o) catch return null,
         .ui_area = h.adopt(ui_area.Ui, sal.implement(ui_area.Ui, ui_area.UiImpl), o) catch return null,
         .menu_item = h.adopt(ui_area.MenuItem, sal.implement(ui_area.MenuItem, ui_area.MenuItemImpl), o) catch return null,
+        .gizmo = h.adopt(ui_area.Gizmo, sal.implement(ui_area.Gizmo, ui_area.GizmoImpl), o) catch return null,
         .workbench_panel = h.adopt(ui_area.WorkbenchPanel, sal.implement(ui_area.WorkbenchPanel, ui_area.WorkbenchPanelImpl), o) catch return null,
         .draw_list = h.adopt(ui_area.DrawList, ui_area.draw_list_table, o) catch return null,
         .hook = h.adopt(Hook, sal.implement(Hook, hooks_area.HookImpl), o) catch return null,
