@@ -81,6 +81,32 @@ pub const AddressesImpl = struct {
     pub fn remove(loaded: *Loaded, id: []const u8) void {
         host.addresses.remove(loaded, id);
     }
+
+    pub fn find(loaded: *Loaded, text: []const u8, names: []const SalName) sal.Plain(Addresses, "find") {
+        var arena: std.heap.ArenaAllocator = .init(allocator);
+        defer arena.deinit();
+        const scope = namesOf(arena.allocator(), names) catch return error.Failed;
+        var problem: api.LocationProblem = .{};
+        const found = host.addresses.find(loaded, text, scope, &problem) catch |err| {
+            const e = addressError(err);
+            if (problem.message().len == 0) return e;
+            return explain(e, "{s}", .{problem.message()});
+        };
+        return .{ .address = found.address, .source = switch (found.source) {
+            .live => .live,
+            .snapshot => .snapshot,
+            .disk => .disk,
+        } };
+    }
+
+    pub fn setSources(loaded: *Loaded, allowed: W.AddressSources) void {
+        host.addresses.setSources(loaded, .{ .live = allowed.live, .snapshot = allowed.snapshot, .disk = allowed.disk });
+    }
+
+    pub fn sources(loaded: *Loaded) W.AddressSources {
+        const s = host.addresses.sourcesOf(loaded) orelse @import("../Names.zig").defaultSources();
+        return .{ .live = s.live, .snapshot = s.snapshot, .disk = s.disk };
+    }
 };
 
 // Code

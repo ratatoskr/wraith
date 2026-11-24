@@ -30,7 +30,7 @@ pub fn add(loaded: *Loaded, entry: api.AddressEntry) api.AddressAddError!void {
     if (entry.offsets.len > offsets.len) return error.InvalidAddress;
     for (entry.offsets, 0..) |o, i| offsets[i] = @intCast(o);
     try Names.global.put(.{
-        .source = .plugin,
+        .origin = .plugin,
         .owner = &loaded.owner,
         .group = loaded.name,
         .name = full,
@@ -48,9 +48,19 @@ pub fn remove(loaded: *Loaded, id: []const u8) void {
 }
 
 pub fn resolve(loaded: *Loaded, text: []const u8, names: []const api.Name, problem: *api.LocationProblem) api.AddressError!usize {
+    return (try find(loaded, text, names, problem)).address;
+}
+
+pub const Found = struct { address: usize, source: mem.AddressSource };
+
+/// Like `resolve`, saying which copy of the code it was worked out from.
+pub fn find(loaded: *Loaded, text: []const u8, names: []const api.Name, problem: *api.LocationProblem) api.AddressError!Found {
     var found: mem.Location.Problem = .{};
     const scope: Scope = .{ .loaded = loaded, .names = names };
-    return Names.global.eval(text, scope.symbols(), &found) catch |err| {
+    const previous = Names.usePluginSources(sourcesOf(loaded));
+    defer _ = Names.usePluginSources(previous);
+    var source: mem.AddressSource = .live;
+    const at = Names.global.evalFrom(text, scope.symbols(), &found, &source) catch |err| {
         problem.set(found.message());
         return switch (err) {
             error.Unreadable => error.Unreadable,
@@ -58,6 +68,18 @@ pub fn resolve(loaded: *Loaded, text: []const u8, names: []const api.Name, probl
             else => error.InvalidAddress,
         };
     };
+    return .{ .address = at, .source = source };
+}
+
+/// What it said its lookups may use, or null for Wraith's setting.
+pub fn sourcesOf(loaded: *const Loaded) ?mem.Sources {
+    const raw = loaded.address_sources.load(.acquire);
+    return if (raw == 0) null else @bitCast(raw);
+}
+
+/// None at all goes back to Wraith's setting.
+pub fn setSources(loaded: *Loaded, sources: mem.Sources) void {
+    loaded.address_sources.store(if (sources.none()) 0 else @bitCast(sources), .release);
 }
 
 /// How a plugin, a project or a tweak looks names up, before everyone's in `Names`: `names` first,
@@ -100,31 +122,49 @@ pub fn publishStatics(loaded: *Loaded) void {
     Names.global.removeFrom(.schema, &loaded.owner);
     const s = loaded.schemas orelse return;
     const schema = &s.parsed.schema;
-    for (schema.statics) |st| nameStatic(loaded, schema, s.parsed.source, st, "");
+    const source = s.parsed.source;
+    for (schema.statics) |st| nameStatic(loaded, schema, source, st, "");
+    for (schema.functions) |f| nameFunction(loaded, source, f, "");
     for (schema.types) |t| switch (t.kind) {
-        .@"struct" => |st| for (st.statics) |one| nameStatic(loaded, schema, s.parsed.source, one, t.name),
+        .@"struct" => |st| {
+            for (st.statics) |one| nameStatic(loaded, schema, source, one, t.name);
+            for (st.methods) |m| if (m.virtual == null) nameFunction(loaded, source, m, t.name);
+        },
         else => {},
     };
 }
 
 fn nameStatic(loaded: *Loaded, schema: *const SalSchema, source: []const u8, st: SalSchema.Static, owner: []const u8) void {
-    if (!ownFile(loaded, SalSchema.fileOf(source, st.at))) return;
+    var type_buf: [256]u8 = undefined;
+    const type_text = std.fmt.bufPrint(&type_buf, "{f}", .{st.type}) catch "";
+    nameSig(loaded, source, st.at, st.annotations, owner, st.name, .data, type_text, schema.sizeOf(st.type) orelse 0);
+}
+
+fn nameFunction(loaded: *Loaded, source: []const u8, m: SalSchema.Method, owner: []const u8) void {
+    var type_buf: [256]u8 = undefined;
+    const type_text = std.fmt.bufPrint(&type_buf, "fn{f}", .{m.signature}) catch "fn";
+    nameSig(loaded, source, m.at, m.annotations, owner, m.name, .function, type_text, 0);
+}
+
+/// Something of its own schemas with a `[Sig]`, as a name like `kai.Player.update`.
+fn nameSig(loaded: *Loaded, source: []const u8, at: SalSchema.Pos, annotations: []const SalSchema.Annotation, owner: []const u8, member: []const u8, kind: Names.Kind, type_text: []const u8, size: usize) void {
+    if (!ownFile(loaded, SalSchema.fileOf(source, at))) return;
+    var steps: [sigs.max_steps]mem.Sig.Step = undefined;
+    const sig = (sigs.of(annotations, "wraith", "Sig", &steps) catch return) orelse return;
     var id_buf: [192]u8 = undefined;
-    const id = (if (owner.len > 0) std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ owner, st.name }) else st.name) catch return;
+    const id = (if (owner.len > 0) std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ owner, member }) else member) catch return;
     var name_buf: [256]u8 = undefined;
     const name = loaded.ownName(&name_buf, id) orelse return;
-    var steps: [sigs.max_steps]mem.Sig.Step = undefined;
-    const sig = (sigs.of(st.annotations, "wraith", "Sig", &steps) catch return) orelse return;
     var text_buf: [1024]u8 = undefined;
-    var type_buf: [256]u8 = undefined;
     Names.global.put(.{
-        .source = .schema,
+        .origin = .schema,
+        .kind = kind,
         .owner = &loaded.owner,
         .group = loaded.displayName(),
         .name = name,
         .where = .{ .text = .{ .text = std.fmt.bufPrint(&text_buf, "{f}", .{sig}) catch return } },
-        .type = std.fmt.bufPrint(&type_buf, "{f}", .{st.type}) catch return,
-        .size = schema.sizeOf(st.type) orelse 0,
+        .type = type_text,
+        .size = size,
     }) catch {};
 }
 
@@ -139,8 +179,8 @@ pub fn publishList(loaded: *Loaded, items: []const devtools.AddressList.Item) vo
     const lease = cleanup.lease(&loaded.owner) orelse return;
     defer lease.end();
     const schemas: []const *const SalSchema = if (loaded.schemas) |s| &.{&s.parsed.schema} else &.{};
-    const source: Names.Source = if (loaded.prefix().len == 0) .user else .plugin;
-    Names.global.setList(source, &loaded.owner, loaded.displayName(), loaded.prefix(), items, schemas);
+    const origin: Names.Origin = if (loaded.prefix().len == 0) .user else .plugin;
+    Names.global.setList(origin, &loaded.owner, loaded.displayName(), loaded.prefix(), items, schemas);
 }
 
 var cleanup: OnGone(.released, released) = .{};
@@ -169,7 +209,7 @@ const tests = struct {
 
         var shown: [2]Names.Info = undefined;
         try testing.expectEqual(1, Names.global.list(&shown));
-        try testing.expectEqual(.plugin, shown[0].source);
+        try testing.expectEqual(.plugin, shown[0].origin);
         try testing.expectEqualStrings("kai", shown[0].group.get());
 
         var problem: api.LocationProblem = .{};

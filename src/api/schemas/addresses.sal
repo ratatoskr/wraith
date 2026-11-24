@@ -18,6 +18,23 @@ struct Name {
     usize address;
 }
 
+// Which copy of the game's code an address was worked out from. `snapshot` is copied as Wraith
+// starts, `disk` is the game's exe file, for code that something hooked before then
+enum AddressSource : u8 { live, snapshot, disk }
+
+// Which copies lookups may use, tried live first, then the snapshot, then disk
+struct AddressSources {
+    bool live;
+    bool snapshot;
+    bool disk;
+}
+
+// Where something is, and which copy of the code it was worked out from
+struct Found {
+    usize address;
+    AddressSource source;
+}
+
 struct AddressEntry {
     // Unique for the plugin
     string id;
@@ -41,4 +58,12 @@ trait Addresses {
     void!AddressError add(AddressEntry entry);
     // Only the plugin's own, by the id it added.
     void remove(string id);
+    // Like `resolve`, saying which copy of the code it was found in. Something hooked code found in
+    // the snapshot or on disk, so its bytes are different now.
+    Found!AddressError find(string text, []Name names);
+    // Which copies this plugin's lookups may use: sigs in its schemas, `resolve` and `find`. Till
+    // it's called, Wraith's setting says. A sig's own `Sources(..)` wins over both.
+    void setSources(AddressSources sources);
+    // What this plugin's lookups may use now.
+    AddressSources sources();
 }

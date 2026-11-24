@@ -41,6 +41,9 @@ retired_schemas: std.ArrayList(*host_api.schemas.Schemas) = .empty,
 /// What it offers plugins that depend on it, one per [Service] trait in its own schemas. The names
 /// point into its schemas.
 services: std.ArrayList(host_api.wraith.Service) = .empty,
+/// Which copies of the game's code its lookups may use, a `tuft_mem.Sources`. 0 leaves it to
+/// Wraith's setting.
+address_sources: Atomic(u8) = .init(0),
 
 pub const Echo = struct {
     ctx: *anyopaque,

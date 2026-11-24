@@ -6,9 +6,11 @@ const std = @import("std");
 const Names = @import("../../../Names.zig");
 
 const devtools = @import("tuft_devtools");
+const memory = @import("tuft_mem");
 const ui = @import("wraith_ui");
 
 const Workbench = @import("../Workbench.zig");
+const Versions = @import("Versions.zig");
 
 const is64 = @sizeOf(usize) == 8;
 
@@ -16,6 +18,16 @@ window: ui.Window = .{ .title = "Disassembly", .size = .{ 900, 480 }, .min_size 
 wb: *Workbench,
 bar: devtools.AddressBar = .{ .symbols = Names.global_symbols, .memory = .local },
 code: devtools.AsmView = .{ .memory = .local, .symbols = Names.global_symbols, .claims = .local },
+/// Which copy of the game's code `code` shows.
+source: memory.AddressSource = .live,
+/// What `code` read when it was made, for showing live code again.
+live: ?memory.Memory = null,
+/// A second pane next to `code`, kept where it is.
+split: bool = false,
+other: devtools.AsmView = undefined,
+other_source: memory.AddressSource = .snapshot,
+synced: Versions.Synced(devtools.AsmView) = .{},
+panes: ui.Split = .{ .ratio = 0.5 },
 
 pub fn open(self: *Disassembly, address: usize) void {
     self.goTo(address);
@@ -29,12 +41,34 @@ pub fn follow(self: *Disassembly, address: usize) void {
 }
 
 pub fn draw(self: *Disassembly) void {
+    const live = self.live orelse blk: {
+        self.live = self.code.memory;
+        break :blk self.code.memory;
+    };
+    if (Versions.picker("##source", &self.source)) self.code.memory = Versions.memoryOf(self.source, live);
+    ui.sameLine();
+    self.bar.trailing = if (self.split) Versions.picker_width + 8 else 0;
     if (self.bar.draw()) |address| {
         self.code.goTo(address);
         self.code.focus();
     }
+    if (self.split) {
+        ui.sameLine();
+        if (Versions.picker("##other_source", &self.other_source)) self.other.memory = Versions.memoryOf(self.other_source, live);
+    }
     self.code.marks = .{ .ctx = self.wb, .func = Workbench.markAt };
-    self.code.draw("code", .{ 0, 0 });
+    if (self.split) {
+        if (self.panes.first("code")) |pane| {
+            defer pane.end();
+            self.code.draw("code", .{ 0, 0 });
+        }
+        if (self.panes.second("other")) |pane| {
+            defer pane.end();
+            self.other.marks = self.code.marks;
+            self.other.draw("other", .{ 0, 0 });
+        }
+        self.synced.sync(&self.code, &self.other);
+    } else self.code.draw("code", .{ 0, 0 });
 
     const keys = &devtools.keys;
     var menu = ui.commands("code", .{});
@@ -75,6 +109,7 @@ pub fn draw(self: *Disassembly) void {
         self.wb.sig_maker.start(self.wb, selected.?.start);
     }
     if (menu.item(.{ .label = "Go to address", .chord = keys.go_to })) self.bar.focus();
+    if (menu.item(.{ .label = if (self.split) "Close second pane" else "Split view", .tooltip = "Another pane next to this one, kept at the same place, to compare copies of the code side by side" })) self.toggleSplit();
     menu.separator();
     self.code.commands(&menu);
     if (is64) {
@@ -91,4 +126,16 @@ fn goTo(self: *Disassembly, address: usize) void {
     self.bar.visit(address);
     self.code.goTo(address);
     self.code.focus();
+}
+
+/// The second pane starts where the first is, showing another copy.
+pub fn toggleSplit(self: *Disassembly) void {
+    self.split = !self.split;
+    if (!self.split) return;
+    const live = self.live orelse self.code.memory;
+    if (self.other_source == self.source) self.other_source = if (self.source == .live) .snapshot else .live;
+    self.other = self.code;
+    self.other.take_focus = false;
+    self.other.memory = Versions.memoryOf(self.other_source, live);
+    self.synced.reset();
 }

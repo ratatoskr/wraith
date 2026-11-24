@@ -6,9 +6,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const core = @import("wraith_core");
+const memory = @import("tuft_mem");
 
 pub const Registry = @import("settings/Registry.zig");
 const Console = @import("Console.zig");
+const Names = @import("Names.zig");
 
 /// What Wraith's own settings are listed under.
 pub const group = "Wraith";
@@ -59,6 +61,11 @@ pub const Own = struct {
     file_io: *Registry.Setting,
     ime: *Registry.Setting,
     sounds: *Registry.Setting,
+    sources: *Registry.Setting,
+
+    /// For `wraith.address_sources`, in the order of `sources_options`.
+    const sources_options = [_][]const u8{ "Live, then snapshot, then disk", "Live, then snapshot", "Live only" };
+    const sources_values = [_]memory.Sources{ .all, .{ .disk = false }, .live_only };
 
     pub fn add(registry: *Registry) !Own {
         const level: std.log.Level = if (builtin.mode == .debug) .debug else .info;
@@ -111,7 +118,19 @@ pub const Own = struct {
             .section = "Look & Feel",
             .kind = .{ .toggle = true },
         }, .{ .changed = .{ .ctx = registry, .call = soundsChanged } });
-        return .{ .registry = registry, .log_level = log_level, .console = console, .file_io = file_io, .ime = ime, .sounds = sounds };
+        errdefer registry.remove(sounds);
+        const sources = try registry.add(.{
+            .id = "wraith.address_sources",
+            .name = "Find hooked code",
+            .help = "Where signatures are looked for when they aren't in the game's code as it is now, like when another mod hooked it first. The snapshot is the code as Wraith started, disk is the game's exe. Plugins can say for themselves.",
+            .group = group,
+            .section = "Advanced",
+            .scope = .game,
+            .kind = .{ .choice = .{ .default = sources_options[0], .options = &sources_options } },
+        }, .{ .changed = .{ .ctx = registry, .call = sourcesChanged } });
+        const own: Own = .{ .registry = registry, .log_level = log_level, .console = console, .file_io = file_io, .ime = ime, .sounds = sounds, .sources = sources };
+        Names.setDefaultSources(own.addressSources());
+        return own;
     }
 
     pub fn remove(self: Own) void {
@@ -120,6 +139,21 @@ pub const Own = struct {
         self.registry.remove(self.file_io);
         self.registry.remove(self.ime);
         self.registry.remove(self.sounds);
+        self.registry.remove(self.sources);
+    }
+
+    pub fn addressSources(self: Own) memory.Sources {
+        return sourcesOf(self.registry.get(self.sources).choice);
+    }
+
+    fn sourcesOf(choice: []const u8) memory.Sources {
+        for (sources_options, sources_values) |o, v| if (std.mem.eql(u8, o, choice)) return v;
+        return .all;
+    }
+
+    fn sourcesChanged(ctx: *anyopaque, s: *Registry.Setting) void {
+        const registry: *Registry = @ptrCast(@alignCast(ctx));
+        Names.setDefaultSources(sourcesOf(registry.get(s).choice));
     }
 
     pub fn logLevel(self: Own) std.log.Level {

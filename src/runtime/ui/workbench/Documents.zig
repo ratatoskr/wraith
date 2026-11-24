@@ -132,13 +132,14 @@ pub fn newDocument(self: *Workbench, kind: Kind) !*Document {
             .tweak => .{ .tweak = .{ .wb = self } },
         },
     };
-    // The part after ### is the ID, so a document keeps its spot in the layout
+    // The part after ### is the ID, so a document keeps its spot in the layout. Ones made empty are
+    // new till they're saved somewhere, which renames them
     const label = switch (kind) {
         .code => "Disassembly",
         .memory => "Memory",
-        .script => "Script",
-        .schema => "Schema",
-        .tweak => "Tweak",
+        .script => "New script",
+        .schema => "New schema",
+        .tweak => "New tweak",
     };
     const others = countOf(self, kind);
     if (others == 0) {
@@ -265,7 +266,7 @@ pub fn newTweakDocument(self: *Workbench, kind: TweakEditor.Kind) !*Document {
         freeDocument(self, doc);
     }
     try doc.body.tweak.init(null, kind);
-    if (kind == .group) retitle(doc, "Tweak group");
+    if (kind == .group) retitle(doc, "New tweak group");
     return doc;
 }
 

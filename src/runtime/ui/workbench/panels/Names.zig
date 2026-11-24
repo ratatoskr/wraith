@@ -8,9 +8,11 @@ const std = @import("std");
 const core = @import("wraith_core");
 const devtools = @import("tuft_devtools");
 const Schema = @import("salamander_schema").Schema;
-const values = @import("tuft_mem").values;
+const memory = @import("tuft_mem");
+const values = memory.values;
 const Kind = values.Kind;
 const ui = @import("wraith_ui");
+const Atomic = @import("tuft_arch").atomic.Value;
 
 const Names = @import("../../../Names.zig");
 const Navigator = @import("../Navigator.zig");
@@ -21,7 +23,7 @@ const AddressList = devtools.AddressList;
 const Info = Names.Info;
 
 /// More are left out, so a runaway plugin can't make it crawl.
-const max_listed = 4096;
+const max_listed = 16384;
 /// User entries and where things are change without a new generation, so it looks again anyway.
 const refresh_ns = std.time.ns_per_s / 2;
 
@@ -43,6 +45,11 @@ generation: u32 = 0,
 refreshed_ns: u64 = 0,
 picked: ui.Selection = .{},
 filter: Filter = .all,
+kind: KindFilter = .any,
+/// Only this plugin's, or the like. Empty for everyone's.
+group: [64:0]u8 = @splat(0),
+/// Each group once, pointing into `infos`, with "Any plugin" first.
+groups: std.ArrayList([:0]const u8) = .empty,
 search: [128:0]u8 = @splat(0),
 // The scan box
 module: [64:0]u8 = @splat(0),
@@ -54,8 +61,12 @@ section: [16:0]u8 = blk: {
 name: [64:0]u8 = @splat(0),
 pattern: [256:0]u8 = @splat(0),
 last_scan: ?(anyerror!Names.Result) = null,
-/// Scan the copy of the code taken at startup instead of live memory.
-original: bool = false,
+/// Which copies of the game's code rescans and new scans read.
+scan_from: ScanFrom = .fallback,
+/// Rescan all, which runs on a thread of its own.
+worker: ?std.Thread = null,
+progress: Names.Progress = .{},
+running: Atomic(bool) = .init(false),
 
 pub const Filter = enum {
     all,
@@ -67,7 +78,7 @@ pub const Filter = enum {
 
     const labels: []const [:0]const u8 = &.{ "All", "User", "Schemas", "Plugins", "Tweaks", "Scans" };
 
-    fn lets(self: Filter, source: Names.Source) bool {
+    fn lets(self: Filter, source: Names.Origin) bool {
         return switch (self) {
             .all => true,
             .user => source == .user,
@@ -79,10 +90,50 @@ pub const Filter = enum {
     }
 };
 
+pub const ScanFrom = enum {
+    fallback,
+    live,
+    snapshot,
+    disk,
+
+    const labels: []const [:0]const u8 = &.{ "Fall through", "Live", "Snapshot", "Disk" };
+
+    fn sources(self: ScanFrom) memory.Sources {
+        return switch (self) {
+            .fallback => .all,
+            .live => .only(.live),
+            .snapshot => .only(.snapshot),
+            .disk => .only(.disk),
+        };
+    }
+};
+
+pub const KindFilter = enum {
+    any,
+    data,
+    functions,
+    other,
+
+    const labels: []const [:0]const u8 = &.{ "Any kind", "Data", "Functions", "Other" };
+
+    fn lets(self: KindFilter, kind: Names.Kind) bool {
+        return switch (self) {
+            .any => true,
+            .data => kind == .data,
+            .functions => kind == .function,
+            .other => kind == .other,
+        };
+    }
+};
+
 pub fn deinit(self: *NamesPanel) void {
+    self.progress.cancel.store(true, .release);
+    if (self.worker) |w| w.join();
+    self.worker = null;
     self.picked.deinit();
     self.infos.deinit(self.allocator);
     self.shown.deinit(self.allocator);
+    self.groups.deinit(self.allocator);
 }
 
 /// Copies them all again, then filters.
@@ -91,9 +142,28 @@ pub fn refresh(self: *NamesPanel) void {
     self.generation = Names.global.generation();
     self.total = Names.global.count();
     self.shown.clearRetainingCapacity();
+    self.groups.clearRetainingCapacity();
     self.infos.resize(self.allocator, @min(self.total, max_listed)) catch return;
     self.infos.shrinkRetainingCapacity(Names.global.list(self.infos.items));
+    self.listGroups();
     self.refilter();
+}
+
+fn listGroups(self: *NamesPanel) void {
+    self.groups.append(self.allocator, "Any plugin") catch return;
+    for (self.infos.items) |*info| {
+        const g = info.group.get();
+        if (g.len == 0) continue;
+        const seen = for (self.groups.items[1..]) |had| {
+            if (std.mem.eql(u8, had, g)) break true;
+        } else false;
+        if (!seen) self.groups.append(self.allocator, g) catch return;
+    }
+    std.mem.sort([:0]const u8, self.groups.items[1..], {}, struct {
+        fn less(_: void, a: [:0]const u8, b: [:0]const u8) bool {
+            return std.ascii.lessThanIgnoreCase(a, b);
+        }
+    }.less);
 }
 
 /// Next frame, since rows point into what it copied.
@@ -104,8 +174,10 @@ fn refreshSoon(self: *NamesPanel) void {
 fn refilter(self: *NamesPanel) void {
     self.shown.clearRetainingCapacity();
     const text = std.mem.trim(u8, std.mem.sliceTo(&self.search, 0), " \t");
+    const group = std.mem.sliceTo(&self.group, 0);
     for (self.infos.items) |*info| {
-        if (!self.filter.lets(info.source) or !matches(info, text)) continue;
+        if (!self.filter.lets(info.origin) or !self.kind.lets(info.kind) or !matches(info, text)) continue;
+        if (group.len > 0 and !std.mem.eql(u8, info.group.get(), group)) continue;
         self.shown.append(self.allocator, info) catch return;
     }
 }
@@ -130,6 +202,15 @@ pub fn draw(self: *NamesPanel) void {
         self.refilter();
     }
     ui.sameLine();
+    var kind: usize = @backingInt(self.kind);
+    ui.setNextItemWidth(100);
+    if (ui.combo("##kind", &kind, KindFilter.labels)) {
+        self.kind = @fromBackingInt(@intCast(kind));
+        self.refilter();
+    }
+    ui.sameLine();
+    self.groupCombo();
+    ui.sameLine();
     ui.setNextItemWidth(220);
     if (ui.inputTextHint("##filter", "Filter by name, type or text", &self.search)) self.refilter();
     ui.sameLine();
@@ -139,12 +220,18 @@ pub fn draw(self: *NamesPanel) void {
         ui.textDisabled("{d} of {d} shown", .{ self.shown.items.len, self.total });
     }
     ui.sameLine();
-    _ = ui.checkbox("Original code", &self.original);
-    ui.tooltip("Rescans and new scans read the copy of the game's code taken when Wraith started, before anything hooked it, instead of live memory", .{});
+    var from: usize = @backingInt(self.scan_from);
+    ui.setNextItemWidth(150);
+    if (ui.combo("##scan_from", &from, ScanFrom.labels)) self.scan_from = @fromBackingInt(@intCast(from));
+    ui.tooltip("What rescans and new scans read: the game's code as it is now, the snapshot taken as Wraith started, or the game's exe on disk. Falling through tries each till one has it, for code something hooked", .{});
+    if (self.rescanning()) {
+        ui.sameLine();
+        ui.textColored(orange, "Rescanning, {d} of {d}", .{ self.progress.done.load(.acquire), self.progress.total.load(.acquire) });
+    }
 
     if (ui.collapsingHeader("New scan", false)) self.scanBox();
 
-    const table = ui.table("names", 6, .{
+    const table = ui.table("names", 7, .{
         .borders = true,
         .row_background = true,
         .resizable = true,
@@ -153,6 +240,7 @@ pub fn draw(self: *NamesPanel) void {
         .scroll_y = true,
     }) orelse return;
     ui.tableColumnWith("Name", .{ .stretch = true, .width = 2 });
+    ui.tableColumnWith("Kind", .{ .stretch = true, .width = 0.6 });
     ui.tableColumnWith("Source", .{ .stretch = true, .width = 1 });
     ui.tableColumnWith("Location", .{ .stretch = true, .width = 3 });
     ui.tableColumnWith("Address", .{ .stretch = true, .width = 1.5 });
@@ -174,6 +262,12 @@ pub fn draw(self: *NamesPanel) void {
         _ = picking.row(i, ui.format("{s}", .{info.name.get()}));
         if (info.label.len() > 0 and !std.mem.eql(u8, info.label.get(), info.name.get()) and ui.isItemHovered()) ui.tooltip("{s}", .{info.label.get()});
         _ = ui.tableNextColumn();
+        switch (info.kind) {
+            .data => ui.textDisabled("data", .{}),
+            .function => ui.textDisabled("function", .{}),
+            .other => {},
+        }
+        _ = ui.tableNextColumn();
         drawSource(info);
         _ = ui.tableNextColumn();
         drawLocation(info);
@@ -190,15 +284,35 @@ pub fn draw(self: *NamesPanel) void {
     self.commands(rows);
 }
 
+fn groupCombo(self: *NamesPanel) void {
+    if (self.groups.items.len == 0) return;
+    const group = std.mem.sliceTo(&self.group, 0);
+    var which: usize = 0;
+    if (group.len > 0) {
+        for (self.groups.items[1..], 1..) |g, i| if (std.mem.eql(u8, g, group)) {
+            which = i;
+        };
+    }
+    ui.setNextItemWidth(140);
+    if (!ui.combo("##group", &which, self.groups.items)) return;
+    self.group = @splat(0);
+    if (which > 0) {
+        const g = self.groups.items[which];
+        const n = @min(g.len, self.group.len);
+        @memcpy(self.group[0..n], g[0..n]);
+    }
+    self.refilter();
+}
+
 fn drawSource(info: *const Info) void {
-    ui.text("{s}", .{sourceName(info.source)});
+    ui.text("{s}", .{sourceName(info.origin)});
     const group = groupOf(info);
     if (group.len == 0) return;
     ui.sameLine();
     ui.textDisabled("{s}", .{group});
 }
 
-fn sourceName(source: Names.Source) []const u8 {
+fn sourceName(source: Names.Origin) []const u8 {
     return switch (source) {
         .user => "user",
         .schema => "schema",
@@ -208,10 +322,10 @@ fn sourceName(source: Names.Source) []const u8 {
     };
 }
 
-/// Its plugin, tweak or scanner. Schemas' are all the project's, so that says nothing.
+/// Its plugin, tweak or scanner. The open project's own schemas have none.
 fn groupOf(info: *const Info) []const u8 {
-    return switch (info.source) {
-        .user, .schema => "",
+    return switch (info.origin) {
+        .user => "",
         else => info.group.get(),
     };
 }
@@ -273,10 +387,18 @@ fn drawScanStatus(s: *const Names.ScanInfo) void {
             ui.sameLine();
         }
     }
-    if (now.original) {
-        ui.textDisabled("[orig]", .{});
-        ui.tooltip("Scanned the original code, copied before anything was hooked", .{});
-        ui.sameLine();
+    switch (now.source) {
+        .live => {},
+        .snapshot => {
+            ui.textDisabled("[snapshot]", .{});
+            ui.tooltip("Found in the snapshot of the game's code taken as Wraith started. Something's hooked it since", .{});
+            ui.sameLine();
+        },
+        .disk => {
+            ui.textDisabled("[disk]", .{});
+            ui.tooltip("Found in the game's exe on disk. Something hooked it before Wraith started", .{});
+            ui.sameLine();
+        },
     }
     if (now.err) |err| {
         ui.textColored(red, "{t}", .{err});
@@ -309,8 +431,10 @@ fn commands(self: *NamesPanel, rows: []const *const Info) void {
     const one = self.focused(rows);
     const any = self.picked.count() > 0;
     var scans = false;
-    for (rows) |info| if (info.scan != null and self.picked.contains(info.id)) {
-        scans = true;
+    var unfound = false;
+    for (rows) |info| if (self.picked.contains(info.id)) {
+        if (info.scan != null) scans = true;
+        if (lookable(info)) unfound = true;
     };
 
     if (menu.item(.{ .label = "Show in memory", .chord = keys.show_memory, .enabled = one != null, .default = true, .tooltip = "Looks for it first if it hasn't been. A scan's bytes are marked" })) {
@@ -323,9 +447,13 @@ fn commands(self: *NamesPanel, rows: []const *const Info) void {
     if (menu.item(.{ .label = "Add to addresses", .chord = keys.add_to_list, .enabled = any and self.wb != null, .tooltip = if (self.wb == null) "From the workbench's Names" else "An entry of your own that points at it by name, typed when the type's known" })) {
         for (rows) |info| if (self.picked.contains(info.id)) self.addToAddresses(info);
     }
-    if (menu.item(.{ .label = "Rescan", .enabled = scans, .tooltip = "Scan the picked ones again, to see what they find now" })) {
-        for (rows) |info| if (info.scan != null and self.picked.contains(info.id)) {
-            _ = Names.global.rescan(info.id, self.original);
+    if (menu.item(.{ .label = "Rescan", .enabled = scans or unfound, .tooltip = "Scan the picked ones again, to see what they find now. Ones not looked for yet get looked for" })) {
+        for (rows) |info| if (self.picked.contains(info.id)) {
+            if (info.scan != null) {
+                _ = Names.global.rescan(info.id, self.scan_from.sources());
+            } else if (lookable(info)) {
+                _ = Names.global.get(info.name.get()) catch {};
+            }
         };
         self.refreshSoon();
     }
@@ -349,19 +477,50 @@ fn commands(self: *NamesPanel, rows: []const *const Info) void {
         };
         clip.copy();
     }
-    if (menu.item(.{ .label = "Copy rows", .enabled = any, .tooltip = "Name, source, address and status, one per line" })) {
+    if (menu.item(.{ .label = "Copy rows", .enabled = any, .tooltip = "Name, kind, source, address and status, one per line" })) {
         var clip: Clip = .{};
         for (rows) |info| if (self.picked.contains(info.id)) {
-            var status_buf: [300]u8 = undefined;
-            clip.line("{s}\t{s}\t{s}\t{s}", .{ info.name.get(), sourceName(info.source), if (info.address) |at| ui.format("0x{x}", .{at}) else "-", statusText(info, &status_buf) });
+            var status_buf: [600]u8 = undefined;
+            clip.line("{s}\t{s}\t{s}\t{s}\t{s}", .{ info.name.get(), @tagName(info.kind), sourceName(info.origin), if (info.address) |at| ui.format("0x{x}", .{at}) else "-", statusText(info, &status_buf) });
         };
         clip.copy();
     }
     menu.separator();
-    if (menu.item(.{ .label = "Rescan all", .tooltip = "Scan every signature again, to see what each finds now" })) {
-        Names.global.rescanAll(self.original);
-        self.refreshSoon();
+    if (self.rescanning()) {
+        if (menu.item(.{ .label = "Stop rescanning" })) self.progress.cancel.store(true, .release);
+    } else if (menu.item(.{ .label = "Rescan all", .tooltip = "Scan every signature again, and look for every name that isn't anywhere yet, so signatures nothing's used get scanned too" })) {
+        self.rescanAll();
     }
+}
+
+/// A name with location text that isn't anywhere yet, so looking for it might scan.
+fn lookable(info: *const Info) bool {
+    return info.scan == null and info.text.len() > 0 and info.address == null;
+}
+
+fn rescanning(self: *NamesPanel) bool {
+    return self.running.load(.acquire);
+}
+
+/// On a thread, since there can be thousands of signatures.
+pub fn rescanAll(self: *NamesPanel) void {
+    if (self.rescanning()) return;
+    // The last one's done, so this doesn't wait
+    if (self.worker) |w| w.join();
+    self.worker = null;
+    self.progress = .{};
+    self.running.store(true, .release);
+    self.worker = std.Thread.spawn(.{}, rescanWork, .{ self, self.scan_from.sources() }) catch {
+        Names.global.scanEverything(self.scan_from.sources(), &self.progress);
+        self.running.store(false, .release);
+        self.refreshSoon();
+        return;
+    };
+}
+
+fn rescanWork(self: *NamesPanel, sources: memory.Sources) void {
+    Names.global.scanEverything(sources, &self.progress);
+    self.running.store(false, .release);
 }
 
 fn statusText(info: *const Info, buf: []u8) []const u8 {
@@ -478,12 +637,13 @@ fn idOf(info: *const *const Info) u64 {
     return info.*.id;
 }
 
-const Column = enum { name, source, location, address, type, status };
+const Column = enum { name, kind, source, location, address, type, status };
 
 fn order(_: void, column: ?Column, a: *const Info, b: *const Info) std.math.Order {
     return switch (column orelse return std.math.order(a.id, b.id)) {
         .name => std.mem.order(u8, a.name.get(), b.name.get()),
-        .source => switch (std.math.order(@backingInt(a.source), @backingInt(b.source))) {
+        .kind => std.math.order(@backingInt(a.kind), @backingInt(b.kind)),
+        .source => switch (std.math.order(@backingInt(a.origin), @backingInt(b.origin))) {
             .eq => std.mem.order(u8, a.group.get(), b.group.get()),
             else => |o| o,
         },
@@ -520,7 +680,11 @@ fn scanBox(self: *NamesPanel) void {
                 .not_unique => ui.textColored(orange, "not unique", .{}),
             }
             ui.sameLine();
-            ui.textDisabled("{d} match(es) in {d:.2} ms{s}", .{ r.matches orelse 0, ms(r.ns), if (r.original) ", original code" else "" });
+            ui.textDisabled("{d} match(es) in {d:.2} ms{s}", .{ r.matches orelse 0, ms(r.ns), switch (r.source) {
+                .live => "",
+                .snapshot => ", in the snapshot",
+                .disk => ", in the exe on disk",
+            } });
         } else |err| {
             ui.textColored(red, "{t}", .{err});
         }
@@ -537,7 +701,7 @@ pub fn scanNow(self: *NamesPanel) void {
         std.mem.sliceTo(&self.module, 0),
         std.mem.sliceTo(&self.section, 0),
         pattern,
-        self.original,
+        self.scan_from.sources(),
     );
     self.refresh();
 }

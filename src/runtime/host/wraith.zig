@@ -833,7 +833,7 @@ const DiagnosticsImpl = struct {
             .pattern = scan.pattern,
             .start = scan.start,
             .len = scan.length,
-            .original = scan.original,
+            .source = if (scan.original) .snapshot else .live,
             .outcome = switch (scan.outcome) {
                 .found => .found,
                 .not_unique => .not_unique,
@@ -845,9 +845,39 @@ const DiagnosticsImpl = struct {
     }
 
     pub fn original(_: *Loaded, start: usize, length: usize) usize {
-        return @intFromPtr(host.signatures.original(start, length));
+        return @intFromPtr(host.signatures.codeCopy(start, length, .snapshot));
+    }
+
+    pub fn recordScanFrom(loaded: *Loaded, scan: W.ScanRecord) void {
+        host.signatures.record(loaded, .{
+            .name = scan.name,
+            .pattern = scan.pattern,
+            .start = scan.start,
+            .len = scan.length,
+            .source = apiSource(scan.source),
+            .first_match = scan.first_match,
+            .outcome = switch (scan.outcome) {
+                .found => .found,
+                .not_unique => .not_unique,
+                else => .not_found,
+            },
+            .address = scan.address,
+            .ns = scan.ns,
+        });
+    }
+
+    pub fn codeCopy(_: *Loaded, start: usize, length: usize, source: W.AddressSource) usize {
+        return @intFromPtr(host.signatures.codeCopy(start, length, host.signatures.sourceOf(apiSource(source))));
     }
 };
+
+fn apiSource(source: W.AddressSource) api.AddressSource {
+    return switch (source) {
+        .snapshot => .snapshot,
+        .disk => .disk,
+        else => .live,
+    };
+}
 
 // Sound
 

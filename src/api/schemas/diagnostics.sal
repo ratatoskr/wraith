@@ -16,6 +16,20 @@ struct SignatureScan {
     u64 ns;
 }
 
+// A scan, saying which copy of the code it read
+struct ScanRecord {
+    string name;
+    string pattern;
+    usize start;
+    usize length;
+    AddressSource source;
+    // Took the first of several matches
+    bool first_match;
+    ScanOutcome outcome;
+    usize address;
+    u64 ns;
+}
+
 trait Diagnostics {
     void addZone(usize zone, u32 version);
     void removeZone(usize zone);
@@ -25,4 +39,8 @@ trait Diagnostics {
     void recordScan(SignatureScan scan);
     // Where the game's code from `start` is kept as it was before anything patched it, or 0
     usize original(usize start, usize length);
+    // Like `recordScan`, with which copy it read
+    void recordScanFrom(ScanRecord scan);
+    // Where `source`'s copy of the game's code from `start` is, or 0. Live memory has none
+    usize codeCopy(usize start, usize length, AddressSource source);
 }

@@ -112,7 +112,7 @@ pub fn create(allocator: std.mem.Allocator, info: *const RuntimeInfo) !*Runtime 
     errdefer host.wraith.setIo(null);
 
     // Before anything hooks the game's code
-    OriginalCode.global.take(std.heap.page_allocator);
+    OriginalCode.global.take(std.heap.page_allocator, io);
     errdefer OriginalCode.global.release();
     Names.global = .init(allocator);
     errdefer Names.global.deinit();

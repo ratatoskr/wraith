@@ -494,6 +494,8 @@ pub const SchemaImpl = struct {
 
     pub fn address(loaded: *Loaded, name: []const u8) sal.Plain(Area, "address") {
         const s = of(loaded) catch return error.Unknown;
+        const previous = Names.usePluginSources(@import("addresses.zig").sourcesOf(loaded));
+        defer _ = Names.usePluginSources(previous);
         return s.address(name);
     }
 

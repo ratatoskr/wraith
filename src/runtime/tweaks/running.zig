@@ -477,7 +477,7 @@ fn publishNames(t: *const Tweak, names: []const protocol.TweakState.Name) void {
         var buf: [256]u8 = undefined;
         const full = fullName(&buf, t, n.name) orelse continue;
         const size = if (std.meta.stringToEnum(format.Type, n.type)) |ty| ty.size() else 0;
-        Names.global.put(.{ .source = .tweak, .group = t.name, .name = full, .where = .{ .at = @intCast(n.address) }, .type = n.type, .size = size }) catch |err| {
+        Names.global.put(.{ .origin = .tweak, .group = t.name, .name = full, .where = .{ .at = @intCast(n.address) }, .type = n.type, .size = size }) catch |err| {
             log.warn("Couldn't name {s}: {t}", .{ full, err });
         };
     }

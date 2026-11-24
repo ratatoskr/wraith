@@ -19,7 +19,8 @@ pub fn record(loaded: *Loaded, scan: api.Scan) void {
         .pattern = scan.pattern,
         .start = scan.start,
         .len = scan.len,
-        .original = scan.original,
+        .source = sourceOf(scan.source),
+        .first_match = scan.first_match,
         .outcome = switch (scan.outcome) {
             .found => .found,
             .not_unique => .not_unique,
@@ -30,14 +31,23 @@ pub fn record(loaded: *Loaded, scan: api.Scan) void {
     }) catch {};
 }
 
+pub fn sourceOf(source: api.AddressSource) memory.AddressSource {
+    return switch (source) {
+        .live => .live,
+        .snapshot => .snapshot,
+        .disk => .disk,
+    };
+}
+
 var cleanup: OnGone(.released, released) = .{};
 
 fn released(owner: *Owner) void {
     Names.global.removeOwner(owner);
 }
 
-pub fn original(start: usize, len: usize) ?[*]const u8 {
-    return OriginalCode.global.find(start, len);
+/// `source`'s copy of the game's code from `start`.
+pub fn codeCopy(start: usize, len: usize, source: memory.AddressSource) ?[*]const u8 {
+    return OriginalCode.global.find(source, start, len);
 }
 
 test "scans listed until release" {

@@ -404,12 +404,16 @@ pub const Heap = core.heap.Usage;
 
 pub const ScanOutcome = enum { found, not_found, not_unique };
 
+/// Which copy of the game's code a scan read, see `addresses.sal`.
+pub const AddressSource = enum(u8) { live, snapshot, disk };
+
 pub const Scan = struct {
     name: []const u8,
     pattern: []const u8,
     start: usize,
     len: usize,
-    original: bool,
+    source: AddressSource = .live,
+    first_match: bool = false,
     outcome: ScanOutcome,
     address: usize,
     ns: u64,

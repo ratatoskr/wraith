@@ -496,6 +496,7 @@ const tests = struct {
 
     test "script plugins use game code their schemas declare, live, and share them" {
         const host = @import("host/root.zig");
+        const Names = @import("Names.zig");
         try @import("tuft_hook").init(testing.allocator);
         defer @import("tuft_hook").deinit();
         host.wraith.setIo(testing.io);
@@ -564,6 +565,10 @@ const tests = struct {
         try loader.start(&.{});
         try testing.expectEqual(.loaded, install.info("named_js").?.state);
         try testing.expectEqual(.loaded, install.info("named_lua").?.state);
+        // Its sigs are names, functions too, but not virtuals or another plugin's
+        for ([_][]const u8{ "named_js.four", "named_js.answer", "named_js.Manager.six" }) |name| try testing.expect(Names.global.has(.schema, name));
+        try testing.expect(!Names.global.has(.schema, "named_js.Manager.bump"));
+        try testing.expect(!Names.global.has(.schema, "named_lua.four"));
 
         try testing.expectEqual(9, four.call(2));
         try testing.expectEqual(20, five.call(2));

@@ -122,12 +122,16 @@ test "default layout" {
         labels[n] = e.window.label();
         n += 1;
     }
-    try testing.expectEqual(10, n);
+    try testing.expectEqual(11, n);
     try testing.expectEqualStrings("Addresses", labels[1]);
     try testing.expectEqualStrings("Names", labels[2]);
-    try testing.expectEqualStrings("Tweaks", labels[3]);
-    try testing.expectEqualStrings("Engine", labels[8]);
-    try testing.expectEqualStrings("Plugins", labels[9]);
+    try testing.expectEqualStrings("Schemas", labels[3]);
+    try testing.expectEqualStrings("Tweaks", labels[4]);
+    try testing.expectEqualStrings("Engine", labels[9]);
+    try testing.expectEqualStrings("Plugins", labels[10]);
+    // Open from the start, with the documents since it's as big as one
+    try testing.expect(p.schemas.window.open);
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(p.schemas.window.title).?);
     // Most games have no C# or engine plugins, so it waits closed with the documents
     const engine = &wb.groups.engine;
     try testing.expect(!engine.window.open);
@@ -284,7 +288,7 @@ test "script document" {
     const doc = wb.documents.items[3];
     const session = doc.body.script.session;
     try testing.expectEqual(1, session);
-    try testing.expectEqualStrings("Script", wb.scripts.find(session).?.label());
+    try testing.expectEqualStrings("New script", wb.scripts.find(session).?.label());
 
     wb.scripts.run(session, "1 + 1");
     messages.deliver();
@@ -1037,12 +1041,12 @@ test "names panel" {
     @memcpy(&first, @as([*]const u8, @ptrFromInt(text.start))[0..8]);
     var hex: [32]u8 = undefined;
     const pattern = try std.fmt.bufPrint(&hex, "{x}", .{&first});
-    _ = try Names.global.scanManual("start", "", ".text", pattern, false);
-    _ = try Names.global.scanManual("nowhere", "", ".text", "DE AD BE EF DE AD BE EF DE AD BE EF 00 11 22 33", false);
-    Names.global.rescanAll(false);
+    _ = try Names.global.scanManual("start", "", ".text", pattern, .live_only);
+    _ = try Names.global.scanManual("nowhere", "", ".text", "DE AD BE EF DE AD BE EF DE AD BE EF 00 11 22 33", .live_only);
+    Names.global.rescanAll(.live_only);
     var value: u32 = 7;
-    try Names.global.put(.{ .source = .plugin, .group = "kai", .name = "kai.hp", .where = .{ .at = @intFromPtr(&value) }, .type = "u32", .size = 4 });
-    try Names.global.put(.{ .source = .schema, .group = "schemas", .name = "Game.instance", .where = .{ .text = .{ .text = "[nowhere]" } }, .type = "Player*" });
+    try Names.global.put(.{ .origin = .plugin, .group = "kai", .name = "kai.hp", .where = .{ .at = @intFromPtr(&value) }, .type = "u32", .size = 4 });
+    try Names.global.put(.{ .origin = .schema, .group = "schemas", .name = "Game.instance", .where = .{ .text = .{ .text = "[nowhere]" } }, .type = "Player*" });
     try testing.expectError(error.NotFound, Names.global.get("Game.instance"));
 
     frames.run(wb, 2);
@@ -1066,6 +1070,18 @@ test "names panel" {
     @memcpy(panel.search[0..4], "GAME");
     panel.refresh();
     try testing.expectEqual(1, panel.shown.items.len);
+    panel.search = @splat(0);
+    // Typed ones are data, and each group can be picked
+    panel.kind = .data;
+    panel.refresh();
+    try testing.expectEqual(2, panel.shown.items.len);
+    try testing.expect(panel.groups.items.len >= 3);
+    @memcpy(panel.group[0..3], "kai");
+    panel.refresh();
+    try testing.expectEqual(1, panel.shown.items.len);
+    try testing.expectEqualStrings("kai.hp", panel.shown.items[0].name.get());
+    panel.kind = .any;
+    panel.group = @splat(0);
 
     // Pointers to structs are read through, the rest are where the name is
     var parsed = try salamander_schema.parse(testing.allocator, "[Size(0x10)] struct Player { u32 hp; }", .{}, null);
@@ -1093,6 +1109,133 @@ test "names panel" {
     const code = &wb.active_code.?.body.code;
     try testing.expectEqual(text.start, code.code.selection().?.start);
     try testing.expectEqual(text.start, code.bar.current());
+}
+
+test "schemas panel" {
+    const Names = @import("../../Names.zig");
+    const SharedSchemas = @import("../../SharedSchemas.zig");
+    const Owner = @import("tuft_event").Owner;
+    const salamander_schema = @import("salamander_schema");
+    Names.global = .init(testing.allocator);
+    defer Names.global.deinit();
+    SharedSchemas.global = .init(testing.allocator);
+    defer SharedSchemas.global.deinit();
+    var frames = try Frames.init();
+    defer frames.deinit();
+    const wb = try Workbench.create(testing.allocator, .{});
+    defer wb.destroy();
+
+    const bundle = try salamander_schema.bundle(testing.allocator, &.{.{ .name = "kai/game.sal", .text =
+        \\struct Root { Game.World.Actor actor; }
+        \\namespace Game.World;
+        \\enum Mode : u8 { A, B }
+        \\[Size(0x10)]
+        \\struct Actor {
+        \\    u32 hp;
+        \\    [0x8] Actor* target;
+        \\}
+        \\struct Party { Actor* leader; Vec3 pos; }
+        \\
+    }});
+    defer testing.allocator.free(bundle);
+    var kai: Owner = .init("kai");
+    try SharedSchemas.global.add(.{ .owner = &kai, .group = "kai", .name = "schemas", .text = bundle });
+    defer SharedSchemas.global.removeOwner(&kai);
+    wb.tick();
+    const panel = &wb.panels.schemas;
+    panel.window.focus();
+    frames.run(wb, 3);
+    // Wraith's own types, like Vec3, are read before it as they are for the plugin, under a folder of their own
+    var kais: usize = 0;
+    for (panel.types.items) |t| kais += @intFromBool(std.mem.eql(u8, t.plugin, "kai"));
+    try testing.expectEqual(4, kais);
+    try testing.expectEqual(0, wb.panels.addresses.parse_problem.message().len);
+    // The plugin's open, its namespace and Wraith's aren't
+    try testing.expectEqual(4, panel.rows.items.len);
+    try testing.expectEqualStrings("Root", panel.rows.items[1].label);
+    try testing.expectEqualStrings("Game", panel.rows.items[2].label);
+    try testing.expectEqualStrings("wraith", panel.rows.items[3].label);
+
+    // Picking one opens its folders and shows what uses it
+    try testing.expect(panel.show("Game.World.Actor"));
+    // It shares a dock with the documents, which came to the front
+    panel.window.focus();
+    frames.run(wb, 3);
+    try testing.expectEqual(8, panel.rows.items.len);
+    try testing.expectEqual(2, panel.used_by.items.len);
+    const picked = for (panel.types.items) |*t| {
+        if (std.mem.eql(u8, t.name, "Game.World.Actor")) break t;
+    } else unreachable;
+    const text = salamander_schema.Schema.fileText(picked.source, picked.type.at);
+    try testing.expect(std.mem.startsWith(u8, std.mem.trimStart(u8, text[panel.lines.items[panel.type_lines[0]]..], " "), "[Size(0x10)]"));
+    try testing.expectEqual(panel.type_lines[0] + 4, panel.type_lines[1]);
+
+    // Laid over memory from the memory view
+    const Actor = extern struct { hp: u32, pad: u32 = 0, target: usize };
+    var actor: Actor = .{ .hp = 7, .target = 0 };
+    panel.viewAt(@intFromPtr(&actor));
+    frames.run(wb, 3);
+    try testing.expectEqual(@intFromPtr(&actor), panel.view.address.?);
+    try testing.expectEqualStrings("Game.World.Actor", panel.view.shownName().?);
+
+    // A filter lists matches flat
+    @memcpy(panel.search[0..5], "party");
+    panel.rows_stale = true;
+    panel.window.focus();
+    frames.run(wb, 2);
+    try testing.expectEqual(1, panel.rows.items.len);
+    try testing.expectEqualStrings("Game.World.Party", panel.rows.items[0].label);
+}
+
+test "code and memory show copies of the code, side by side" {
+    const memory = @import("tuft_mem");
+    const Copy = struct {
+        var live: [256]u8 align(16) = @splat(0x90);
+        var disk: [256]u8 align(16) = @splat(0xCC);
+        fn provide(start: usize, len: usize) ?[*]const u8 {
+            const at = @intFromPtr(&live);
+            if (start < at or start + len > at + live.len) return null;
+            return disk[start - at ..].ptr;
+        }
+    };
+    const previous = memory.originals.setProvider(.disk, Copy.provide);
+    defer _ = memory.originals.setProvider(.disk, previous);
+    var frames = try Frames.init();
+    defer frames.deinit();
+    const wb = try Workbench.create(testing.allocator, .{});
+    defer wb.destroy();
+    const at = @intFromPtr(&Copy.live);
+
+    wb.openMemory(at, 4, null);
+    frames.run(wb, 3);
+    const viewer = &wb.active_memory.?.body.memory;
+    viewer.other_source = .disk;
+    viewer.toggleSplit();
+    frames.run(wb, 3);
+    try testing.expectEqual(0xCC, try viewer.other.memory.load(u8, at));
+    try testing.expectEqual(0x90, try viewer.hex.memory.load(u8, at));
+    // Either one moves the other
+    viewer.hex.goTo(at + 32, 2);
+    frames.run(wb, 3);
+    try testing.expectEqual(at + 32, viewer.other.anchor.?);
+    viewer.other.setPlace(.{ .start = viewer.other.shown.start, .len = viewer.other.shown.len, .top = null, .anchor = at + 64, .cursor = at + 64 });
+    frames.run(wb, 3);
+    try testing.expectEqual(at + 64, viewer.hex.anchor.?);
+
+    wb.openCode(at);
+    frames.run(wb, 3);
+    const code = &wb.active_code.?.body.code;
+    code.other_source = .disk;
+    code.toggleSplit();
+    frames.run(wb, 3);
+    code.code.goTo(at + 16);
+    frames.run(wb, 3);
+    // It keeps a few rows above where it went, the same in both
+    try testing.expectEqual(code.code.top, code.other.top);
+    try testing.expect(code.other.top < at + 16);
+    try testing.expectEqual(at + 16, code.other.cursor.address);
+    // What the copy doesn't have can't be read
+    try testing.expectError(error.Unreadable, code.other.memory.load(u8, at - 1));
 }
 
 // Off unless `WRAITH_MANAGED_GAME` names a Unity game's folder. See testing/managed_game.zig.

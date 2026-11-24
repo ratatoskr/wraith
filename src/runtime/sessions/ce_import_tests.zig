@@ -259,7 +259,7 @@ test "a table like kai's runs with every tweak on" {
     defer Names.global.removeGroup(.user, "ce_import_tests");
     for (saved.items, 0..) |item, i| {
         if (item.id.len == 0) continue;
-        try Names.global.put(.{ .source = .user, .group = "ce_import_tests", .name = item.id, .where = .{ .text = .{ .text = try locationOf(a, saved.items, i) } } });
+        try Names.global.put(.{ .origin = .user, .group = "ce_import_tests", .name = item.id, .where = .{ .text = .{ .text = try locationOf(a, saved.items, i) } } });
         listed += 1;
     }
     try testing.expectEqual(8, listed);

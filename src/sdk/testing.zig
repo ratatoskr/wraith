@@ -290,5 +290,10 @@ pub const Fake = struct {
             self.scans += 1;
             self.last_outcome = scan.outcome;
         }
+
+        pub fn recordScanFrom(self: *Fake, scan: W.ScanRecord) void {
+            self.scans += 1;
+            self.last_outcome = scan.outcome;
+        }
     };
 };

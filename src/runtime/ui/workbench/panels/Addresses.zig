@@ -20,6 +20,7 @@ const salamander_schema = @import("salamander_schema");
 const Schema = salamander_schema.Schema;
 const Parsed = salamander_schema.Parsed;
 const sal_options = @import("wraith_api").sal_options;
+const api = @import("wraith_api");
 const Kind = @import("tuft_mem").values.Kind;
 const RwLock = @import("tuft_sys").sync.RwLock;
 const log = core.log.scoped(.wraith_ui);
@@ -46,6 +47,8 @@ schemas: std.ArrayList(*const Schema) = .empty,
 sources: std.ArrayList([]const u8) = .empty,
 /// `SharedSchemas` as last read.
 plugins_generation: u32 = 0,
+/// Why one of them didn't parse, last time they were read. Empty if they all did.
+parse_problem: @import("tuft_text").Message(256) = .{},
 
 const refresh_ns = std.time.ns_per_s / 2;
 
@@ -83,7 +86,20 @@ const Shared = struct {
     parsed: Parsed,
     /// Its plugin, in the parse's arena.
     group: []const u8,
+    /// Wraith's own types come first, as plugins' are read. Ones before here are those.
+    own_from: usize = 0,
+    /// Wraith's own, alone.
+    wraith: bool = false,
+
+    /// The project's first, so its types win, then Wraith's, so they're named after it.
+    fn rank(self: Shared) u2 {
+        if (self.group.len == 0) return 0;
+        return if (self.wraith) 1 else 2;
+    }
 };
+
+/// What plugins' schemas are read after, so theirs can use its types, like `Vec3`.
+const wraith_prefix = api.wraith_sal ++ "\n";
 
 fn freeShared(shared: *std.ArrayList(Shared), gpa: std.mem.Allocator) void {
     for (shared.items) |*p| p.parsed.deinit();
@@ -94,21 +110,25 @@ fn freeShared(shared: *std.ArrayList(Shared), gpa: std.mem.Allocator) void {
 fn readSchemas(self: *Addresses) void {
     const gpa = self.wb.allocator;
     const shared = self.readShared() orelse return;
-    // The project's first, so its types win
     std.mem.sort(Shared, shared.items, {}, struct {
         fn before(_: void, a: Shared, b: Shared) bool {
-            return a.group.len == 0 and b.group.len != 0;
+            return a.rank() < b.rank();
         }
     }.before);
     // The list lets go of the old ones before they're freed
     var schemas: std.ArrayList(*const Schema) = .empty;
     var sources: std.ArrayList([]const u8) = .empty;
+    var from: std.ArrayList(usize) = .empty;
+    defer from.deinit(gpa);
     for (shared.items) |*p| {
+        // Every plugin's has Wraith's types already, so they aren't offered on their own
+        if (p.wraith) continue;
         schemas.append(gpa, &p.parsed.schema) catch {};
         sources.append(gpa, p.group) catch {};
+        from.append(gpa, p.own_from) catch {};
     }
     if (schemas.items.len != sources.items.len) sources.clearRetainingCapacity();
-    self.list.setSchemas(schemas.items, sources.items);
+    self.list.setSchemasFrom(schemas.items, sources.items, if (from.items.len == schemas.items.len) from.items else &.{});
     self.schemas.deinit(gpa);
     self.sources.deinit(gpa);
     self.schemas = schemas;
@@ -126,16 +146,29 @@ fn readShared(self: *Addresses) ?std.ArrayList(Shared) {
     const gpa = self.wb.allocator;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
+    self.parse_problem = .{};
     var parsed: std.ArrayList(Shared) = .empty;
     const entries = SharedSchemas.global.copy(arena.allocator()) catch return parsed;
+    if (entries.len > 0) wraith: {
+        var diag: Schema.Diagnostic = .{};
+        var one = salamander_schema.parse(gpa, api.wraith_sal, sal_options, &diag) catch break :wraith;
+        parsed.append(gpa, .{ .parsed = one, .group = "wraith", .wraith = true }) catch one.deinit();
+    }
     for (entries) |e| {
         var diag: Schema.Diagnostic = .{};
-        var one = salamander_schema.parse(gpa, e.text, sal_options, &diag) catch {
-            log.debug("{s} from {s} doesn't parse: {s}", .{ e.name, e.group, diag.message() });
-            continue;
+        // With Wraith's types before it, as plugins' are read. Else alone, for any that clash
+        const with = std.mem.concat(arena.allocator(), u8, &.{ wraith_prefix, e.text }) catch continue;
+        var own_from: usize = wraith_prefix.len;
+        var one = salamander_schema.parse(gpa, with, sal_options, &diag) catch alone: {
+            own_from = 0;
+            break :alone salamander_schema.parse(gpa, e.text, sal_options, &diag) catch {
+                log.debug("{s} from {s} doesn't parse: {s}", .{ e.name, e.group, diag.message() });
+                self.parse_problem.print("{s}'s schemas don't parse: {s}", .{ e.group, diag.message() });
+                continue;
+            };
         };
         const group = one.arena.allocator().dupe(u8, e.group) catch "";
-        parsed.append(gpa, .{ .parsed = one, .group = group }) catch {
+        parsed.append(gpa, .{ .parsed = one, .group = group, .own_from = own_from }) catch {
             one.deinit();
             break;
         };
