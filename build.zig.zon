@@ -17,8 +17,8 @@
             .hash = "salamander-0.0.1-6ZeDNkhHDgD_JgQO1lSU8i5FLpt5nBH7jloa-0Otp4tv",
         },
         .tuft = .{
-            .url = "git+https://github.com/ratatoskr/tuft.git#b00284b53097525fedbfead1e74d8b1ad001cd3e",
-            .hash = "tuft-0.0.0-DNo4yraJJwBW-KyQMjrghBCv1z6V9ijndsKRMIo1Ir4f",
+            .url = "git+https://github.com/ratatoskr/tuft.git#581b645a5baeffa1de21ef9e803e04a9bb9d63c8",
+            .hash = "tuft-0.0.0-DNo4ygKjJwAEmmtb2KKGueCccVqyfqMj7o55R6Fee4Ry",
         },
         .sqlite = .{
             .url = "https://sqlite.org/2026/sqlite-amalgamation-3540100.zip",
