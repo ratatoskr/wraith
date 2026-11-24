@@ -78,6 +78,13 @@ pub const PosingImpl = struct {
         defer lock.unlockShared();
         if (photo) |p| p.posing.shapes(actor, list, weights);
     }
+
+    pub fn wanted(_: *Loaded, actor: u64) bool {
+        lock.lockShared();
+        defer lock.unlockShared();
+        const p = photo orelse return false;
+        return p.posing.wants(actor);
+    }
 };
 
 var posing_cleanup: OnGone(.closing, posingOwnerGone) = .{};

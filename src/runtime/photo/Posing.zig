@@ -4,6 +4,7 @@
 const Posing = @This();
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 const math = @import("tuft_math");
 const tuft_input = @import("tuft_input");
@@ -148,6 +149,8 @@ pub fn active(self: *const Posing) bool {
 pub fn pose(self: *Posing, owner: usize, skeleton: W.PosingSkeleton, matrices: *Mat4) void {
     const bones = skeleton.bones;
     const many: [*]Mat4 = @ptrCast(matrices);
+    const t = core.timing.scope("posing a skeleton");
+    defer t.end();
     self.acquire();
     defer self.release();
     self.store.pose(skeleton.id, skeleton.name, bones, many[0..bones.len], skeleton.to_world);
@@ -159,6 +162,13 @@ pub fn shapes(self: *Posing, actor: u64, list: []const W.PosingShape, weights: *
     self.acquire();
     defer self.release();
     self.store.shape(actor, list, many[0..list.len]);
+}
+
+/// Picked or edited, while the window's open.
+pub fn wants(self: *Posing, actor: u64) bool {
+    self.acquire();
+    defer self.release();
+    return self.actor == actor or self.store.hasEdits(actor);
 }
 
 /// Drops what `owner` handed over, when it's going.
@@ -230,7 +240,9 @@ pub fn tick(self: *Posing) void {
 
 fn draw(self: *Posing) void {
     const open = self.isOpen();
+    const waited = core.timing.scope("posing lock");
     self.acquire();
+    waited.end();
     defer self.release();
     const store = &self.store;
     store.frame +%= 1;
@@ -239,7 +251,13 @@ fn draw(self: *Posing) void {
     // The game's plugin sets it each frame
     const v = frame.view();
     if (v.known) store.setCamera(v.view, v.projection) else store.view_proj = null;
-    self.drawSkeletons(store);
+    {
+        const t = core.timing.scope("posing skeletons");
+        defer t.end();
+        self.drawSkeletons(store);
+    }
+    const t = core.timing.scope("posing window");
+    defer t.end();
     self.drawWindow(store);
 }
 
@@ -276,11 +294,14 @@ fn drawSkeletons(self: *Posing, store: *poses.Store) void {
         if (!store.isLive(a)) continue;
         const is_posed = posed == a;
         if (show == .nobody or (show == .posed and !is_posed)) continue;
+        // Each bone once, since it's a parent to its children's lines too
+        var screen: [poses.max_bones]?ui.Vec2 = undefined;
         for (0..a.count) |i| {
-            const at = project(vp, a.position(i)) orelse continue;
+            screen[i] = project(vp, a.position(i));
+            const at = screen[i] orelse continue;
             const p = a.parents[i];
             if (p >= 0 and p < i) {
-                if (project(vp, a.position(@intCast(p)))) |from| dl.addLine(from, at, if (is_posed or posed == null) bone_colour else dim_colour, thickness);
+                if (screen[@intCast(p)]) |from| dl.addLine(from, at, if (is_posed or posed == null) bone_colour else dim_colour, thickness);
             }
             if (is_posed) dl.addCircleFilled(at, thickness + 1.5, joint_colour);
             if (free_mouse) {
@@ -506,22 +527,33 @@ fn shapesTab(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
 /// searching, still indented.
 fn boneList(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
     var depth: [poses.max_bones]u8 = undefined;
+    // What's shown, which is every bone unless searching
+    var rows: [poses.max_bones]u16 = undefined;
+    var n: usize = 0;
     const picked = self.currentBone(a);
     const text = self.searchText();
-    var buf: [96:0]u8 = undefined;
     const pad: [32]u8 = @splat(' ');
-    var shown: usize = 0;
+    var picked_row: ?usize = null;
     for (0..a.count) |i| {
         const p = a.parents[i];
         depth[i] = if (p >= 0 and p < i) @min(depth[@intCast(p)] + 1, pad.len / 2) else 0;
+        if (text.len > 0 and std.ascii.findIgnoreCase(a.names[i].get(), text) == null) continue;
+        if (picked == @as(u32, @intCast(i))) picked_row = n;
+        rows[n] = @intCast(i);
+        n += 1;
+    }
+    if (n == 0) return ui.textDisabled("No bones called that.", .{});
+    // Only the rows on screen, since skeletons run to hundreds of bones
+    var buf: [96:0]u8 = undefined;
+    var clip = ui.clip(n);
+    clip.include(picked_row);
+    while (clip.next()) |r| {
+        const i = rows[r];
         const name = a.names[i].get();
-        if (text.len > 0 and std.ascii.findIgnoreCase(name, text) == null) continue;
-        shown += 1;
         const mark = if (store.findEdit(a.id, name) != null) " *" else "";
         const label = std.fmt.bufPrintSentinel(&buf, "{s}{s}{s}##{d}", .{ pad[0 .. depth[i] * 2], name, mark, i }, 0) catch continue;
-        if (ui.selectable(label, picked == @as(u32, @intCast(i)))) self.select(a, @intCast(i));
+        if (ui.selectable(label, picked == @as(u32, i))) self.select(a, i);
     }
-    if (shown == 0) ui.textDisabled("No bones called that.", .{});
 }
 
 fn searchText(self: *const Posing) []const u8 {

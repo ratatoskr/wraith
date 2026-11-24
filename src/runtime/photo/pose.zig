@@ -170,7 +170,7 @@ pub const Actor = struct {
 
     /// Where a bone is in the world.
     pub fn position(a: *const Actor, bone: usize) Vec3 {
-        return a.world[bone].mul(a.to_world).getTranslation();
+        return a.to_world.transformPoint(a.world[bone].getTranslation());
     }
 
     pub fn find(a: *const Actor, name: []const u8) ?u32 {

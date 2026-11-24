@@ -42,4 +42,8 @@ trait Posing {
     // `weights` has one per shape, in the same order, 0 for none of it and 1 for all of it, and
     // posing changes them in place. `actor` is the skeleton's id.
     void shapes(u64 actor, []PosingShape list, f32* weights);
+    // Whether the player's picked `actor`, the skeleton's id, or edited it. Games that animate far
+    // or minor characters less can animate these ones in full while posing's open, and leave the
+    // rest be.
+    bool wanted(u64 actor);
 }
