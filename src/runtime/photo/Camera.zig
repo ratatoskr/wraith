@@ -629,11 +629,16 @@ fn drawControls(self: *Camera, options: Options, pad: bool) void {
     } }) orelse return;
     defer window.end();
     ui.textDisabled("{s}", .{if (self.orbiting) "Orbiting" else "Flying"});
+    self.drawKeys(options.mouse_look, pad);
+}
+
+/// What does what, as a table, as the player has the keys.
+fn drawKeys(self: *Camera, mouse_look: MouseLook, pad: bool) void {
     const table = ui.table("keys", 2, .{ .sizing = .fixed_fit }) orelse return;
     defer table.end();
     var buf: [160]u8 = undefined;
     for ([_]Hold{ .forward, .back, .left, .right, .up, .down, .faster, .slower }) |h| row(Hold.def(h)[0], "{s}", .{self.keyNames(&buf, self.holds.getPtrConst(h).setting)});
-    row("Look", "{s}", .{switch (options.mouse_look) {
+    row("Look", "{s}", .{switch (mouse_look) {
         .right => "Hold the right mouse button",
         .middle => "Hold the middle mouse button",
         .left => "Hold the left mouse button",
@@ -646,6 +651,25 @@ fn drawControls(self: *Camera, options: Options, pad: bool) void {
     if (pad) row("Controller", "Sticks move and look, triggers go down and up", .{});
     row("Hide these", "{s}", .{self.keyNames(&buf, self.presses.getPtrConst(.controls).setting)});
     row("Stop", "{s}", .{self.keyNames(&buf, self.presses.getPtrConst(.toggle).setting)});
+}
+
+/// The keys, for Photo mode's camera panel.
+pub fn drawKeyList(self: *Camera) void {
+    const options = self.readOptions();
+    self.drawKeys(options.mouse_look, options.gamepad);
+}
+
+/// Rolls back to level, like its key.
+pub fn level(self: *Camera) void {
+    if (self.on) self.goal.roll = 0;
+}
+
+pub fn orbitKeyName(self: *Camera, buf: []u8) []const u8 {
+    return self.keyNames(buf, self.presses.getPtrConst(.orbit).setting);
+}
+
+pub fn levelKeyName(self: *Camera, buf: []u8) []const u8 {
+    return self.keyNames(buf, self.presses.getPtrConst(.level).setting);
 }
 
 /// A key setting's keys as the player has them, like `Left Shift / RB`, or `none`.

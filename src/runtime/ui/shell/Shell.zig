@@ -178,6 +178,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
         p.destroy();
     };
     self.windows.photo.photo = self.photo;
+    if (self.photo) |p| p.window = &self.windows.photo;
     self.windows.photo.screenshot = self.screenshot;
     self.applyFrameSettings(self.own.frameStats());
     self.applyThemeSetting();
@@ -785,6 +786,49 @@ const tests = struct {
             thread.join();
             try testing.expectEqual(17, caller.result.load(.acquire));
         }
+    }
+
+    test "Photo mode opens on Posing's key, draws each part, and closing it stops posing" {
+        var rig: Rig = undefined;
+        try rig.init(.{});
+        defer rig.deinit();
+        const shell = try Shell.create(testing.allocator, rig.overlay, rig.keybinds, .{ .io = testing.io });
+        defer shell.destroy();
+        const photo = shell.photo.?;
+        const window = &shell.windows.photo;
+        rig.present();
+        try testing.expect(!window.window.open);
+
+        // An actor with a face, like a plugin hands over
+        {
+            const Bone = struct { name: []const u8, parent: i32 };
+            const Shape = struct { name: []const u8, mesh: []const u8 };
+            const bones = [_]Bone{ .{ .name = "hips", .parent = -1 }, .{ .name = "head", .parent = 0 } };
+            var matrices = [_]@import("tuft_math").Mat4{ .identity, .identity };
+            const shapes = [_]Shape{.{ .name = "blink", .mesh = "Face" }};
+            var weights = [_]f32{0};
+            photo.posing.store.pose(7, "Rean", &bones, &matrices, .identity);
+            photo.posing.store.shape(7, &shapes, &weights);
+        }
+
+        photo.posing.setOpen(true);
+        for (0..2) |_| rig.present();
+        try testing.expect(window.window.open);
+        try testing.expect(rig.overlay.cursorRequested());
+
+        for ([_]@TypeOf(window.picked){ .world, .camera }) |p| {
+            window.picked = p;
+            for (0..2) |_| rig.present();
+        }
+        // Picking a bone in the game shows its actor
+        photo.posing.select(photo.posing.store.byId(7).?, 1);
+        for (0..2) |_| rig.present();
+        try testing.expectEqual(.actor, window.picked);
+
+        window.window.open = false;
+        for (0..2) |_| rig.present();
+        try testing.expect(!photo.posing.isOpen());
+        try testing.expect(!rig.overlay.cursorRequested());
     }
 
     test "the welcome dims the game and holds input till it's dismissed" {
