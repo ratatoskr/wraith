@@ -1,7 +1,11 @@
 // The game Wraith's in: which one it is, its files, and what it's made with. Any thread. Kinds of
 // things are names, like `steam` or `unity`, so scripts can compare them as they are.
 
-error GameError { Failed = 1 }
+error GameError {
+    Failed = 1,
+    // A plugin has the game's speed control off, see `setSpeedControl`
+    SpeedOff,
+}
 
 struct AntiCheat {
     // Like `easy_anti_cheat`
@@ -67,4 +71,10 @@ trait Game {
     // straight away with what it is now. The newest provider wins. Once the plugin goes, the clocks
     // carry on at the same speed.
     void provideSpeed(keep SpeedHandler handler);
+    // Whether the game's speed can be changed at all, by players or plugins. On unless a plugin says
+    // otherwise. A game's plugin can keep it off where changing it breaks things, and turn it on
+    // where it works, like a photo mode. Turning it off puts the speed back to normal. The newest
+    // plugin's say wins, till that plugin goes.
+    void setSpeedControl(bool on);
+    bool speedControl();
 }

@@ -229,6 +229,10 @@ fn pauseKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
     if (phase != .pressed) return;
     const shell: *Shell = @ptrCast(@alignCast(ctx));
     game_area.setPausedForPlayer(!game_area.paused()) catch |err| {
+        if (err == error.SpeedOff) {
+            _ = shell.overlay.host.toasts.push(.{ .kind = .info, .title = "Game speed", .text = "This game's plugin keeps its speed as it is right now.", .seconds = 3 });
+            return;
+        }
         if (err == error.NeedsPlugin) {
             _ = shell.overlay.host.toasts.push(.{ .kind = .info, .title = "Game speed", .text = "Pausing needs a plugin that handles this game's speed.", .seconds = 3 });
             return;

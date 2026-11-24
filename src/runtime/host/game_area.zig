@@ -52,7 +52,59 @@ fn speedOwnerGone(owner: *Owner) void {
         wanted = 1;
         changed = true;
     }
+    const was_on = controlLocked();
+    dropVote(owner);
+    if (!controlLocked() and was_on) offLocked();
     if (changed) apply() catch {};
+}
+
+/// Plugins' say on whether the game's speed can be changed, the newest last. With none it can.
+const Vote = struct { owner: *Owner, on: bool };
+var votes: [32]Vote = undefined;
+var votes_len: usize = 0;
+
+fn dropVote(owner: *Owner) void {
+    var i: usize = 0;
+    while (i < votes_len) {
+        if (votes[i].owner == owner) {
+            std.mem.copyForwards(Vote, votes[i .. votes_len - 1], votes[i + 1 .. votes_len]);
+            votes_len -= 1;
+        } else i += 1;
+    }
+}
+
+/// Needs `speed_lock`.
+fn controlLocked() bool {
+    return if (votes_len == 0) true else votes[votes_len - 1].on;
+}
+
+/// Back to normal, and stays there. Needs `speed_lock`.
+fn offLocked() void {
+    wanted = 1;
+    resume_to = 1;
+    setter = null;
+    apply() catch {};
+}
+
+/// `owner`'s say, which beats older ones till it goes.
+fn voteLocked(owner: *Owner, on: bool) void {
+    const was_on = controlLocked();
+    dropVote(owner);
+    if (votes_len == votes.len) {
+        std.mem.copyForwards(Vote, votes[0 .. votes_len - 1], votes[1..votes_len]);
+        votes_len -= 1;
+    }
+    votes[votes_len] = .{ .owner = owner, .on = on };
+    votes_len += 1;
+    if (was_on and !controlLocked()) offLocked();
+}
+
+/// Whether the game's speed can be changed now. A game's plugin can keep it as it is, and turn it
+/// on only where it works, like a photo mode.
+pub fn controllable() bool {
+    speed_lock.lockShared();
+    defer speed_lock.unlockShared();
+    return controlLocked();
 }
 
 /// The provider if it takes it, else the clocks. Those only ever speed the game up, since games
@@ -72,6 +124,7 @@ fn lowest() f64 {
 }
 
 fn setLocked(s: f64, owner: ?*Owner) !void {
+    if (!controlLocked()) return error.SpeedOff;
     const before = wanted;
     wanted = std.math.clamp(s, lowest(), speed_.max);
     apply() catch |err| {
@@ -98,6 +151,7 @@ pub fn setPausedForPlayer(on: bool) !void {
     speed_lock.lock();
     defer speed_lock.unlock();
     if (on == (wanted == 0)) return;
+    if (!controlLocked()) return error.SpeedOff;
     if (on and provider == null) return error.NeedsPlugin;
     try setLocked(if (on) 0 else resume_to, null);
 }
@@ -111,7 +165,7 @@ pub fn paused() bool {
 pub fn canSlow() bool {
     speed_lock.lockShared();
     defer speed_lock.unlockShared();
-    return provider != null;
+    return provider != null and controlLocked();
 }
 
 /// What it's at, as asked for.
@@ -159,7 +213,19 @@ pub const Impl = struct {
         defer lease.end();
         speed_lock.lock();
         defer speed_lock.unlock();
-        setLocked(s, &loaded.owner) catch return error.Failed;
+        setLocked(s, &loaded.owner) catch |err| return if (err == error.SpeedOff) error.SpeedOff else error.Failed;
+    }
+
+    pub fn setSpeedControl(loaded: *Loaded, on: bool) void {
+        const lease = speed_cleanup.lease(&loaded.owner) orelse return;
+        defer lease.end();
+        speed_lock.lock();
+        defer speed_lock.unlock();
+        voteLocked(&loaded.owner, on);
+    }
+
+    pub fn speedControl(_: *Loaded) bool {
+        return controllable();
     }
 
     pub fn provideSpeed(loaded: *Loaded, handler: W.SpeedHandler) void {
@@ -356,4 +422,59 @@ test "pausing with a plugin goes back to the speed from before" {
     try setSpeedForPlayer(0);
     try setPausedForPlayer(false);
     try testing.expectEqual(2.5, currentSpeed());
+}
+
+test "a game's plugin keeps the speed off, and another turns it on where it works" {
+    const testing = std.testing;
+    const sdk = @import("wraith_sdk");
+    const Takes = struct {
+        got: f64 = -1,
+        fn handle(self: *@This(), s: f64) bool {
+            self.got = s;
+            return true;
+        }
+    };
+    var takes: Takes = .{};
+    var game_plugin: Loaded = undefined;
+    game_plugin.initForTest(testing.allocator, "ffxiv");
+    sdk.Owner.attach(game_plugin.root());
+    const game = sdk.wraith.root().?.game();
+    game.provideSpeed(W.SpeedHandler.init(&takes, Takes.handle));
+    game.setSpeedControl(false);
+    sdk.Owner.detach();
+    try testing.expect(!game.speedControl());
+    try testing.expect(!canSlow());
+    try testing.expectError(error.SpeedOff, setSpeedForPlayer(2));
+    try testing.expectError(error.SpeedOff, setPausedForPlayer(true));
+
+    var gpose: Loaded = undefined;
+    gpose.initForTest(testing.allocator, "gpose");
+    sdk.Owner.attach(gpose.root());
+    const posing = sdk.wraith.root().?.game();
+    posing.setSpeedControl(true);
+    sdk.Owner.detach();
+    try testing.expect(controllable());
+    try setSpeedForPlayer(0.5);
+    try testing.expectEqual(0.5, takes.got);
+
+    // Off again puts it back to normal
+    sdk.Owner.attach(gpose.root());
+    posing.setSpeedControl(false);
+    sdk.Owner.detach();
+    try testing.expectEqual(1, currentSpeed());
+    try testing.expectEqual(1, takes.got);
+
+    // When the plugin that turned it on goes, the game plugin's say is back, and when that goes too
+    // it's on, as it is in other games
+    sdk.Owner.attach(gpose.root());
+    posing.setSpeedControl(true);
+    sdk.Owner.detach();
+    try setSpeedForPlayer(2);
+    gpose.deinitForTest();
+    wraith.forget(&gpose);
+    try testing.expect(!controllable());
+    try testing.expectEqual(1, currentSpeed());
+    game_plugin.deinitForTest();
+    wraith.forget(&game_plugin);
+    try testing.expect(controllable());
 }

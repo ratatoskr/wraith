@@ -20,6 +20,8 @@ pub const max = 10;
 
 /// Why it only speeds up, for wherever it's explained.
 pub const only_faster = "This game has no plugin that handles its speed, so Wraith can only speed it up.";
+/// Why it can't be changed now, for wherever it's explained.
+pub const off_now = "This game's plugin keeps its speed as it is for now, and turns speed on where it works, like in a photo mode.";
 
 pub const Options = struct {
     /// The slider's, unscaled. 0 takes what's left of the line.
@@ -36,11 +38,14 @@ warned: bool = false,
 rect: [2]ui.Vec2 = .{ .{ 0, 0 }, .{ 0, 0 } },
 
 pub fn draw(self: *GameSpeed, options: Options) void {
+    const on = game_area.controllable();
     const can_slow = game_area.canSlow();
     if (options.label) {
         ui.textDisabled("Speed", .{});
         ui.sameLine();
     }
+    const all_off = ui.disabled(!on);
+    defer all_off.end();
     const is_paused = game_area.paused();
     {
         const off = ui.disabled(!can_slow);
@@ -59,11 +64,15 @@ pub fn draw(self: *GameSpeed, options: Options) void {
         speed = 1;
         changed = true;
     }
-    if (can_slow) {
+    if (!on) {
+        ui.tooltip("{s}", .{off_now});
+    } else if (can_slow) {
         ui.tooltip("How fast the game runs. Right-click for normal, and 0 pauses", .{});
     } else ui.tooltip("How fast the game runs. Right-click for normal. Only faster in this game, since it has no plugin that handles its speed", .{});
-    if (changed) self.report(game_area.setSpeedForPlayer(speed));
-    if (options.explain and !can_slow) ui.textWrapped("{s}", .{only_faster});
+    if (changed and on) self.report(game_area.setSpeedForPlayer(speed));
+    if (options.explain) {
+        if (!on) ui.textWrapped("{s}", .{off_now}) else if (!can_slow) ui.textWrapped("{s}", .{only_faster});
+    }
 }
 
 fn report(self: *GameSpeed, result: anyerror!void) void {
