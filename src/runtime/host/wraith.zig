@@ -12,6 +12,7 @@ const sync = @import("tuft_sys").sync;
 const host = @import("root.zig");
 const settings = @import("settings.zig");
 const frame = @import("frame.zig");
+const threads = @import("threads.zig");
 const keybinds = @import("keybinds.zig");
 const Libraries = @import("../Libraries.zig");
 const memory_area = @import("memory_area.zig");
@@ -29,7 +30,7 @@ const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const sal = api.salamander;
 const W = api.wraith;
-pub const Wraith = W.Wraith;
+pub const Wraith = W.Api;
 pub const Clipboard = W.Clipboard;
 pub const Settings = W.Settings;
 pub const Setting = W.Setting;
@@ -39,8 +40,8 @@ pub const Game = game_area.Game;
 pub const FreeCamera = photo_area.FreeCamera;
 pub const Posing = photo_area.Posing;
 pub const SchemaArea = host.schemas.Area;
-pub const FrameSubscription = W.FrameSubscription;
-pub const TickDriver = W.TickDriver;
+pub const FrameSubscription = W.Frame.Subscription;
+pub const TickDriver = W.Frame.TickDriver;
 pub const Input = W.Input;
 pub const Keybind = W.Keybind;
 pub const Library = W.Libraries;
@@ -58,7 +59,7 @@ pub const VfsWatch = files_area.VfsWatch;
 pub const Images = files_area.Images;
 pub const Image = files_area.Image;
 pub const Tweaks = W.Tweaks;
-pub const TweakSwitchSubscription = W.TweakSwitchSubscription;
+pub const TweakSwitchSubscription = W.Tweaks.SwitchSubscription;
 pub const Hooks = hooks_area.Hooks;
 pub const ImGui = W.ImGui;
 pub const Hook = hooks_area.Hook;
@@ -67,9 +68,9 @@ pub const Watch = hooks_area.Watch;
 pub const Sound = W.Sound;
 pub const Diagnostics = W.Diagnostics;
 pub const Plugin = W.Plugin;
-pub const PluginKind = W.PluginKind;
-pub const Guest = W.Guest;
-pub const Service = W.Service;
+pub const PluginKind = W.Plugin.Kind;
+pub const Guest = W.Plugin.Guest;
+pub const Service = W.Plugin.Service;
 
 const allocator = std.heap.page_allocator;
 const log = core.log.scoped(.wraith_runtime);
@@ -127,6 +128,7 @@ pub const Tables = struct {
     imgui: *const sal.Table(ImGui),
     ui_area: *const sal.Table(ui_area.Ui),
     menu_item: *const sal.Table(ui_area.MenuItem),
+    window: *const sal.Table(ui_area.Window),
     gizmo: *const sal.Table(ui_area.Gizmo),
     workbench_panel: *const sal.Table(ui_area.WorkbenchPanel),
     draw_list: *const sal.Table(ui_area.DrawList),
@@ -200,6 +202,7 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .imgui = h.adopt(ImGui, imgui_table, o) catch return null,
         .ui_area = h.adopt(ui_area.Ui, sal.implement(ui_area.Ui, ui_area.UiImpl), o) catch return null,
         .menu_item = h.adopt(ui_area.MenuItem, sal.implement(ui_area.MenuItem, ui_area.MenuItemImpl), o) catch return null,
+        .window = h.adopt(ui_area.Window, sal.implement(ui_area.Window, host.windows.Impl), o) catch return null,
         .gizmo = h.adopt(ui_area.Gizmo, sal.implement(ui_area.Gizmo, ui_area.GizmoImpl), o) catch return null,
         .workbench_panel = h.adopt(ui_area.WorkbenchPanel, sal.implement(ui_area.WorkbenchPanel, ui_area.WorkbenchPanelImpl), o) catch return null,
         .draw_list = h.adopt(ui_area.DrawList, ui_area.draw_list_table, o) catch return null,
@@ -349,8 +352,8 @@ pub fn ResolverOf(comptime P: type) type {
 const Job = struct {
     owner: *sal.Owner,
     work: union(enum) {
-        read: ResolverOf(TextPromise),
-        write: struct { resolver: ResolverOf(SetPromise), text: []u8 },
+        read: threads.Back(ResolverOf(TextPromise)),
+        write: struct { resolver: threads.Back(ResolverOf(SetPromise)), text: []u8 },
     },
 
     fn run(job: *Job) void {
@@ -394,7 +397,7 @@ const ClipboardImpl = struct {
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
-        job.* = .{ .owner = t.owner, .work = .{ .read = pair.resolver } };
+        job.* = .{ .owner = t.owner, .work = .{ .read = .of(pair.resolver) } };
         if (!job.start()) {
             allocator.destroy(job);
             pair.resolver.fail(error.Failed);
@@ -418,7 +421,7 @@ const ClipboardImpl = struct {
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
-        job.* = .{ .owner = t.owner, .work = .{ .write = .{ .resolver = pair.resolver, .text = copy } } };
+        job.* = .{ .owner = t.owner, .work = .{ .write = .{ .resolver = .of(pair.resolver), .text = copy } } };
         if (!job.start()) {
             allocator.free(copy);
             allocator.destroy(job);
@@ -431,7 +434,7 @@ const ClipboardImpl = struct {
 // Settings
 
 const SettingsImpl = struct {
-    pub fn add(loaded: *Loaded, definition: W.SettingDefinition, changed: settings.Changed) sal.Plain(Settings, "add") {
+    pub fn add(loaded: *Loaded, definition: W.Setting.Definition, changed: settings.Changed) sal.Plain(Settings, "add") {
         const t = tablesOf(loaded) orelse return error.Unavailable;
         const record = try settings.add(loaded, definition, changed, t.setting);
         return .init(record, t.setting);
@@ -443,7 +446,7 @@ const SettingImpl = struct {
         return settings.get(record);
     }
 
-    pub fn set(record: *settings.Record, value: W.SettingValue) sal.Plain(Setting, "set") {
+    pub fn set(record: *settings.Record, value: W.Setting.Value) sal.Plain(Setting, "set") {
         return settings.set(record, value);
     }
 
@@ -455,12 +458,24 @@ const SettingImpl = struct {
 // Tweaks
 
 const TweaksImpl = struct {
-    pub fn add(loaded: *Loaded, definition: W.TweakDefinition, handler: host.tweaks.Handler) sal.Plain(Tweaks, "add") {
+    pub fn add(loaded: *Loaded, definition: W.Tweaks.Definition, handler: host.tweaks.Handler) sal.Plain(Tweaks, "add") {
         return addIn(loaded, "", definition, handler);
     }
 
-    pub fn addIn(loaded: *Loaded, section: []const u8, definition: W.TweakDefinition, handler: host.tweaks.Handler) sal.Plain(Tweaks, "addIn") {
-        host.tweaks.add(loaded, section, definition, handler) catch |err| return switch (err) {
+    pub fn addIn(loaded: *Loaded, section: []const u8, definition: W.Tweaks.Definition, handler: host.tweaks.Handler) sal.Plain(Tweaks, "addIn") {
+        host.tweaks.add(loaded, section, definition, handler) catch |err| return tweakError(err);
+    }
+
+    pub fn addHook(loaded: *Loaded, section: []const u8, definition: W.Tweaks.Definition, hook: W.Hook) sal.Plain(Tweaks, "addHook") {
+        host.tweaks.addTarget(loaded, section, definition, .{ .hook = hook }) catch |err| return tweakError(err);
+    }
+
+    pub fn addOpener(loaded: *Loaded, section: []const u8, definition: W.Tweaks.Definition, window: W.Window) sal.Plain(Tweaks, "addOpener") {
+        host.tweaks.addTarget(loaded, section, definition, .{ .window = window }) catch |err| return tweakError(err);
+    }
+
+    fn tweakError(err: api.TweakError) W.TweakError {
+        return switch (err) {
             error.InvalidId => error.InvalidId,
             error.InvalidDefinition => error.InvalidDefinition,
             error.OutOfMemory, error.OwnerGone => error.Failed,
@@ -511,6 +526,10 @@ const ConfigImpl = struct {
     pub fn gameDirectory(loaded: *Loaded) []const u8 {
         return host.config.gameDirectory(loaded);
     }
+
+    pub fn pluginDirectory(loaded: *Loaded) []const u8 {
+        return loaded.copy_dir;
+    }
 };
 
 // Frame
@@ -552,7 +571,7 @@ const FrameImpl = struct {
         frame.setView(view_, projection);
     }
 
-    pub fn view(_: *Loaded) W.GameView {
+    pub fn gameView(_: *Loaded) W.Frame.View {
         return frame.view();
     }
 
@@ -564,15 +583,15 @@ const FrameImpl = struct {
         frame.post(loaded, task) catch |err| return frameError(err);
     }
 
-    pub fn capture(loaded: *Loaded, point: W.CapturePoint) sal.Plain(Frame, "capture") {
+    pub fn capture(loaded: *Loaded, point: W.Capture.Point) sal.Plain(Frame, "capture") {
         return host.capture.capture(loaded, switch (point) {
             .before_overlay => .before_overlay,
             else => .after_overlay,
         });
     }
 
-    pub fn stats(loaded: *Loaded) W.FrameStats {
-        const Out = W.FrameStats;
+    pub fn frameStats(loaded: *Loaded) W.Frame.Stats {
+        const Out = W.Frame.Stats;
         const s = host.ui.frameStats(loaded);
         var out: Out = .{};
         inline for (comptime std.meta.fieldNames(api.FrameStats)) |n| {
@@ -595,6 +614,68 @@ const FrameImpl = struct {
 
     pub fn now(_: *Loaded) f64 {
         return @as(f64, @floatFromInt(@import("wraith_core").timing.now())) / std.time.ns_per_ms;
+    }
+
+    pub fn toRender(_: *Loaded) sal.Plain(Frame, "toRender") {
+        return hop("toRender", .render, false);
+    }
+
+    pub fn toGame(_: *Loaded) sal.Plain(Frame, "toGame") {
+        return hop("toGame", .game, false);
+    }
+
+    pub fn toWorker(_: *Loaded) sal.Plain(Frame, "toWorker") {
+        return hop("toWorker", .worker, false);
+    }
+
+    pub fn nextTick(_: *Loaded) sal.Plain(Frame, "nextTick") {
+        return hop("nextTick", .game, true);
+    }
+
+    pub fn delay(_: *Loaded, ms: u32) sal.Plain(Frame, "delay") {
+        const P = sal.Plain(Frame, "delay");
+        const pair = P.make() catch return .{};
+        // Delays are checked each frame and tick
+        if (!threads.reachable(.game)) {
+            pair.resolver.fail(error.NoFrames);
+            return pair.promise;
+        }
+        threads.carryOn(pair.resolver, threads.here());
+        const Due = struct {
+            r: ResolverOf(P),
+            fn run(d: *@This()) void {
+                defer allocator.destroy(d);
+                d.r.settle({});
+            }
+        };
+        const d = allocator.create(Due) catch {
+            pair.resolver.fail(error.Failed);
+            return pair.promise;
+        };
+        d.* = .{ .r = pair.resolver };
+        threads.after(@as(u64, ms) * std.time.ns_per_ms, sal.Task.init(d, Due.run)) catch {
+            allocator.destroy(d);
+            pair.resolver.fail(error.Failed);
+        };
+        return pair.promise;
+    }
+
+    /// Carries on on `to`, right here if it's there already unless `always`.
+    fn hop(comptime name: []const u8, to: threads.Thread, always: bool) sal.Plain(Frame, name) {
+        const P = sal.Plain(Frame, name);
+        const pair = P.make() catch return .{};
+        if (!always and threads.isHere(to)) {
+            pair.resolver.settle({});
+            return pair.promise;
+        }
+        if (!threads.reachable(to)) {
+            pair.resolver.fail(error.NoFrames);
+            return pair.promise;
+        }
+        // Settled now, and whoever waits carries on there, however soon they come
+        pair.resolver.carryOn(threads.queueOf(to));
+        pair.resolver.settle({});
+        return pair.promise;
     }
 };
 
@@ -673,7 +754,7 @@ const InputImpl = struct {
         return .{ .x = p.x, .y = p.y };
     }
 
-    pub fn bind(loaded: *Loaded, action: W.Action, fired: keybinds.Fired) sal.Plain(Input, "bind") {
+    pub fn bind(loaded: *Loaded, action: W.Input.Action, fired: keybinds.Fired) sal.Plain(Input, "bind") {
         const t = tablesOf(loaded) orelse {
             fired.release();
             return error.Failed;
@@ -704,7 +785,7 @@ const InputImpl = struct {
         return .init(record, t.keybind);
     }
 
-    pub fn gamepad(_: *Loaded) ?W.GamepadAxes {
+    pub fn gamepad(_: *Loaded) ?W.Input.GamepadAxes {
         const a = keybinds.gamepad() orelse return null;
         return .{ .left_x = a.left_x, .left_y = a.left_y, .right_x = a.right_x, .right_y = a.right_y, .left_trigger = a.left_trigger, .right_trigger = a.right_trigger };
     }
@@ -733,6 +814,10 @@ const KeybindImpl = struct {
             chords_out[i] = .{ .key = @fromBackingInt(@backingInt(c.key)), .mods = @bitCast(bits & 0xF) };
         }
         return chords_out[0..keys.count()];
+    }
+
+    pub fn next(record: *keybinds.Record) keybinds.NextPromise {
+        return keybinds.next(record);
     }
 };
 
@@ -769,7 +854,7 @@ const LibrariesImpl = struct {
 
 // Log
 
-fn levelOf(level: W.LogLevel) ?std.log.Level {
+fn levelOf(level: W.Log.Level) ?std.log.Level {
     return switch (level) {
         inline .err, .warn, .info, .debug => |l| @field(std.log.Level, @tagName(l)),
         else => null,
@@ -795,11 +880,11 @@ const LogImpl = struct {
         host.log.write(loaded, .debug, default_scope, message);
     }
 
-    pub fn write(loaded: *Loaded, level: W.LogLevel, scope: []const u8, message: []const u8) void {
+    pub fn write(loaded: *Loaded, level: W.Log.Level, scope: []const u8, message: []const u8) void {
         host.log.write(loaded, levelOf(level) orelse return, scope, message);
     }
 
-    pub fn enabled(loaded: *Loaded, level: W.LogLevel) bool {
+    pub fn enabled(loaded: *Loaded, level: W.Log.Level) bool {
         return host.log.enabled(loaded, levelOf(level) orelse return false);
     }
 };
@@ -829,7 +914,7 @@ const DiagnosticsImpl = struct {
         host.diagnostics.removeHeap(heap);
     }
 
-    pub fn recordScan(loaded: *Loaded, scan: W.SignatureScan) void {
+    pub fn recordScan(loaded: *Loaded, scan: W.Diagnostics.SignatureScan) void {
         host.signatures.record(loaded, .{
             .name = scan.name,
             .pattern = scan.pattern,
@@ -850,7 +935,7 @@ const DiagnosticsImpl = struct {
         return @intFromPtr(host.signatures.codeCopy(start, length, .snapshot));
     }
 
-    pub fn recordScanFrom(loaded: *Loaded, scan: W.ScanRecord) void {
+    pub fn recordScanFrom(loaded: *Loaded, scan: W.Diagnostics.ScanRecord) void {
         host.signatures.record(loaded, .{
             .name = scan.name,
             .pattern = scan.pattern,
@@ -868,12 +953,12 @@ const DiagnosticsImpl = struct {
         });
     }
 
-    pub fn codeCopy(_: *Loaded, start: usize, length: usize, source: W.AddressSource) usize {
+    pub fn codeCopy(_: *Loaded, start: usize, length: usize, source: W.Addresses.Source) usize {
         return @intFromPtr(host.signatures.codeCopy(start, length, host.signatures.sourceOf(apiSource(source))));
     }
 };
 
-fn apiSource(source: W.AddressSource) api.AddressSource {
+fn apiSource(source: W.Addresses.Source) api.AddressSource {
     return switch (source) {
         .snapshot => .snapshot,
         .disk => .disk,
@@ -891,7 +976,7 @@ const SoundImpl = struct {
         };
     }
 
-    pub fn playSystem(loaded: *Loaded, which: W.SystemSound) void {
+    pub fn playSystem(loaded: *Loaded, which: W.Sound.System) void {
         host.sound.playSystem(loaded, switch (which) {
             inline .default, .info, .warning, .@"error", .question, .notification => |s| @field(api.SystemSound, @tagName(s)),
             else => .default,
@@ -928,7 +1013,7 @@ const tests = struct {
 
         const w = sdk.wraith.root().?;
         const list = w.settings();
-        const Changed = W.SettingChanged;
+        const Changed = W.Setting.Changed;
         var ctx: u32 = 0;
         const fov = try list.add(.{ .id = "fov", .name = "Field of view", .kind = .number, .scope = .game, .min = 60, .max = 120, .has_default = true, .default_value = .{ .number = 90 } }, Changed.init(&ctx, onChange));
         const mode = try list.add(.{ .id = "mode", .kind = .choice, .options = &.{ "fast", "slow" } }, null);
@@ -978,7 +1063,7 @@ const tests = struct {
             self.posts += 1;
         }
 
-        fn fired(_: *Counts, _: W.KeyPhase) void {}
+        fn fired(_: *Counts, _: W.Keybind.Phase) void {}
     };
 
     test "plain areas, through a plugin's Wraith" {
@@ -1015,11 +1100,11 @@ const tests = struct {
         try testing.expect(!input.keyDown(.f8));
         try testing.expect(!input.buttonDown(.left));
         try testing.expectEqual(null, input.mousePos());
-        try testing.expectError(error.Unavailable, input.bind(.{ .id = "toggle", .chord = .{ .key = .f8 } }, W.KeybindFired.init(&counts, Counts.fired)));
+        try testing.expectError(error.Unavailable, input.bind(.{ .id = "toggle", .chord = .{ .key = .f8 } }, W.Keybind.Fired.init(&counts, Counts.fired)));
 
         const fr = w.frame();
-        const sub = try fr.onFrame(W.FrameTick.init(&counts, Counts.tick));
-        try fr.post(W.FrameTask.init(&counts, Counts.post));
+        const sub = try fr.onFrame(W.Frame.Tick.init(&counts, Counts.tick));
+        try fr.post(W.Frame.Task.init(&counts, Counts.post));
         frame.run();
         try testing.expectEqual(1, counts.ticks);
         try testing.expectEqual(1, counts.posts);
@@ -1030,11 +1115,11 @@ const tests = struct {
         sub.cancel();
         frame.run();
         try testing.expectEqual(2, counts.ticks);
-        _ = fr.stats();
+        _ = fr.frameStats();
         try testing.expectEqual(0, fr.times().len);
 
         // What's left waiting never runs, and what it shared goes with it
-        try fr.post(W.FrameTask.init(&counts, Counts.post));
+        try fr.post(W.Frame.Task.init(&counts, Counts.post));
         loaded.deinitForTest();
         forget(&loaded);
         frame.run();

@@ -36,7 +36,7 @@ const NextResolver = @FieldType(@typeInfo(@typeInfo(@TypeOf(Next.make)).@"fn".re
 pub const Fake = struct {
     /// `post` and `onFrame` refuse, like in a game whose frames the overlay can't hook.
     no_frames: bool = false,
-    frame_stats: W.FrameStats = std.mem.zeroes(W.FrameStats),
+    frame_stats: W.Frame.Stats = std.mem.zeroes(W.Frame.Stats),
     frame_times: []const f32 = &.{},
     debug_enabled: bool = true,
 
@@ -48,7 +48,7 @@ pub const Fake = struct {
     last_message_len: usize = 0,
 
     scans: u32 = 0,
-    last_outcome: W.ScanOutcome = .found,
+    last_outcome: W.Diagnostics.ScanOutcome = .found,
     zones: u32 = 0,
     heaps: u32 = 0,
 
@@ -64,7 +64,7 @@ pub const Fake = struct {
     nexts: std.ArrayList(NextResolver) = .empty,
 
     const FakeImage = struct {
-        size: W.ImageSize,
+        size: W.Image.Size,
         live: bool,
     };
 
@@ -75,14 +75,14 @@ pub const Fake = struct {
     }
 
     const Tick = struct {
-        tick: union(enum) { frame: W.FrameTick, game: W.GameTick },
+        tick: union(enum) { frame: W.Frame.Tick, game: W.Frame.GameTick },
         live: bool,
     };
 
     const gpa = std.heap.smp_allocator;
 
     pub fn root(self: *Fake) Owner.Wraith {
-        return .init(self, partial(W.Wraith, Areas));
+        return .init(self, partial(W.Api, Areas));
     }
 
     pub fn attach(self: *Fake) void {
@@ -170,19 +170,19 @@ pub const Fake = struct {
     };
 
     const Frames = struct {
-        pub fn onFrame(self: *Fake, tick: W.FrameTick) sal.Plain(W.Frame, "onFrame") {
+        pub fn onFrame(self: *Fake, tick: W.Frame.Tick) sal.Plain(W.Frame, "onFrame") {
             if (self.no_frames) return error.NoFrames;
             if (self.ticks_len == self.ticks.len) return error.Failed;
             self.ticks[self.ticks_len] = .{ .tick = .{ .frame = tick }, .live = true };
             self.ticks_len += 1;
-            return .init(&self.ticks[self.ticks_len - 1], partial(W.FrameSubscription, Subscription));
+            return .init(&self.ticks[self.ticks_len - 1], partial(W.Frame.Subscription, Subscription));
         }
 
-        pub fn onTick(self: *Fake, tick: W.GameTick) sal.Plain(W.Frame, "onTick") {
+        pub fn onTick(self: *Fake, tick: W.Frame.GameTick) sal.Plain(W.Frame, "onTick") {
             if (self.ticks_len == self.ticks.len) return error.Failed;
             self.ticks[self.ticks_len] = .{ .tick = .{ .game = tick }, .live = true };
             self.ticks_len += 1;
-            return .init(&self.ticks[self.ticks_len - 1], partial(W.FrameSubscription, Subscription));
+            return .init(&self.ticks[self.ticks_len - 1], partial(W.Frame.Subscription, Subscription));
         }
 
         pub fn onGameThread(self: *Fake) bool {
@@ -202,7 +202,7 @@ pub const Fake = struct {
             return pair.promise;
         }
 
-        pub fn stats(self: *Fake) W.FrameStats {
+        pub fn frameStats(self: *Fake) W.Frame.Stats {
             return self.frame_stats;
         }
 
@@ -234,7 +234,7 @@ pub const Fake = struct {
     };
 
     const Image = struct {
-        pub fn size(i: *FakeImage) W.ImageSize {
+        pub fn dimensions(i: *FakeImage) W.Image.Size {
             return if (i.live) i.size else .{ .width = 0, .height = 0 };
         }
 
@@ -250,7 +250,7 @@ pub const Fake = struct {
     };
 
     const Logs = struct {
-        pub fn write(self: *Fake, level: W.LogLevel, scope: []const u8, message: []const u8) void {
+        pub fn write(self: *Fake, level: W.Log.Level, scope: []const u8, message: []const u8) void {
             self.logs += 1;
             self.last_level = switch (level) {
                 .err => .err,
@@ -264,7 +264,7 @@ pub const Fake = struct {
             @memcpy(self.last_message_buf[0..self.last_message_len], message[0..self.last_message_len]);
         }
 
-        pub fn enabled(self: *Fake, level: W.LogLevel) bool {
+        pub fn enabled(self: *Fake, level: W.Log.Level) bool {
             return level != .debug or self.debug_enabled;
         }
     };
@@ -286,12 +286,12 @@ pub const Fake = struct {
             self.heaps -|= 1;
         }
 
-        pub fn recordScan(self: *Fake, scan: W.SignatureScan) void {
+        pub fn recordScan(self: *Fake, scan: W.Diagnostics.SignatureScan) void {
             self.scans += 1;
             self.last_outcome = scan.outcome;
         }
 
-        pub fn recordScanFrom(self: *Fake, scan: W.ScanRecord) void {
+        pub fn recordScanFrom(self: *Fake, scan: W.Diagnostics.ScanRecord) void {
             self.scans += 1;
             self.last_outcome = scan.outcome;
         }

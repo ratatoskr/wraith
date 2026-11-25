@@ -1,5 +1,5 @@
 // The C# plugin the `cs` kind's tests load. Each load gets its own context, so its statics start over.
-using Ratatoskr.Wraith;
+using Wraith;
 using Salamander;
 
 namespace CsFixture
@@ -17,15 +17,15 @@ namespace CsFixture
 
         public override void Start(Context context)
         {
-            // Through its root, like any plugin
-            if (context.Wraith.Hooks() == null) throw new System.InvalidOperationException("no hooks");
+            // Through its areas' Instance, like any plugin. It throws if there are none
+            _ = Hooks.Instance;
         }
 
         public override AnyObject Service(string trait) => trait == CsService.TraitName ? CsService.From(counter).Raw.AsObject() : default;
     }
 }
 
-namespace Ratatoskr.Wraith
+namespace Wraith
 {
     static partial class Entry
     {

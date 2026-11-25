@@ -99,8 +99,8 @@ const Fixture = struct {
 };
 
 const prelude =
-    \\wraith = require("wraith")
     \\ce = require("ce")
+    \\wraith = ce.areas(Wraith)
     \\on = {}
     \\bridge = {
     \\  isOn = function(path) return on[path] == true end,

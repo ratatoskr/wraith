@@ -1,25 +1,22 @@
 -- Three tweaks for Trails beyond the Horizon. The other folders here do the same in their language.
-local wraith = require("wraith")
 local sal = require("salamander")
-local game = require("schema")
+local game = ExampleLua
+local tweaks = Wraith.tweaks()
 
-local on, off, changed = game.TweakEventKind.on, game.TweakEventKind.off, game.TweakEventKind.changed
+local on, off, changed = Wraith.Tweaks.EventKind.on, Wraith.Tweaks.EventKind.off, Wraith.Tweaks.EventKind.changed
 
 -- Shops still take your Mira, just none of it
 local spend_mira
-local free_shopping = wraith.hooks:named("GameStateManager.spendMira", sal.fn("GameStateManager.spendMira", function(self, _)
+local free_shopping = Wraith.hooks():named("GameStateManager.spendMira", sal.fn("GameStateManager.spendMira", function(self, _)
   return spend_mira(self, 0)
 end), { disabled = true })
 spend_mira = sal.native("GameStateManager.spendMira", free_shopping:original())
 
-wraith.tweaks:addIn("Money", { id = "free_shopping", title = "Free shopping" }, function(event)
-  if event.kind == on then free_shopping:enable()
-  elseif event.kind == off then free_shopping:disable() end
-end)
+tweaks:addHook("Money", { id = "free_shopping", title = "Free shopping" }, free_shopping)
 
 -- Each field comes as a `changed` just before it runs
 local amount = 10000
-wraith.tweaks:addIn("Money", {
+tweaks:addIn("Money", {
   id = "give_mira",
   title = "Give Mira",
   mode = "action",
@@ -36,11 +33,12 @@ wraith.tweaks:addIn("Money", {
 end)
 
 -- Being seen needs the gauge full, so skip both. `expect` stops it patching a game that changed
+local code, schema = Wraith.code(), Wraith.schema()
 local tailing = {
-  wraith.code:patchBytes(wraith.schema:address("tailing_seen"), "\xEB", { expect = "76", disabled = true }),
-  wraith.code:patchBytes(wraith.schema:address("tailing_gauge"), "\xEB\x02", { expect = "F3 0F 5F FE", disabled = true }),
+  code:patchBytes(schema:address("tailing_seen"), "\xEB", { expect = "76", disabled = true }),
+  code:patchBytes(schema:address("tailing_gauge"), "\xEB\x02", { expect = "F3 0F 5F FE", disabled = true }),
 }
-wraith.tweaks:addIn("Field", { id = "tailing_stealth", title = "Tailing without being seen" }, function(event)
+tweaks:addIn("Field", { id = "tailing_stealth", title = "Tailing without being seen" }, function(event)
   if event.kind == on then
     for _, p in ipairs(tailing) do p:enable() end
   elseif event.kind == off then

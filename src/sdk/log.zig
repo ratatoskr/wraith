@@ -43,7 +43,7 @@ pub fn detach() void {
     previous_sink = null;
 }
 
-const LogLevel = @import("wraith_api").wraith.LogLevel;
+const LogLevel = @import("wraith_api").wraith.Log.Level;
 
 fn levelOf(level: core.log.Level) LogLevel {
     return switch (level) {

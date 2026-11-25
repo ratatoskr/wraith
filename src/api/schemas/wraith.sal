@@ -1,5 +1,8 @@
 // Everything a plugin can use, an area each. Each plugin gets its own, which stops once it's unloaded.
-trait Wraith {
+
+namespace Wraith;
+
+[Root] trait Api {
     Addresses addresses();
     // The free camera, for game and engine plugins to hand it the game's camera
     FreeCamera camera();

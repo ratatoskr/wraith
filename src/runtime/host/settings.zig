@@ -22,10 +22,10 @@ pub fn setRegistry(r: ?*Registry) void {
 
 const sal = api.salamander;
 const W = api.wraith;
-const Definition = W.SettingDefinition;
-const Value = W.SettingValue;
+const Definition = W.Setting.Definition;
+const Value = W.Setting.Value;
 /// What `Settings.add` takes to call after a change, from `settings.sal`.
-pub const Changed = ?W.SettingChanged;
+pub const Changed = ?W.Setting.Changed;
 
 pub const Record = struct {
     loaded: *Loaded,
@@ -233,7 +233,7 @@ const tests = struct {
         };
         var seen: Seen = .{};
         const list = sdk.wraith.root().?.settings();
-        const fov = try list.add(.{ .id = "fov", .name = "Field of view", .kind = .number, .min = 60, .max = 120, .has_default = true, .default_value = .{ .number = 90 }, .scope = .game }, W.SettingChanged.init(&seen, Seen.changed));
+        const fov = try list.add(.{ .id = "fov", .name = "Field of view", .kind = .number, .min = 60, .max = 120, .has_default = true, .default_value = .{ .number = 90 }, .scope = .game }, W.Setting.Changed.init(&seen, Seen.changed));
         const mode = try list.add(.{ .id = "mode", .kind = .choice, .options = &.{ "fast", "slow" } }, null);
         try testing.expectError(error.AlreadyAdded, list.add(.{ .id = "fov", .kind = .toggle }, null));
         try testing.expectError(error.InvalidId, list.add(.{ .id = "no spaces", .kind = .toggle }, null));

@@ -1,6 +1,8 @@
 // A thread's registers, as hooks and watches see them, laid out like tuft's CpuContext. Each kind of
 // code has its own, so 64-bit plugins see rax and 32-bit ones see eax.
 
+namespace Wraith;
+
 // One SSE register. Changing one member writes just that one back.
 union Xmm {
     f32[4] f32x4;

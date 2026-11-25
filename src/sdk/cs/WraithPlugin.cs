@@ -1,10 +1,11 @@
 // Wraith's SDK for C# plugins, next to the API that `wraith sdk cs types` generates. A plugin is a
 // class from WraithPlugin, which Entry.Create makes:
 //
-//     namespace Ratatoskr.Wraith { static partial class Entry { internal static partial WraithPlugin Create() => new MyPlugin(); } }
+//     namespace Wraith { static partial class Entry { internal static partial WraithPlugin Create() => new MyPlugin(); } }
 //
 // Entry's `wraith_plugin` is the same one native plugins export, so the plugin runs the same JIT'd by the
-// `cs` kind or compiled with NativeAOT as a native one.
+// `cs` kind or compiled with NativeAOT as a native one. Wraith's areas are each one's Instance, like
+// Wraith.Tweaks.Instance, once it's started.
 
 #nullable enable
 
@@ -13,7 +14,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Salamander;
 
-namespace Ratatoskr.Wraith;
+namespace Wraith;
 
 /// <summary>What a C# plugin is. Make one from it, and have Entry.Create give one.</summary>
 public abstract class WraithPlugin
@@ -26,7 +27,7 @@ public abstract class WraithPlugin
 
     /// <summary>
     /// What it offers for one of its schemas' [Service] traits, by the trait's name, like
-    /// Freecam.From(new MyFreecam()).Raw.AsObject(). Default for none.
+    /// Freecam.Camera.From(new MyCamera()).Raw.AsObject(). Default for none.
     /// </summary>
     public virtual AnyObject Service(string trait) => default;
 }
@@ -34,18 +35,17 @@ public abstract class WraithPlugin
 /// <summary>What a plugin gets as it starts.</summary>
 public sealed class Context
 {
-    readonly Raw.Service[] services;
+    readonly Raw.Wraith_Plugin_Service[] services;
 
-    internal Context(Wraith wraith, Raw.Service[] services)
+    internal Context(Raw.Wraith_Plugin_Service[] services)
     {
-        Wraith = wraith;
         this.services = services;
     }
 
-    /// <summary>All of Wraith's areas, like Wraith.Settings() and Wraith.Hooks().</summary>
-    public Wraith Wraith { get; }
-
-    /// <summary>What plugin, one this plugin depends on, offers as T, a [Service] trait in its schemas. Null if it doesn't.</summary>
+    /// <summary>
+    /// What plugin, one this plugin depends on, offers as T, a [Service] trait in its schemas, or null
+    /// if it doesn't. T.Instance gives the same, throwing if there's none.
+    /// </summary>
     public T? Service<T>(string plugin) where T : class, ITrait<T>
     {
         foreach (var s in services)
@@ -78,7 +78,7 @@ public static unsafe partial class Entry
         public AnyObject wraith;
         public Owner* owner;
         public Salamander.Raw.Queue render_queue;
-        public Raw.Service* services;
+        public Raw.Wraith_Plugin_Service* services;
         public nuint services_len;
     }
 
@@ -87,7 +87,7 @@ public static unsafe partial class Entry
 
     static NativeEntry* entry;
     static WraithPlugin? plugin;
-    static Wraith? wraith;
+    static Api? wraith;
 
     /// <summary>What Wraith calls first. Exported by NativeAOT, and called by the cs kind.</summary>
     [UnmanagedCallersOnly(EntryPoint = "wraith_plugin", CallConvs = [typeof(CallConvCdecl)])]
@@ -111,21 +111,27 @@ public static unsafe partial class Entry
         try
         {
             Runtime.Init(host, guest.owner);
-            wraith = Wraith.FromRaw(Raw.Wraith.FromObject(guest.wraith));
+            wraith = Api.FromRaw(Raw.Wraith_Api.FromObject(guest.wraith));
             if (wraith == null) return false;
+            Api.Instance = wraith;
             var schema = wraith.Schema();
             Declared.Locator = name => schema?.Address(name) ?? 0;
-            Abi.OnException = e => Log(LogLevel.Err, e.ToString());
+            Abi.OnException = e => Log(Wraith.Log.Level.Err, e.ToString());
             // Only good while starting, so they're copied
-            var services = new Raw.Service[(int)guest.services_len];
-            for (var i = 0; i < services.Length; i++) services[i] = guest.services[i];
+            var services = new Raw.Wraith_Plugin_Service[(int)guest.services_len];
+            for (var i = 0; i < services.Length; i++)
+            {
+                services[i] = guest.services[i];
+                // So Freecam.Camera.Instance and the like give them
+                Singletons.Set(services[i].trait.ToString(), services[i].obj);
+            }
             plugin = Create();
-            plugin.Start(new Context(wraith, services));
+            plugin.Start(new Context(services));
             return true;
         }
         catch (Exception e)
         {
-            Log(LogLevel.Err, $"Couldn't start: {e}");
+            Log(Wraith.Log.Level.Err, $"Couldn't start: {e}");
             return false;
         }
     }
@@ -139,10 +145,12 @@ public static unsafe partial class Entry
         }
         catch (Exception e)
         {
-            Log(LogLevel.Err, $"Couldn't stop: {e}");
+            Log(Wraith.Log.Level.Err, $"Couldn't stop: {e}");
         }
         plugin = null;
         wraith = null;
+        Api.Instance = null;
+        Singletons.Clear();
         Declared.Locator = null;
         Abi.OnException = null;
     }
@@ -156,10 +164,10 @@ public static unsafe partial class Entry
         }
         catch (Exception e)
         {
-            Log(LogLevel.Err, $"Couldn't offer {trait}: {e}");
+            Log(Wraith.Log.Level.Err, $"Couldn't offer {trait}: {e}");
             return default;
         }
     }
 
-    static void Log(LogLevel level, string message) => wraith?.Log()?.Write(level, "", message);
+    static void Log(Wraith.Log.Level level, string message) => wraith?.Log()?.Write(level, "", message);
 }

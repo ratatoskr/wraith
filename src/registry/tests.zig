@@ -67,7 +67,7 @@ const Hub = struct {
         const a = self.arena.allocator();
         var list: std.ArrayList(u8) = .empty;
         for (versions, 0..) |v, i| try list.print(a,
-            \\{s}{{ "version": "{s}", "apiVersion": 1, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true{s} }}
+            \\{s}{{ "version": "{s}", "apiVersion": 2, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true{s} }}
         , .{ if (i == 0) "" else ", ", v, &helloSha256(), version_extra });
         return std.fmt.allocPrint(a,
             \\{{ "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{s}]{s} }}
@@ -82,7 +82,7 @@ const Hub = struct {
 /// A package with one version, 1.0.0, that isn't to install.
 fn entry(a: std.mem.Allocator, id: []const u8, extra: []const u8, version_extra: []const u8) ![]const u8 {
     return std.fmt.allocPrint(a,
-        \\{{ "id": "{s}", "kind": "plugin", "title": "{s}", "versions": [{{ "version": "1.0.0", "apiVersion": 1, "url": "", "sha256": "00"{s} }}]{s} }}
+        \\{{ "id": "{s}", "kind": "plugin", "title": "{s}", "versions": [{{ "version": "1.0.0", "apiVersion": 2, "url": "", "sha256": "00"{s} }}]{s} }}
     , .{ id, id, version_extra, extra });
 }
 
@@ -160,10 +160,10 @@ test "newest runnable version" {
     const pkg: registry.Package = .{
         .id = "p",
         .versions = &.{
-            .{ .version = "1.0.0", .apiVersion = 1, .url = "", .sha256 = "" },
-            .{ .version = "1.2.0", .apiVersion = 1, .wraith = "0.2.0", .url = "", .sha256 = "" },
-            .{ .version = "1.1.0", .apiVersion = 1, .arches = &.{.x86}, .url = "", .sha256 = "" },
-            .{ .version = "1.3.0", .apiVersion = 1, .yanked = true, .url = "", .sha256 = "" },
+            .{ .version = "1.0.0", .apiVersion = 2, .url = "", .sha256 = "" },
+            .{ .version = "1.2.0", .apiVersion = 2, .wraith = "0.2.0", .url = "", .sha256 = "" },
+            .{ .version = "1.1.0", .apiVersion = 2, .arches = &.{.x86}, .url = "", .sha256 = "" },
+            .{ .version = "1.3.0", .apiVersion = 2, .yanked = true, .url = "", .sha256 = "" },
             // Made before there were API versions, and for a newer Wraith's
             .{ .version = "1.4.0", .url = "", .sha256 = "" },
             .{ .version = "1.5.0", .apiVersion = core.manifest.api_version + 1, .url = "", .sha256 = "" },

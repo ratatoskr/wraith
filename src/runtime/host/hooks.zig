@@ -14,7 +14,7 @@ const Loaded = @import("../PluginLoader.zig").Loaded;
 const log = core.log.scoped(.wraith_runtime);
 
 /// From `hooks.sal`, kept till the hook's destroyed.
-pub const MidHandler = api.wraith.MidHandler;
+pub const MidHandler = api.wraith.Hooks.MidHandler;
 const cpu_regs = @import("cpu.zig");
 const schemas = @import("schemas.zig");
 const bind = @import("salamander_bind");
@@ -560,6 +560,7 @@ const tests = struct {
             \\[Instance("B8 0D F0 57 7E")]
             \\struct Spot { u32 x; }
         }});
+        fake.loaded.schemas.?.setHome("test");
         defer {
             fake.loaded.schemas.?.destroy();
             fake.loaded.schemas = null;

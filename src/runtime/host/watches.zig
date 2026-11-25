@@ -41,7 +41,7 @@ var last_refresh_ns: u64 = 0;
 var own: sys.thread.CodeRange = .{ .start = 0, .len = 0 };
 
 /// From `watches.sal`, kept till the watch is removed.
-pub const Handler = api.wraith.WatchHandler;
+pub const Handler = api.wraith.Watch.Handler;
 const cpu_regs = @import("cpu.zig");
 
 pub const Record = struct {
@@ -212,7 +212,7 @@ const tests = struct {
             ip: usize = 0,
             address: usize = 0,
 
-            fn on(self: *@This(), hit: api.wraith.WatchHit, regs: cpu_regs.Cpu) void {
+            fn on(self: *@This(), hit: api.wraith.Watch.Hit, regs: cpu_regs.Cpu) void {
                 self.hits += 1;
                 self.ip = cpu_regs.ip(&regs);
                 self.address = hit.address;

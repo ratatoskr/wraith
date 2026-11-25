@@ -421,10 +421,20 @@ for i = 0, 25 do VK[0x41 + i] = string.char(0x61 + i) end
 for i = 1, 24 do VK[0x6F + i] = "f" .. i end
 M.keys = VK
 
+-- Wraith's areas as fields, like `w.memory`, from the `Wraith` global's accessors. Missing ones are nil
+function M.areas(root)
+  return setmetatable({}, { __index = function(t, k)
+    local ok, area = pcall(function() return root[k]() end)
+    if not ok then return nil end
+    rawset(t, k, area)
+    return area
+  end })
+end
+
 -- Puts CE's globals in `env`. Gives a handle for whoever runs the table, see API.md.
 function M.install(env, options)
   options = options or {}
-  local w = options.wraith or require("wraith")
+  local w = options.wraith or M.areas(Wraith)
   local memory, log, frame = w.memory, w.log, w.frame
 
   -- Memory's bytes as a string, like CE's tables work with
@@ -1089,7 +1099,7 @@ function M.install(env, options)
   end
 
   local function toast(kind, title, text)
-    pcall(w.ui.toast, w.ui, { kind = kind, title = title, text = text })
+    pcall(w.ui.toast, w.ui, { style = kind, title = title, text = text })
   end
 
   def("print", function(...) log:info(joined(...)) end)

@@ -17,7 +17,7 @@ const Type = ManagedRuntime.Type;
 const Allocator = std.mem.Allocator;
 
 pub const Kind = ManagedRuntime.ElementType;
-pub const Value = W.ManagedValue;
+pub const Value = W.Managed.Value;
 pub const E = W.ManagedError;
 
 /// Most arguments a call takes.
@@ -25,7 +25,7 @@ pub const max_args = 16;
 
 /// The overload of `name` with as many parameters as `kinds`, where each fits, else the first with
 /// that many. Looks in parents too.
-pub fn pickMethod(rt: *const Runtime, class: *Class, name: []const u8, kinds: []const W.ManagedValueKind) ?*Method {
+pub fn pickMethod(rt: *const Runtime, class: *Class, name: []const u8, kinds: []const W.Managed.ValueKind) ?*Method {
     var first: ?*Method = null;
     var here: ?*Class = class;
     while (here) |c| : (here = rt.classParent(c)) {
@@ -39,7 +39,7 @@ pub fn pickMethod(rt: *const Runtime, class: *Class, name: []const u8, kinds: []
     return first;
 }
 
-pub fn fitsAll(rt: *const Runtime, m: *Method, kinds: []const W.ManagedValueKind) bool {
+pub fn fitsAll(rt: *const Runtime, m: *Method, kinds: []const W.Managed.ValueKind) bool {
     for (kinds, 0..) |kind, i| {
         const t = rt.paramType(m, @intCast(i)) orelse return false;
         if (!fitsType(rt, t, kind)) return false;
@@ -47,7 +47,7 @@ pub fn fitsAll(rt: *const Runtime, m: *Method, kinds: []const W.ManagedValueKind
     return true;
 }
 
-pub fn fitsType(rt: *const Runtime, t: *Type, kind: W.ManagedValueKind) bool {
+pub fn fitsType(rt: *const Runtime, t: *Type, kind: W.Managed.ValueKind) bool {
     return switch (rt.typeKind(t)) {
         .boolean => kind == .flag or kind == .integer,
         .char, .i1, .u1, .i2, .u2, .i4, .u4, .i8, .u8 => kind == .integer,

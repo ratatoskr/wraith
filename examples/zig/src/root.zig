@@ -2,7 +2,9 @@
 
 const std = @import("std");
 const sdk = @import("wraith_sdk");
-const schema = @import("schema");
+const generated = @import("schema");
+// Its own types are in its namespace, its id in PascalCase
+const schema = generated.ExampleZig;
 
 pub const std_options: std.Options = .{ .logFn = sdk.logFn };
 pub const panic = sdk.panic;

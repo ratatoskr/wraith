@@ -1,21 +1,27 @@
 // Images to draw with ImGui. Gone with the plugin.
 
+namespace Wraith;
+
 error ImageError {
     // Not an image file it can read, or pixels that don't match the size
     InvalidImage = 1,
     // Wider or taller than 16384
     TooBig,
     Failed,
+    // No file there, for `load`
+    NotFound,
 }
-
-struct ImageSize { u32 width; u32 height; }
 
 // ImGui's `ImTextureRef`, for `ImGui_Image` and co. A 0 `data` can't be drawn.
 struct TextureRef { usize data; u64 id; }
 
+namespace Image {
+    struct Size { u32 width; u32 height; }
+}
+
 trait Image {
     // Zero once it's destroyed. Any thread.
-    ImageSize size();
+    Size dimensions();
     // For the current ImGui frame only. Render thread.
     TextureRef texture();
     // Its GPU copies go over the next frames. Fine to call twice.
@@ -27,4 +33,9 @@ trait Images {
     Image!ImageError create(u32 width, u32 height, []u8 rgba);
     // A PNG, JPEG, BMP, TGA or GIF's first frame. Slow, so not on the render thread.
     Image!ImageError decode([]u8 bytes);
+    // A file, read and decoded on a worker. A path that isn't full is in the plugin's own folder,
+    // like `images/logo.png`. Fine from any thread.
+    async Image!ImageError load(string path);
+    // Draws it in the current window, in a frame callback. A zero size draws it at its own size.
+    void draw(Image image, ImVec2 size);
 }

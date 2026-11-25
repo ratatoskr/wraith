@@ -416,7 +416,7 @@ const tests = struct {
         const files = [_]struct { []const u8, []const u8, []const u8, []const u8 }{
             .{
                 "imgui_js", "js", "main.js",
-                \\import { frame, imgui, ui, log } from "wraith";
+                \\const frame = Wraith.frame(), imgui = Wraith.imgui(), ui = Wraith.ui(), log = Wraith.log();
                 \\// Outside a frame it does nothing
                 \\if (imgui.Begin("Early", null, 0) !== false) throw new Error("drew outside a frame");
                 \\if (ui.windowDrawList() !== null) throw new Error("a draw list outside a frame");
@@ -436,14 +436,14 @@ const tests = struct {
                 \\        if (imgui.ButtonEx("Go", { x: 50, y: 20 })) log.info("go");
                 \\        name = ui.inputText("name", name, 0);
                 \\        ui.windowDrawList().AddLine({ x: 0, y: 0 }, { x: 10, y: 10 }, 0xffffffff);
-                \\        if (!toasted) toasted = ui.toast({ kind: "info", title: "", text: name, seconds: 0 }) !== 0;
+                \\        if (!toasted) toasted = ui.toast({ style: "info", title: "", text: name, seconds: 0 }) !== 0;
                 \\    }
                 \\    imgui.End();
                 \\});
             },
             .{
                 "imgui_lua", "lua", "main.lua",
-                \\local wraith = require("wraith")
+                \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), frame = Wraith.frame() }
                 \\local imgui = wraith.imgui
                 \\local on = { value = false }
                 \\wraith.ui:onOpenSettings(function() on.value = true end)
@@ -495,6 +495,86 @@ const tests = struct {
         try (try loader.unload("imgui_js")).wait();
         try testing.expect(!ui_area.hasSettings("imgui_js"));
         try testing.expect(!ui_area.openSettings("imgui_js"));
+    }
+
+    test "script plugins' windows open from their menu entry and Settings, and draw till removed" {
+        var rig: @import("../testing/Rig.zig") = undefined;
+        try rig.init(.{});
+        defer rig.deinit();
+        setOverlay(rig.overlay);
+        defer setOverlay(null);
+        try rig.runPluginFrames();
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+
+        var install: @import("../testing/Install.zig") = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const io = testing.io;
+        const files = [_]struct { []const u8, []const u8, []const u8, []const u8 }{
+            .{
+                "window_js", "js", "main.js",
+                \\const imgui = Wraith.imgui(), ui = Wraith.ui();
+                \\let draws = 0;
+                \\const w = ui.addWindow({ title: "Stats", menu: "Stats", settings: true }, () => {
+                \\    draws++;
+                \\    imgui.TextUnformatted("hi");
+                \\    ui.toast({ style: "info", title: "", text: "drew", seconds: 0 });
+                \\    if (draws == 2) w.remove();
+                \\});
+                \\if (w.isOpen()) throw new Error("open from the start");
+            },
+            .{
+                "window_lua", "lua", "main.lua",
+                \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), frame = Wraith.frame() }
+                \\local w = wraith.ui:addWindow({ title = "Panel" }, function()
+                \\    wraith.imgui:TextUnformatted("hi")
+                \\end)
+                \\w:setOpen(true)
+            },
+        };
+        for (files) |f| {
+            try install.addScript(f[0], f[1]);
+            const path = try std.fmt.allocPrint(testing.allocator, "plugins/{s}/{s}", .{ f[0], f[2] });
+            defer testing.allocator.free(path);
+            try install.tmp.dir.writeFile(io, .{ .sub_path = path, .data = f[3] });
+        }
+        _ = core.log.mute(&.{ .ui, .plugin, .runtime });
+        const loader = &install.loader;
+        try loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("window_js").?.state);
+        try testing.expectEqual(.loaded, install.info("window_lua").?.state);
+        const toasts = &rig.overlay.host.toasts;
+
+        // Closed till something opens it
+        for (0..2) |_| rig.present();
+        try testing.expectEqual(0, toasts.count());
+        const ui_area = @import("ui_area.zig");
+        const MenuItems = @import("../ui/MenuItems.zig");
+        try testing.expect(ui_area.openSettings("window_js"));
+        rig.present();
+        try testing.expectEqual(1, toasts.count());
+        {
+            // Its menu entry shares its open flag
+            const items = MenuItems.read();
+            defer items.end();
+            const found = for (items.entries) |e| {
+                if (std.mem.eql(u8, e.item.label, "Stats")) break e.item;
+            } else return error.TestUnexpectedResult;
+            try testing.expect(found.open.*);
+            try testing.expectEqualStrings("window_js", found.menu);
+        }
+        // Removed from inside its second draw
+        for (0..3) |_| rig.present();
+        try testing.expectEqual(2, toasts.count());
+        {
+            const items = MenuItems.read();
+            defer items.end();
+            for (items.entries) |e| try testing.expect(!std.mem.eql(u8, e.item.label, "Stats"));
+        }
+        const layout = std.mem.span(@as([*:0]const u8, @ptrCast(c.ImGui_SaveIniSettingsToMemory(null))));
+        try testing.expect(std.mem.indexOf(u8, layout, "[Window][wraith/window_js/Stats]") != null);
+        try testing.expect(std.mem.indexOf(u8, layout, "[Window][wraith/window_lua/Panel]") != null);
     }
 
     test "plugin frames draw into the overlay" {

@@ -3,16 +3,20 @@
 // lock goes when the plugin that made it does, and what a plugin holds or waits for goes with it.
 // Any thread.
 
+namespace Wraith;
+
 error SyncError {
     // This plugin has it already. Locks aren't reentrant.
     AlreadyHeld = 1,
     Failed,
 }
 
-// Hand it to other plugins through a service. They lock it through their own `sync`.
-trait Lock {
-    // Whether anyone has it, for showing. It may change straight after.
-    bool held();
+namespace Sync {
+    // Hand it to other plugins through a service. They lock it through their own `sync`.
+    trait Lock {
+        // Whether anyone has it, for showing. It may change straight after.
+        bool held();
+    }
 }
 
 trait Sync {

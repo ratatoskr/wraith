@@ -16,14 +16,15 @@ const OnGone = @import("Owned.zig").OnGone;
 const gfx = @import("tuft_gfx");
 
 const Bus = core.Event(fn () void);
+pub const Subscription = Bus.Subscription;
 const W = api.wraith;
 const log = core.log.scoped(.wraith_runtime);
 /// From `frame.sal`, kept till it's cancelled.
-pub const Tick = W.FrameTick;
+pub const Tick = W.Frame.Tick;
 /// From `frame.sal`, kept till it's cancelled.
-pub const GameTick = W.GameTick;
+pub const GameTick = W.Frame.GameTick;
 /// From `frame.sal`, kept till it runs.
-pub const Task = W.FrameTask;
+pub const Task = W.Frame.Task;
 
 var bus: Bus = .init(std.heap.page_allocator);
 var tick_bus: Bus = .init(std.heap.page_allocator);
@@ -52,7 +53,7 @@ pub fn onRenderThread() bool {
 /// unless a driver has them.
 pub fn run() void {
     render_thread.store(std.Thread.getCurrentId(), .monotonic);
-    const driven = blk: {
+    const has_driver = blk: {
         // Shared, so the driver can't be freed under us
         drivers_lock.lockShared();
         defer drivers_lock.unlockShared();
@@ -60,9 +61,10 @@ pub fn run() void {
         d.checkStalled();
         break :blk true;
     };
-    if (!driven) tickNow();
+    if (!has_driver) tickNow();
     bus.fire(.{});
     host.salamander.pollRender();
+    host.threads.checkDelays();
 }
 
 /// The thread ticks last ran on, or 0. Cleared when a driver takes over, till its first tick.
@@ -77,7 +79,7 @@ pub fn onGameThread() bool {
 
 /// What the game's camera showed last, from its plugin.
 var view_lock: sync.RwLock = .{};
-var game_view: W.GameView = .{ .view = .identity, .projection = .identity, .known = false };
+var game_view: W.Frame.View = .{ .viewMatrix = .identity, .projection = .identity, .known = false };
 /// `core.timing.now()` when it was set, under `view_lock`.
 var view_at: u64 = 0;
 /// Older than this and it's not known any more, since the plugin's stopped saying.
@@ -86,11 +88,11 @@ const view_ns = std.time.ns_per_s;
 pub fn setView(view_: W.Mat4, projection: W.Mat4) void {
     view_lock.lock();
     defer view_lock.unlock();
-    game_view = .{ .view = view_, .projection = projection, .known = true };
+    game_view = .{ .viewMatrix = view_, .projection = projection, .known = true };
     view_at = core.timing.now();
 }
 
-pub fn view() W.GameView {
+pub fn view() W.Frame.View {
     view_lock.lockShared();
     defer view_lock.unlockShared();
     var v = game_view;
@@ -136,6 +138,8 @@ fn tickNow() void {
     defer ticking.store(false, .release);
     game_thread.store(std.Thread.getCurrentId(), .monotonic);
     tick_bus.fire(.{});
+    host.salamander.pollGame();
+    host.threads.checkDelays();
 }
 
 /// A plugin that ticks from the game's own thread. The best-ranked one is `active`.
@@ -196,6 +200,11 @@ var drivers: std.ArrayList(*Driver) = .empty;
 var next_order: u64 = 0;
 var active: Atomic(?*Driver) = .init(null);
 var driver_records: host.Owned(Driver) = .{};
+
+/// Whether a plugin drives ticks from the game's own thread.
+pub fn driven() bool {
+    return active.load(.acquire) != null;
+}
 
 /// Under `drivers_lock`.
 fn pickActive() void {
@@ -307,6 +316,11 @@ pub fn onFrame(loaded: *Loaded, tick: Tick) api.FrameError!*Frame {
         tick.release();
         return err;
     };
+}
+
+/// Every frame with the plugins' callbacks, for what Wraith draws for them, like their windows.
+pub fn subscribeFrames(ctx: anytype, comptime fire: fn (@TypeOf(ctx)) void) !Bus.Subscription {
+    return bus.subscribeUnscoped(ctx, fire);
 }
 
 /// Through `frame.sal`. Released if it fails. Fine without frames, since a driver can tick.
@@ -643,6 +657,115 @@ const tests = struct {
 
     fn tickOn(driver: sdk.frame.TickDriver) void {
         driver.tick();
+    }
+
+    /// Where a promise settled, taken there.
+    fn Seen(comptime P: type) type {
+        return struct {
+            promise: P,
+            on: Atomic(std.Thread.Id) = .init(0),
+            done: Atomic(bool) = .init(false),
+
+            fn watch(self: *@This()) void {
+                self.promise.then(self, settled, .now);
+            }
+
+            fn settled(self: *@This()) void {
+                _ = self.promise.take();
+                self.on.store(std.Thread.getCurrentId(), .release);
+                self.done.store(true, .release);
+            }
+
+            fn waitDone(self: *@This()) void {
+                while (!self.done.load(.acquire)) std.Thread.yield() catch {};
+            }
+        };
+    }
+
+    fn seen(promise: anytype) Seen(@TypeOf(promise)) {
+        return .{ .promise = promise };
+    }
+
+    test "hops carry on on their own thread, and other awaits where they were made" {
+        setFrames(true);
+        defer setFrames(false);
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        defer host.threads.stop();
+        var a: FakePlugin = undefined;
+        a.init("a");
+        defer a.loaded.deinitForTest();
+        var b: FakePlugin = undefined;
+        b.init("b");
+        defer b.loaded.deinitForTest();
+        const acting = a.owner().enter();
+        defer acting.end();
+        const f = sdk.wraith.root().?.frame();
+        // Without a driver, this is the render thread and ticks run on it too
+        run();
+        const me = std.Thread.getCurrentId();
+
+        var worker = seen(f.toWorker());
+        worker.watch();
+        worker.waitDone();
+        try testing.expect(worker.on.load(.acquire) != me);
+
+        var render = seen(f.toRender());
+        render.watch();
+        // Already there
+        try testing.expect(render.done.load(.acquire));
+
+        var tick = seen(f.nextTick());
+        tick.watch();
+        try testing.expect(!tick.done.load(.acquire));
+        run();
+        try testing.expect(tick.done.load(.acquire));
+        try testing.expectEqual(me, tick.on.load(.acquire));
+
+        var later = seen(f.delay(0));
+        later.watch();
+        try testing.expect(!later.done.load(.acquire));
+        run();
+        try testing.expectEqual(me, later.on.load(.acquire));
+
+        // From a worker back to the render thread, at its next frame
+        const Back = struct {
+            fn go(owner: sdk.Owner, out: *Seen(api.salamander.Plain(sdk.api.wraith.Frame, "toRender"))) void {
+                const on = owner.enter();
+                defer on.end();
+                out.* = seen(sdk.wraith.root().?.frame().toRender());
+                out.watch();
+            }
+        };
+        var back: Seen(api.salamander.Plain(sdk.api.wraith.Frame, "toRender")) = undefined;
+        const t = try std.Thread.spawn(.{}, Back.go, .{ a.owner(), &back });
+        t.join();
+        try testing.expect(!back.done.load(.acquire));
+        run();
+        try testing.expectEqual(me, back.on.load(.acquire));
+
+        // b holds a lock a waits for here, and lets go on a worker. a still carries on here
+        const lock = blk: {
+            const by_b = b.owner().enter();
+            defer by_b.end();
+            const l = sdk.wraith.root().?.sync().newLock();
+            try testing.expect(sdk.wraith.root().?.sync().tryLock(l));
+            break :blk l;
+        };
+        var waited = seen(sdk.wraith.root().?.sync().lock(lock));
+        waited.watch();
+        const Unlock = struct {
+            fn go(owner: sdk.Owner, l: sdk.api.wraith.Sync.Lock) void {
+                const on = owner.enter();
+                defer on.end();
+                sdk.wraith.root().?.sync().unlock(l);
+            }
+        };
+        const u = try std.Thread.spawn(.{}, Unlock.go, .{ b.owner(), lock });
+        u.join();
+        try testing.expect(!waited.done.load(.acquire));
+        run();
+        try testing.expectEqual(me, waited.on.load(.acquire));
     }
 
     test "the game's view, as its plugin last set it, till it's stale" {

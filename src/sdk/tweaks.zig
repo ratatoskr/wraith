@@ -54,7 +54,7 @@ pub const FieldOptions = struct {
 pub fn hook(ctx: *Context, definition: Definition, target: anytype) !void {
     const Target = @TypeOf(target);
     const Handler = struct {
-        fn handle(t: Target, event: W.TweakEvent) W.TweakError!void {
+        fn handle(t: Target, event: W.Tweaks.Event) W.TweakError!void {
             switch (event.kind) {
                 .on => t.enable() catch |err| return fail(err),
                 .off => t.disable() catch |err| return fail(err),
@@ -62,7 +62,7 @@ pub fn hook(ctx: *Context, definition: Definition, target: anytype) !void {
             }
         }
     };
-    try add(ctx, definition, .toggle, &.{}, W.TweakHandler.init(target, Handler.handle));
+    try add(ctx, definition, .toggle, &.{}, W.Tweaks.Handler.init(target, Handler.handle));
 }
 
 /// Runs `run(owner, args)` each time it's clicked or its key's pressed, with the fields as `Args`.
@@ -80,11 +80,11 @@ pub fn action(ctx: *Context, definition: Definition, comptime Args: type, owner:
 /// with an open button. `window` must stay put.
 pub fn opens(ctx: *Context, definition: Definition, window: *ui.Window) !void {
     const Handler = struct {
-        fn handle(w: *ui.Window, event: W.TweakEvent) W.TweakError!void {
+        fn handle(w: *ui.Window, event: W.Tweaks.Event) W.TweakError!void {
             if (event.kind == .on) w.focus();
         }
     };
-    try add(ctx, definition, .open, &.{}, W.TweakHandler.init(window, Handler.handle));
+    try add(ctx, definition, .open, &.{}, W.Tweaks.Handler.init(window, Handler.handle));
 }
 
 /// On and off, with the fields as `Args`. `callbacks` has `on(owner, args)`, `off(owner)`, and
@@ -94,7 +94,7 @@ pub fn toggle(ctx: *Context, definition: Definition, comptime Args: type, owner:
     try State.add(ctx, definition, owner);
 }
 
-fn Stateful(comptime Args: type, comptime Owner: type, comptime callbacks: anytype, comptime mode: W.TweakMode) type {
+fn Stateful(comptime Args: type, comptime Owner: type, comptime callbacks: anytype, comptime mode: W.Tweaks.Mode) type {
     return struct {
         const Self = @This();
 
@@ -111,14 +111,14 @@ fn Stateful(comptime Args: type, comptime Owner: type, comptime callbacks: anyty
                 ctx.allocator.destroy(self);
                 return err;
             };
-            try tweaks_add(ctx, definition, mode, &comptime fieldsOf(Args), W.TweakHandler.init(self, handle));
+            try tweaks_add(ctx, definition, mode, &comptime fieldsOf(Args), W.Tweaks.Handler.init(self, handle));
         }
 
         fn free(self: *Self) void {
             self.allocator.destroy(self);
         }
 
-        fn handle(self: *Self, event: W.TweakEvent) W.TweakError!void {
+        fn handle(self: *Self, event: W.Tweaks.Event) W.TweakError!void {
             switch (event.kind) {
                 .changed => {
                     set(Args, &self.args, event.field, event.value);
@@ -140,8 +140,8 @@ fn Stateful(comptime Args: type, comptime Owner: type, comptime callbacks: anyty
 
 const tweaks_add = add;
 
-fn add(ctx: *Context, definition: Definition, mode: W.TweakMode, fields: []const W.TweakField, handler: W.TweakHandler) !void {
-    const def: W.TweakDefinition = .{
+fn add(ctx: *Context, definition: Definition, mode: W.Tweaks.Mode, fields: []const W.Tweaks.Field, handler: W.Tweaks.Handler) !void {
+    const def: W.Tweaks.Definition = .{
         .id = definition.id,
         .title = definition.title,
         .key = definition.key,
@@ -160,9 +160,9 @@ fn fail(err: anyerror) W.TweakError {
     return api.salamander.host().explain(error.Failed, "{s}", .{why});
 }
 
-fn fieldsOf(comptime Args: type) [@typeInfo(Args).@"struct".field_names.len]W.TweakField {
+fn fieldsOf(comptime Args: type) [@typeInfo(Args).@"struct".field_names.len]W.Tweaks.Field {
     const info = @typeInfo(Args).@"struct";
-    var out: [info.field_names.len]W.TweakField = undefined;
+    var out: [info.field_names.len]W.Tweaks.Field = undefined;
     for (info.field_names, info.field_types, info.field_attrs, &out) |name, T, attrs, *field| {
         const o = optionsOf(Args, name);
         const default = attrs.defaultValue(T) orelse @compileError(@typeName(Args) ++ "." ++ name ++ " needs a default");
@@ -196,14 +196,14 @@ fn optionsOf(comptime Args: type, comptime name: []const u8) FieldOptions {
     return o;
 }
 
-fn choicesOf(comptime E: type) [@typeInfo(E).@"enum".field_names.len]W.TweakChoice {
+fn choicesOf(comptime E: type) [@typeInfo(E).@"enum".field_names.len]W.Tweaks.Choice {
     const info = @typeInfo(E).@"enum";
-    var out: [info.field_names.len]W.TweakChoice = undefined;
+    var out: [info.field_names.len]W.Tweaks.Choice = undefined;
     for (info.field_names, info.field_values, &out) |name, value, *c| c.* = .{ .value = value, .label = name };
     return out;
 }
 
-fn fieldType(comptime T: type) W.TweakFieldType {
+fn fieldType(comptime T: type) W.Tweaks.FieldType {
     return switch (T) {
         f64 => .f64,
         f32 => .f32,

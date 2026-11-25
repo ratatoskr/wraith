@@ -17,7 +17,7 @@ const W = api.wraith;
 pub const Addresses = W.Addresses;
 pub const Code = W.Code;
 pub const Patch = W.Patch;
-const SalName = W.Name;
+const SalName = W.Addresses.Name;
 
 const allocator = std.heap.page_allocator;
 const local = mem.Memory.local;
@@ -67,7 +67,7 @@ pub const AddressesImpl = struct {
         };
     }
 
-    pub fn add(loaded: *Loaded, entry: W.AddressEntry) sal.Plain(Addresses, "add") {
+    pub fn add(loaded: *Loaded, entry: W.Addresses.Entry) sal.Plain(Addresses, "add") {
         host.addresses.add(loaded, .{
             .id = entry.id,
             .address = entry.address,
@@ -99,11 +99,11 @@ pub const AddressesImpl = struct {
         } };
     }
 
-    pub fn setSources(loaded: *Loaded, allowed: W.AddressSources) void {
+    pub fn setSources(loaded: *Loaded, allowed: W.Addresses.Sources) void {
         host.addresses.setSources(loaded, .{ .live = allowed.live, .snapshot = allowed.snapshot, .disk = allowed.disk });
     }
 
-    pub fn sources(loaded: *Loaded) W.AddressSources {
+    pub fn activeSources(loaded: *Loaded) W.Addresses.Sources {
         const s = host.addresses.sourcesOf(loaded) orelse @import("../Names.zig").defaultSources();
         return .{ .live = s.live, .snapshot = s.snapshot, .disk = s.disk };
     }
@@ -159,7 +159,7 @@ pub const CodeImpl = struct {
         return buf[0..n];
     }
 
-    pub fn patch(loaded: *Loaded, target: usize, source: []const u8, options: W.PatchOptions) sal.Plain(Code, "patch") {
+    pub fn patch(loaded: *Loaded, target: usize, source: []const u8, options: W.Patch.Options) sal.Plain(Code, "patch") {
         var arena: std.heap.ArenaAllocator = .init(allocator);
         defer arena.deinit();
         const names = namesOf(arena.allocator(), options.names) catch return error.Failed;
@@ -168,7 +168,7 @@ pub const CodeImpl = struct {
         return patchMade(loaded, p, options.disabled);
     }
 
-    pub fn patchBytes(loaded: *Loaded, target: usize, bytes: []const u8, options: W.PatchOptions) sal.Plain(Code, "patchBytes") {
+    pub fn patchBytes(loaded: *Loaded, target: usize, bytes: []const u8, options: W.Patch.Options) sal.Plain(Code, "patchBytes") {
         var arena: std.heap.ArenaAllocator = .init(allocator);
         defer arena.deinit();
         const names = namesOf(arena.allocator(), options.names) catch return error.Failed;
@@ -176,7 +176,7 @@ pub const CodeImpl = struct {
         return patchMade(loaded, p, options.disabled);
     }
 
-    pub fn inject(loaded: *Loaded, target: usize, source: []const u8, options: W.PatchOptions) sal.Plain(Code, "inject") {
+    pub fn inject(loaded: *Loaded, target: usize, source: []const u8, options: W.Patch.Options) sal.Plain(Code, "inject") {
         const t = wraith.tablesOf(loaded) orelse return error.Failed;
         var arena: std.heap.ArenaAllocator = .init(allocator);
         defer arena.deinit();
@@ -198,7 +198,7 @@ pub const CodeImpl = struct {
         host.code.free(loaded, address);
     }
 
-    pub fn place(loaded: *Loaded, request: W.PlaceRequest) sal.Plain(Code, "place") {
+    pub fn place(loaded: *Loaded, request: W.Code.PlaceRequest) sal.Plain(Code, "place") {
         const t = wraith.tablesOf(loaded) orelse return error.Failed;
         var arena: std.heap.ArenaAllocator = .init(allocator);
         defer arena.deinit();
@@ -242,7 +242,7 @@ pub const CodeImpl = struct {
 
     pub fn disassemble(_: *Loaded, address: usize, count: u32) sal.Plain(Code, "disassemble") {
         const a = scratch.begin();
-        const out = a.alloc(W.Instruction, @min(@max(count, 1), 4096)) catch return error.Failed;
+        const out = a.alloc(W.Code.Instruction, @min(@max(count, 1), 4096)) catch return error.Failed;
         var at = address;
         for (out, 0..) |*o, i| {
             var buf: [disasm.max_len]u8 = undefined;
@@ -414,9 +414,9 @@ const tests = struct {
         defer stop(&loaded);
         const code = sdk.wraith.root().?.code();
 
-        const names = [_]W.PlaceName{.{ .name = "value", .offset = 0 }};
-        const data = [_]W.PlaceData{.{ .size = 4, .names = &names }};
-        const patches = [_]W.PlaceCode{.{ .target = @intFromPtr(&seven), .source = "mov eax, [value]\nret" }};
+        const names = [_]W.Code.PlaceName{.{ .name = "value", .offset = 0 }};
+        const data = [_]W.Code.PlaceData{.{ .size = 4, .names = &names }};
+        const patches = [_]W.Code.PlaceCode{.{ .target = @intFromPtr(&seven), .source = "mov eax, [value]\nret" }};
         const placed = try code.place(.{ .data = &data, .code = &patches });
         try testing.expectEqual(1, placed.data.len);
         try testing.expectEqual(1, placed.code.len);
@@ -425,7 +425,7 @@ const tests = struct {
         try placed.code[0].enable();
         try testing.expectEqual(1234, seven());
 
-        const bad = [_]W.PlaceCode{.{ .target = @intFromPtr(&eight), .source = "nop\nbogus" }};
+        const bad = [_]W.Code.PlaceCode{.{ .target = @intFromPtr(&eight), .source = "nop\nbogus" }};
         try testing.expectError(error.InvalidAsm, code.place(.{ .code = &bad }));
         try testing.expect(std.mem.startsWith(u8, sal.host().explanation("InvalidAsm"), "code 1, line 2: "));
     }

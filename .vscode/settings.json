@@ -5,6 +5,7 @@
     "**/.git": true,
     "**/.zig-cache": true,
     "**/zig-out": true,
+    "**/zig-pkg": true,
   },
   "files.watcherExclude": {
     "**/.git": true,
@@ -16,5 +17,6 @@
     "**/.git": true,
     "**/.zig-cache": true,
     "**/zig-out": true,
+    "**/zig-pkg": false,
   }
 }

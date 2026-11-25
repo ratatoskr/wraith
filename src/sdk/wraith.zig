@@ -12,10 +12,10 @@
 const api = @import("wraith_api");
 const Owner = @import("Owner.zig");
 
-/// Every type in `wraith.sal`, like `types.SettingValue` or `types.Clipboard`.
+/// Every type in `wraith.sal`, like `types.Setting.Value` or `types.Clipboard`.
 pub const types = api.wraith;
 
-pub const Wraith = types.Wraith;
+pub const Wraith = types.Api;
 
 /// This plugin's root. Null outside a plugin.
 pub fn root() ?Wraith {

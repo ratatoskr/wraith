@@ -156,8 +156,10 @@ fn readShared(self: *Addresses) ?std.ArrayList(Shared) {
     }
     for (entries) |e| {
         var diag: Schema.Diagnostic = .{};
-        // With Wraith's types before it, as plugins' are read. Else alone, for any that clash
-        const with = std.mem.concat(arena.allocator(), u8, &.{ wraith_prefix, e.text }) catch continue;
+        // With Wraith's types before it, as plugins' are read. Else alone, for any that clash. A
+        // file of its own, so it's not in Wraith's namespace
+        const own = if (std.mem.startsWith(u8, e.text, Schema.bundle_marker)) e.text else salamander_schema.bundle(arena.allocator(), &.{.{ .name = e.name, .text = e.text }}) catch continue;
+        const with = std.mem.concat(arena.allocator(), u8, &.{ wraith_prefix, own }) catch continue;
         var own_from: usize = wraith_prefix.len;
         var one = salamander_schema.parse(gpa, with, sal_options, &diag) catch alone: {
             own_from = 0;

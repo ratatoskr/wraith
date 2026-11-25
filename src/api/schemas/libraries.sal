@@ -1,5 +1,7 @@
 // Named script source that scripts `require`, shared between plugins.
 
+namespace Wraith;
+
 // Names are letters, digits, `_`, `-` and `.`, up to 64.
 error LibraryError {
     InvalidName = 1,

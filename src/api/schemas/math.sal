@@ -2,6 +2,8 @@
 // Matrices are row-major for row vectors, like D3D and most games: a point goes `p * m`. Angles are
 // radians.
 
+namespace Wraith;
+
 struct Vec2 { f32 x; f32 y; }
 
 struct Vec3 { f32 x; f32 y; f32 z; }

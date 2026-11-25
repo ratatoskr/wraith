@@ -556,9 +556,7 @@ const zig_root =
 ;
 
 const lua_main =
-    \\local wraith = require("wraith")
-    \\
-    \\wraith.log.info("Hello from", wraith.plugin.name)
+    \\Wraith.log():info("Hello!")
     \\
 ;
 
@@ -610,7 +608,7 @@ const cs_clr =
 ;
 
 const cs_plugin =
-    \\using Ratatoskr.Wraith;
+    \\using Wraith;
     \\
     \\namespace {s}
     \\{{
@@ -618,12 +616,12 @@ const cs_plugin =
     \\    {{
     \\        public override void Start(Context context)
     \\        {{
-    \\            context.Wraith.Log()?.Info("Hello!");
+    \\            Log.Instance.Info("Hello!");
     \\        }}
     \\    }}
     \\}}
     \\
-    \\namespace Ratatoskr.Wraith
+    \\namespace Wraith
     \\{{
     \\    // The plugin Wraith starts
     \\    static partial class Entry

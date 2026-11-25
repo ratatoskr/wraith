@@ -41,6 +41,11 @@ pub const Schemas = struct {
     parsed: salamander_schema.Parsed,
     /// Its dependencies' and its own, named like `plugin/path.sal`, for plugins that depend on it.
     files: []File = &.{},
+    /// How it parsed, each plugin's files in its namespace, kept for signatures. In `arena`.
+    options: salamander_schema.Options,
+    arena: std.heap.ArenaAllocator,
+    /// The plugin's own namespace, where names it's given as text are looked for first.
+    home_buf: [core.manifest.namespace_max]u8 = undefined,
     lock: sync.RwLock = .{},
     found: std.StringHashMapUnmanaged(usize) = .empty,
     typed: std.StringHashMapUnmanaged(Typed) = .empty,
@@ -51,12 +56,26 @@ pub const Schemas = struct {
 
     /// Takes `text` and `files` if it works. What's wrong goes in `diag`.
     fn create(text: []u8, files: []File, diag: *SalSchema.Diagnostic) error{ OutOfMemory, InvalidSchema }!*Schemas {
-        var parsed = try salamander_schema.parse(allocator, text, api.sal_options, diag);
+        var arena: std.heap.ArenaAllocator = .init(allocator);
+        errdefer arena.deinit();
+        const options = try optionsFor(arena.allocator(), files);
+        var parsed = try salamander_schema.parse(allocator, text, options, diag);
         errdefer parsed.deinit();
         try checkAnnotations(parsed.schema, parsed.source, diag);
         const self = try allocator.create(Schemas);
-        self.* = .{ .text = text, .parsed = parsed, .files = files };
+        self.* = .{ .text = text, .parsed = parsed, .files = files, .options = options, .arena = arena };
         return self;
+    }
+
+    /// Names it's given as text, like `Player.heal`, are looked for in plugin `name`'s namespace
+    /// first, like names in its own files.
+    pub fn setHome(self: *Schemas, name: []const u8) void {
+        self.options.namespace = core.manifest.namespaceOf(&self.home_buf, name);
+    }
+
+    /// The full name `name` means from the plugin's namespace. In `buf`.
+    pub fn fullName(self: *const Schemas, buf: []u8, name: []const u8) []const u8 {
+        return self.schema().nameFrom(buf, self.options.namespace, name);
     }
 
     pub fn destroy(self: *Schemas) void {
@@ -68,6 +87,7 @@ pub const Schemas = struct {
         self.typed.deinit(allocator);
         freeFileList(self.files);
         self.parsed.deinit();
+        self.arena.deinit();
         allocator.free(self.text);
         allocator.destroy(self);
     }
@@ -81,7 +101,7 @@ pub const Schemas = struct {
             if (self.typed.get(text)) |found| return found;
         }
         var diag: SalSchema.Diagnostic = .{};
-        var parsed = salamander_schema.parseSignature(allocator, self.text, text, api.sal_options, &diag) catch |err| return switch (err) {
+        var parsed = salamander_schema.parseSignature(allocator, self.text, text, self.options, &diag) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.NotASignature => sal.host().explain(error.InvalidSignature, "a signature looks like `fn i32 (u32 a)` or a declared name like `Player.heal`, not `{s}`", .{text}),
             else => sal.host().explain(error.InvalidSignature, "{s}", .{diag.message()}),
@@ -106,8 +126,11 @@ pub const Schemas = struct {
 
     pub const Error = error{ Unknown, NotFound, NeedsObject };
 
-    /// Where a function, method or static is, or a struct's vtable. Kept once found.
-    pub fn address(self: *Schemas, name: []const u8) Error!usize {
+    /// Where a function, method or static is, or a struct's vtable. Kept once found. `written` is
+    /// looked for in the plugin's namespace first.
+    pub fn address(self: *Schemas, written: []const u8) Error!usize {
+        var buf: [512]u8 = undefined;
+        const name = self.fullName(&buf, written);
         {
             self.lock.lockShared();
             defer self.lock.unlockShared();
@@ -115,13 +138,13 @@ pub const Schemas = struct {
         }
         const s = self.schema();
         const a = if (s.findStatic(name)) |v|
-            if (managedOf(v.static.annotations, v.owner, v.static.name)) |m|
+            if (managedOf(v.static.annotations, v.owner, v.static.name, self.options.file_namespaces)) |m|
                 try findManaged(m, .static, name)
             else
                 try locate(v.static.annotations, "Sig", name)
         else if (s.findFunction(name)) |f| blk: {
             if (f.method.virtual) |_| break :blk try readSlot(try self.slot(name));
-            if (managedOf(f.method.annotations, f.owner, f.method.name)) |m| {
+            if (managedOf(f.method.annotations, f.owner, f.method.name, self.options.file_namespaces)) |m| {
                 if (m.icall) break :blk try findManaged(m, .icall, name);
                 // Called through Wraith, which converts what it's given and calls in where it can
                 const typed = self.typedOf(name) catch |err| return switch (err) {
@@ -146,7 +169,9 @@ pub const Schemas = struct {
     }
 
     /// Where a [Virtual(n)] method's function pointer is, in its struct's [VirtualTable].
-    pub fn slot(self: *Schemas, name: []const u8) Error!usize {
+    pub fn slot(self: *Schemas, written: []const u8) Error!usize {
+        var buf: [512]u8 = undefined;
+        const name = self.fullName(&buf, written);
         const s = self.schema();
         const f = s.findFunction(name) orelse return sal.host().explain(error.Unknown, "the plugin's schemas don't declare {s}", .{name});
         const n = f.method.virtual orelse return sal.host().explain(error.Unknown, "{s} isn't [Virtual(n)]", .{name});
@@ -159,7 +184,9 @@ pub const Schemas = struct {
     }
 
     /// Where `object` has a method, through its own vtable for [Virtual(n)] ones.
-    pub fn method(self: *Schemas, object: usize, name: []const u8) Error!usize {
+    pub fn method(self: *Schemas, object: usize, written: []const u8) Error!usize {
+        var buf: [512]u8 = undefined;
+        const name = self.fullName(&buf, written);
         const s = self.schema();
         const f = s.findFunction(name) orelse return sal.host().explain(error.Unknown, "the plugin's schemas don't declare {s}", .{name});
         const n = f.method.virtual orelse return self.address(name);
@@ -185,6 +212,43 @@ pub const Schemas = struct {
     }
 };
 
+/// Each plugin's files, named like `kai/game.sal`, in its namespace like `Kai`, and every file
+/// using them all with Wraith's, like a plugin's build has it.
+fn optionsFor(arena: std.mem.Allocator, files: []const File) error{OutOfMemory}!salamander_schema.Options {
+    var o = api.sal_options;
+    var spaces: std.ArrayList(salamander_schema.FileNamespace) = .empty;
+    var uses: std.ArrayList([]const u8) = .empty;
+    try uses.appendSlice(arena, api.sal_options.global_uses);
+    outer: for (files) |f| {
+        const slash = std.mem.indexOfScalar(u8, f.name, '/') orelse continue;
+        const prefix = f.name[0 .. slash + 1];
+        for (spaces.items) |s| if (std.mem.eql(u8, s.prefix, prefix)) continue :outer;
+        var buf: [core.manifest.namespace_max]u8 = undefined;
+        const ns = try arena.dupe(u8, core.manifest.namespaceOf(&buf, prefix[0..slash]));
+        try spaces.append(arena, .{ .prefix = try arena.dupe(u8, prefix), .namespace = ns });
+        try uses.append(arena, ns);
+    }
+    o.file_namespaces = spaces.items;
+    o.global_uses = uses.items;
+    return o;
+}
+
+/// How a script parses `text`, a bundle like `Schemas.text`, so it matches `Schemas`: each plugin's
+/// files in its namespace, and names given as text looked for in namespace `home` first. In `arena`.
+pub fn scriptOptions(arena: std.mem.Allocator, text: []const u8, home: []const u8) error{OutOfMemory}!salamander_schema.Options {
+    var files: std.ArrayList(File) = .empty;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, SalSchema.bundle_marker)) continue;
+        const name = line[SalSchema.bundle_marker.len..];
+        const end = std.mem.indexOfScalar(u8, name, '"') orelse continue;
+        try files.append(arena, .{ .name = name[0..end], .text = "" });
+    }
+    var o = try optionsFor(arena, files.items);
+    o.namespace = try arena.dupe(u8, home);
+    return o;
+}
+
 fn readSlot(at: usize) Schemas.Error!usize {
     var value: usize = 0;
     mem.Memory.local.read(at, std.mem.asBytes(&value)) catch return sal.host().explain(error.NotFound, "can't read 0x{x}", .{at});
@@ -202,19 +266,25 @@ const ManagedName = struct {
 /// `[Managed]`, `[Managed("Name")]` or `[Managed("Ns.Class:Name")]`, the same for `[Icall]`, with
 /// the class from its struct's `[Managed("Ns.Class")]`, else the struct's name. Null if it has
 /// neither, or can't name a class, which `checkAnnotations` stops.
-fn managedOf(annotations: []const SalSchema.Annotation, owner: ?*const SalSchema.Type, own_name: []const u8) ?ManagedName {
+fn managedOf(annotations: []const SalSchema.Annotation, owner: ?*const SalSchema.Type, own_name: []const u8, spaces: []const salamander_schema.FileNamespace) ?ManagedName {
     const icall = SalSchema.findAnnotation(annotations, "wraith", "Icall");
     const a = SalSchema.findAnnotation(annotations, "wraith", "Managed") orelse icall orelse return null;
     const given: ?[]const u8 = if (a.args.len > 0 and a.args[0] == .string) a.args[0].string else null;
     if (given) |g| if (splitMember(g)) |parts| return .{ .class = parts[0], .member = parts[1], .icall = icall != null };
     const t = owner orelse return null;
-    return .{ .class = classOf(t), .member = given orelse own_name, .icall = icall != null };
+    return .{ .class = classOf(t, spaces), .member = given orelse own_name, .icall = icall != null };
 }
 
-/// The C# class a struct stands for, from `[Managed("Ns.Class")]`, else its own name.
-fn classOf(t: *const SalSchema.Type) []const u8 {
-    const a = SalSchema.findAnnotation(t.annotations, "wraith", "Managed") orelse return t.name;
-    return if (a.args.len > 0 and a.args[0] == .string) a.args[0].string else t.name;
+/// The C# class a struct stands for, from `[Managed("Ns.Class")]`, else its own name. Without the
+/// plugin's namespace in front, since the game's C# doesn't have it.
+fn classOf(t: *const SalSchema.Type, spaces: []const salamander_schema.FileNamespace) []const u8 {
+    if (SalSchema.findAnnotation(t.annotations, "wraith", "Managed")) |a|
+        if (a.args.len > 0 and a.args[0] == .string) return a.args[0].string;
+    for (spaces) |s| {
+        if (t.name.len > s.namespace.len and std.mem.startsWith(u8, t.name, s.namespace) and t.name[s.namespace.len] == '.')
+            return t.name[s.namespace.len + 1 ..];
+    }
+    return t.name;
 }
 
 /// `Ns.Class:Name`, or `Ns.Class::Name` as engine calls are written.
@@ -254,7 +324,7 @@ fn checkAnnotations(s: SalSchema, source: []const u8, diag: *SalSchema.Diagnosti
             .@"struct" => |st| st,
             else => continue,
         };
-        for (st.fields) |f| try checkField(s, f, source, diag);
+        for (st.fields) |f| try checkField(s, t.name, f, source, diag);
         for (st.methods) |m| try checkOne(m.annotations, "Sig", source, diag);
         for (st.statics) |v| try checkOne(v.annotations, "Sig", source, diag);
         if (SalSchema.findAnnotation(t.annotations, "wraith", "Managed")) |a| {
@@ -290,7 +360,7 @@ fn checkTweak(s: SalSchema, t: *const SalSchema.Type, source: []const u8, diag: 
     if (s.staticOf(t, "instance") == null) return diag.fail(source, a.at, "[Tweak] needs [Instance] too, so Wraith can find {s} in the game", .{t.name});
 }
 
-fn checkField(s: SalSchema, f: SalSchema.Field, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
+fn checkField(s: SalSchema, owner: []const u8, f: SalSchema.Field, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
     if (SalSchema.findAnnotation(f.annotations, "wraith", "Label")) |a| {
         if (a.args.len != 1 or a.args[0] != .string) return diag.fail(source, a.at, "[Label] takes the text to show, like [Label(\"Mira\")]", .{});
     }
@@ -300,21 +370,24 @@ fn checkField(s: SalSchema, f: SalSchema.Field, source: []const u8, diag: *SalSc
         } else true;
         if (!numbers) return diag.fail(source, a.at, "[Range] takes the lowest and highest, like [Range(0, 9999999)]", .{});
     }
-    if (SalSchema.findAnnotation(f.annotations, "wraith", "Choices")) |a| try checkChoices(s, a, source, diag);
+    if (SalSchema.findAnnotation(f.annotations, "wraith", "Choices")) |a| try checkChoices(s, owner, a, source, diag);
 }
 
 /// `[Choices("Type.path.to.list", id, name)]`: a type with `[Instance]`, fields down to an array of
 /// structs, and the two fields in those. Just the path means `id` and `name`.
-fn checkChoices(s: SalSchema, a: *const SalSchema.Annotation, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
+fn checkChoices(s: SalSchema, owner: []const u8, a: *const SalSchema.Annotation, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
     const usage = "[Choices] takes where the list is, then its id and name fields if not id and name, like [Choices(\"DataTables.items\", id, name)]";
     if ((a.args.len != 1 and a.args.len != 3) or a.args[0] != .string) return diag.fail(source, a.at, usage, .{});
     const id = if (a.args.len > 1) a.args[1].name() orelse return diag.fail(source, a.at, usage, .{}) else "id";
     const name = if (a.args.len > 2) a.args[2].name() orelse return diag.fail(source, a.at, usage, .{}) else "name";
     const path = a.args[0].string;
     // Its type can be in a namespace, so it's the longest start that names one
-    const dot = s.typePrefix(path) orelse std.mem.indexOfScalar(u8, path, '.') orelse path.len;
-    var parts = std.mem.splitScalar(u8, if (dot < path.len) path[dot + 1 ..] else "", '.');
-    const root = path[0..dot];
+    var buf: [512]u8 = undefined;
+    const found = choicesPath(s, &buf, owner, path);
+    const full = if (found) |p| p.path else path;
+    const dot = if (found) |p| p.dot else std.mem.indexOfScalar(u8, path, '.') orelse path.len;
+    var parts = std.mem.splitScalar(u8, if (dot < full.len) full[dot + 1 ..] else "", '.');
+    const root = full[0..dot];
     var t = s.findType(root) orelse return diag.fail(source, a.at, "[Choices] starts at a type, and there's no {s}", .{root});
     if (s.staticOf(t, "instance") == null) return diag.fail(source, a.at, "[Choices] starts at a type with [Instance], and {s} has none", .{root});
     var list: ?SalSchema.Ref = null;
@@ -337,6 +410,18 @@ fn checkChoices(s: SalSchema, a: *const SalSchema.Annotation, source: []const u8
     const item = s.findType(item_name) orelse return diag.fail(source, a.at, "there's no {s}", .{item_name});
     if (s.findField(item, id) == null) return diag.fail(source, a.at, "{s} has no field {s}", .{ item.name, id });
     if (s.findField(item, name) == null) return diag.fail(source, a.at, "{s} has no field {s}", .{ item.name, name });
+}
+
+/// `[Choices]` path `path` with its type's full name, in `buf` if that's longer, and where that
+/// name ends. It's found from the namespace `owner`, the struct it's in, is in, out to the top,
+/// like other names in schemas.
+pub fn choicesPath(s: SalSchema, buf: []u8, owner: []const u8, path: []const u8) ?struct { path: []const u8, dot: usize } {
+    var at = owner[0 .. std.mem.lastIndexOfScalar(u8, owner, '.') orelse 0];
+    while (at.len > 0) : (at = at[0 .. std.mem.lastIndexOfScalar(u8, at, '.') orelse 0]) {
+        const full = std.fmt.bufPrint(buf, "{s}.{s}", .{ at, path }) catch break;
+        if (s.typePrefix(full)) |dot| return .{ .path = full, .dot = dot };
+    }
+    return if (s.typePrefix(path)) |dot| .{ .path = path, .dot = dot } else null;
 }
 
 fn checkOne(annotations: []const SalSchema.Annotation, which: []const u8, source: []const u8, diag: *SalSchema.Diagnostic) error{InvalidSchema}!void {
@@ -389,10 +474,12 @@ pub fn load(io: std.Io, name: []const u8, dir: []const u8, depends: []const *Loa
     try readFolder(allocator, io, name, dir, &files);
     if (files.items.len == 0) return null;
     var diag: SalSchema.Diagnostic = .{};
-    return fromFilesWhy(files.items, &diag) catch |err| {
+    const made = fromFilesWhy(files.items, &diag) catch |err| {
         if (err == error.InvalidSchema) log.err("{s}", .{diag.message()});
         return err;
     };
+    made.setHome(name);
+    return made;
 }
 
 /// Wraith's with `files`, named like `plugin/path.sal`. Copied.
@@ -444,6 +531,7 @@ pub fn addFile(loaded: *Loaded, name: []const u8, text: []const u8) SchemaError!
         error.InvalidSchema => sal.host().explain(error.Invalid, "{s}", .{diag.message()}),
     };
     if (loaded.schemas) |old| loaded.retired_schemas.append(allocator, old) catch {};
+    made.setHome(loaded.name);
     loaded.schemas = made;
     @import("shared_schemas.zig").publish(loaded);
 }
@@ -542,14 +630,15 @@ test "[Managed] and [Icall] are checked as the schemas load" {
         \\[Icall("UnityEngine.Time::get_deltaTime")] f32 deltaTime();
     }});
     defer good.destroy();
+    good.setHome("kai");
     const s = good.schema();
-    const update = managedOf(s.findFunction("Player.Update").?.method.annotations, s.findFunction("Player.Update").?.owner, "Update").?;
+    const update = managedOf(s.findFunction("Kai.Player.Update").?.method.annotations, s.findFunction("Kai.Player.Update").?.owner, "Update", good.options.file_namespaces).?;
     try testing.expectEqualStrings("Game.Player", update.class);
     try testing.expectEqualStrings("Update", update.member);
-    try testing.expectEqualStrings("get_Health", managedOf(s.findFunction("Player.health").?.method.annotations, s.findFunction("Player.health").?.owner, "health").?.member);
+    try testing.expectEqualStrings("get_Health", managedOf(s.findFunction("Kai.Player.health").?.method.annotations, s.findFunction("Kai.Player.health").?.owner, "health", good.options.file_namespaces).?.member);
     // No [Managed] on the struct means it's named like the C# class
-    try testing.expectEqualStrings("Spawner", managedOf(s.findFunction("Spawner.Spawn").?.method.annotations, s.findFunction("Spawner.Spawn").?.owner, "Spawn").?.class);
-    const delta = managedOf(s.findFunction("deltaTime").?.method.annotations, null, "deltaTime").?;
+    try testing.expectEqualStrings("Spawner", managedOf(s.findFunction("Kai.Spawner.Spawn").?.method.annotations, s.findFunction("Kai.Spawner.Spawn").?.owner, "Spawn", good.options.file_namespaces).?.class);
+    const delta = managedOf(s.findFunction("Kai.deltaTime").?.method.annotations, null, "deltaTime", good.options.file_namespaces).?;
     try testing.expectEqualStrings("UnityEngine.Time", delta.class);
     try testing.expectEqualStrings("get_deltaTime", delta.member);
     try testing.expect(delta.icall);

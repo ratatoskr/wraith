@@ -1,14 +1,9 @@
 // The render thread's frames, and the game thread's ticks. Unless a plugin drives ticks from the
 // game's own thread, they're the same thread, and each tick runs just before its frame.
 
-error FrameError { NoFrames = 1, Failed }
+namespace Wraith;
 
-enum CapturePoint : u8 {
-    // Just the game, before the overlay draws on it
-    before_overlay,
-    // With the overlay on top, as it's presented
-    after_overlay,
-}
+error FrameError { NoFrames = 1, Failed }
 
 // How pixels are laid out. Every format here is 4 bytes a pixel except rgba16f's 8.
 enum PixelFormat : u8 {
@@ -36,6 +31,15 @@ enum ColorSpace : u8 {
 
 enum GraphicsApi : u8 { unknown, d3d9, d3d10, d3d11, d3d12, vulkan, opengl }
 
+namespace Capture {
+    enum Point : u8 {
+        // Just the game, before the overlay draws on it
+        before_overlay,
+        // With the overlay on top, as it's presented
+        after_overlay,
+    }
+}
+
 // A copy of a frame, which whoever takes it owns.
 struct Capture {
     u32 width;
@@ -58,101 +62,120 @@ error CaptureError {
     Failed,
 }
 
-// Once a frame on the render thread, inside an ImGui frame. That's the overlay's, or a headless one
-// nobody sees when the overlay can't draw.
-fn void FrameTick();
+namespace Frame {
+    // Once a frame on the render thread, inside an ImGui frame. That's the overlay's, or a headless one
+    // nobody sees when the overlay can't draw.
+    fn void Tick();
 
-// Once, on the render thread at the start of the next frame, before the frame ticks.
-fn void FrameTask();
+    // Once, on the render thread at the start of the next frame, before the frame ticks.
+    fn void Task();
 
-// Once a tick on the game thread, where the game's own code runs. No drawing here.
-fn void GameTick();
+    // Once a tick on the game thread, where the game's own code runs. No drawing here.
+    fn void GameTick();
 
-trait FrameSubscription {
-    // No more ticks. Fine to call twice, or from inside one.
-    void cancel();
-}
+    trait Subscription {
+        // No more ticks. Fine to call twice, or from inside one.
+        void cancel();
+    }
 
-// Ticks from the game's own thread, for games that don't run it on the render thread.
-trait TickDriver {
-    // Once a game frame, on the game's thread. Runs every `onTick`. Does nothing unless it's active.
-    void tick();
-    // Whether its ticks are the ones that count. A game's plugin wins over a game engine's, which
-    // wins over the rest, and the first to ask wins a tie. The next one takes over when it goes.
-    bool active();
-    // Hands ticks to the next driver, or back to the render thread. Fine to call twice.
-    void release();
-}
+    // Ticks from the game's own thread, for games that don't run it on the render thread.
+    trait TickDriver {
+        // Once a game frame, on the game's thread. Runs every `onTick`. Does nothing unless it's active.
+        void tick();
+        // Whether its ticks are the ones that count. A game's plugin wins over a game engine's, which
+        // wins over the rest, and the first to ask wins a tie. The next one takes over when it goes.
+        bool active();
+        // Hands ticks to the next driver, or back to the render thread. Fine to call twice.
+        void release();
+    }
 
-// What the game's camera shows, for drawing over the world, like gizmos and labels. Row-vector
-// style, so clip = [x y z 1] * view * projection, the way Direct3D has it: the camera looks down +z
-// and depth goes from 0 at the near plane to 1 at the far one. Clip x and y go from -1 to 1 across
-// the game's window, with y up.
-struct GameView {
-    Mat4 view;
-    Mat4 projection;
-    // False till a game's plugin sets one, or once the last is more than a second old
-    bool known;
-}
+    // What the game's camera shows, for drawing over the world, like gizmos and labels. Row-vector
+    // style, so clip = [x y z 1] * view * projection, the way Direct3D has it: the camera looks down +z
+    // and depth goes from 0 at the near plane to 1 at the far one. Clip x and y go from -1 to 1 across
+    // the game's window, with y up.
+    struct View {
+        Mat4 viewMatrix;
+        Mat4 projection;
+        // False till a game's plugin sets one, or once the last is more than a second old
+        bool known;
+    }
 
-struct FrameStats {
-    // What these cover. Less than the window early on or after a reset.
-    f32 window_seconds;
-    u32 frames;
-    // From the average frame time
-    f32 fps;
-    f32 avg_ms;
-    f32 min_ms;
-    f32 max_ms;
-    f32 p50_ms;
-    f32 p95_ms;
-    f32 p99_ms;
-    // The fps at the 99th and 99.9th percentile frame times
-    f32 low_1_fps;
-    f32 low_01_fps;
-    // Frames over `hitch_factor` times the median
-    u32 hitches;
-    f32 hitch_factor;
-    // Since the game started or the stats were reset
-    u64 total_frames;
-    f32 total_avg_ms;
-    f32 total_min_ms;
-    f32 total_max_ms;
+    struct Stats {
+        // What these cover. Less than the window early on or after a reset.
+        f32 window_seconds;
+        u32 frames;
+        // From the average frame time
+        f32 fps;
+        f32 avg_ms;
+        f32 min_ms;
+        f32 max_ms;
+        f32 p50_ms;
+        f32 p95_ms;
+        f32 p99_ms;
+        // The fps at the 99th and 99.9th percentile frame times
+        f32 low_1_fps;
+        f32 low_01_fps;
+        // Frames over `hitch_factor` times the median
+        u32 hitches;
+        f32 hitch_factor;
+        // Since the game started or the stats were reset
+        u64 total_frames;
+        f32 total_avg_ms;
+        f32 total_min_ms;
+        f32 total_max_ms;
+    }
 }
 
 trait Frame {
     // Gone with the plugin.
-    FrameSubscription!FrameError onFrame(keep FrameTick tick);
+    Subscription!FrameError onFrame(keep Tick tick);
     // On the game thread once a tick. That's the render thread just before each frame, unless a
     // plugin drives ticks. Gone with the plugin.
-    FrameSubscription!FrameError onTick(keep GameTick tick);
+    Subscription!FrameError onTick(keep GameTick tick);
     // Takes over ticks, for a game engine or game plugin that knows the game's own thread. Ticks
     // wait for its first `tick`, so ask in `start`. Gone with the plugin.
     TickDriver!FrameError driveTicks();
     // Whether this is the thread ticks run on. False everywhere till the first tick.
     bool onGameThread();
     // From a game or game engine plugin each frame, once the camera's where it'll be drawn from,
-    // after the free camera has moved it. See `GameView` for which way round. Any thread.
+    // after the free camera has moved it. See `View` for which way round. Any thread.
     void setView(Mat4 view, Mat4 projection);
     // The last view set. Any thread.
-    GameView view();
+    View gameView();
     // From a game or game engine plugin that knows how the game's output is encoded, like Unreal
     // saying HDR's on. Wraith goes by it where the swap chain can't say, like a 10-bit one Wraith
     // joined late. What the game sets on its swap chain itself still wins. Gone with the plugin.
     // Any thread.
     void setColorSpace(ColorSpace space);
     // Any thread. Posted from inside a task, it waits a frame.
-    void!FrameError post(keep FrameTask task);
+    void!FrameError post(keep Task task);
     // The next frame drawn at `point`, copied only because someone asked. Any thread.
-    async Capture!CaptureError capture(CapturePoint point);
+    async Capture!CaptureError capture(Capture.Point point);
     // Worked out a few times a second, so it's cheap every frame. Any thread.
-    FrameStats stats();
+    Stats frameStats();
     // The newest frame times in ms, oldest first. Good till the thread's next call into Wraith.
     // Any thread.
     []f32 times();
     // Settles at the start of the next frame, before the frame ticks, so a task can wait a frame.
-    // Any thread.
+    // Awaiting it carries on there, on the render thread. Any thread.
     async void!FrameError next();
     // Milliseconds on a steady clock, with fractions. Any thread.
     f64 now();
+
+    // Hops. Awaiting any other async call carries on on the thread that made it. These carry on
+    // on another, the same in every language.
+
+    // Carries on on the render thread, where drawing works. Right away if it's there already, or
+    // at the next frame.
+    async void!FrameError toRender();
+    // Carries on on the game thread, where the game's own code runs, at its next tick. Right away
+    // if it's there already. Never block there.
+    async void!FrameError toGame();
+    // Carries on on a worker, for slow or blocking work. Right away if it's on one already.
+    async void!FrameError toWorker();
+    // Carries on at the next tick, on the game thread.
+    async void!FrameError nextTick();
+    // Carries on after `ms` milliseconds, back on the thread that asked, at its first frame or
+    // tick after that for the render or game thread.
+    async void!FrameError delay(u32 ms);
 }

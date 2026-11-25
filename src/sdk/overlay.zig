@@ -45,7 +45,7 @@ pub fn available() bool {
 pub const Gizmo = struct {
     object: W.Gizmo,
 
-    pub const Tool = W.GizmoTool;
+    pub const Tool = W.Gizmo.Tool;
 
     /// In front of any other, like when something's picked for it. It needs a `place`.
     pub fn show(self: Gizmo) void {

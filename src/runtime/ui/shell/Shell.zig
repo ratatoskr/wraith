@@ -1450,7 +1450,7 @@ const tests = struct {
             fn draw(d: *@This()) void {
                 const win = ui.window("Bank##test", .{}) orelse return;
                 defer win.end();
-                d.drew = StructEditor.draw(d.schema, "Bank", d.address);
+                d.drew = StructEditor.draw(d.schema, "Kai.Bank", d.address);
             }
         };
         var drawer: Drawer = .{ .schema = &loaded.schemas.?.parsed.schema, .address = @intFromPtr(&bank) };
@@ -1465,7 +1465,7 @@ const tests = struct {
         var list_arena: std.heap.ArenaAllocator = .init(testing.allocator);
         defer list_arena.deinit();
         const schema = &loaded.schemas.?.parsed.schema;
-        const picks = try StructEditor.readList(@import("tuft_schema").Ref.of(schema, "Bank", @intFromPtr(&bank)), "items", "id", "name", list_arena.allocator());
+        const picks = try StructEditor.readList(@import("tuft_schema").Ref.of(schema, "Kai.Bank", @intFromPtr(&bank)), "items", "id", "name", list_arena.allocator());
         try testing.expectEqual(2, picks.len);
         try testing.expectEqualStrings("Potion", picks[1].label);
         try testing.expectEqual(20, picks[1].value);

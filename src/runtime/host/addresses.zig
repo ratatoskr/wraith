@@ -152,7 +152,11 @@ fn nameSig(loaded: *Loaded, source: []const u8, at: SalSchema.Pos, annotations: 
     var steps: [sigs.max_steps]mem.Sig.Step = undefined;
     const sig = (sigs.of(annotations, "wraith", "Sig", &steps) catch return) orelse return;
     var id_buf: [192]u8 = undefined;
-    const id = (if (owner.len > 0) std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ owner, member }) else member) catch return;
+    const full = (if (owner.len > 0) std.fmt.bufPrint(&id_buf, "{s}.{s}", .{ owner, member }) else member) catch return;
+    // Without its own namespace, which its name's prefix already says
+    var ns_buf: [@import("wraith_core").manifest.namespace_max]u8 = undefined;
+    const ns = @import("wraith_core").manifest.namespaceOf(&ns_buf, loaded.name);
+    const id = if (ns.len > 0 and full.len > ns.len and std.mem.startsWith(u8, full, ns) and full[ns.len] == '.') full[ns.len + 1 ..] else full;
     var name_buf: [256]u8 = undefined;
     const name = loaded.ownName(&name_buf, id) orelse return;
     var text_buf: [1024]u8 = undefined;

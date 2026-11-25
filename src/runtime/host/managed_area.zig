@@ -14,6 +14,7 @@ const OnGone = @import("Owned.zig").OnGone;
 const scratch = @import("scratch.zig");
 const values = @import("managed_values.zig");
 const wraith = @import("wraith.zig");
+const threads = @import("threads.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const sal = api.salamander;
@@ -53,7 +54,7 @@ fn run(comptime func: anytype, args: anytype) @typeInfo(@TypeOf(func)).@"fn".ret
 }
 
 pub const Impl = struct {
-    pub fn kind(_: *Loaded) W.ManagedKind {
+    pub fn runtimeKind(_: *Loaded) W.Managed.Kind {
         const k = global().kind() orelse return .none;
         return switch (k) {
             .mono => .mono,
@@ -76,7 +77,7 @@ pub const Impl = struct {
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
-        job.* = .{ .owner = t.owner, .resolver = pair.resolver };
+        job.* = .{ .owner = t.owner, .resolver = .of(pair.resolver) };
         const thread = std.Thread.spawn(.{}, RunningWait.run, .{job}) catch {
             std.heap.page_allocator.destroy(job);
             pair.resolver.fail(error.Failed);
@@ -114,7 +115,7 @@ pub const Impl = struct {
         return run(staticOf, .{ class_name, field });
     }
 
-    pub fn method(_: *Loaded, class_name: []const u8, name: []const u8, params: i32) sal.Plain(Managed, "method") {
+    pub fn findMethod(_: *Loaded, class_name: []const u8, name: []const u8, params: i32) sal.Plain(Managed, "findMethod") {
         return run(codeOf, .{ class_name, name, params });
     }
 
@@ -131,7 +132,7 @@ pub const Impl = struct {
         return run(callOn, .{function});
     }
 
-    pub fn invoke(_: *Loaded, class_name: []const u8, method_name: []const u8, target: usize, args: []const W.ManagedValue) sal.Plain(Managed, "invoke") {
+    pub fn invoke(_: *Loaded, class_name: []const u8, method_name: []const u8, target: usize, args: []const W.Managed.Value) sal.Plain(Managed, "invoke") {
         return switch (try run(invokeOn, .{ scratch.begin(), class_name, method_name, target, args })) {
             .value => |v| v,
             .threw => |why| sal.host().explain(error.Threw, "{s}", .{why}),
@@ -189,7 +190,7 @@ pub const Impl = struct {
         return run(fieldOf, .{ scratch.begin(), object, field });
     }
 
-    pub fn setField(_: *Loaded, object: usize, field: []const u8, value: W.ManagedValue) sal.Plain(Managed, "setField") {
+    pub fn setField(_: *Loaded, object: usize, field: []const u8, value: W.Managed.Value) sal.Plain(Managed, "setField") {
         return run(setFieldOn, .{ scratch.begin(), object, field, value });
     }
 };
@@ -202,7 +203,7 @@ const RunningPromise = sal.Plain(Managed, "running");
 /// the runtime can't be used, or Wraith stopped watching.
 const RunningWait = struct {
     owner: *sal.Owner,
-    resolver: wraith.ResolverOf(RunningPromise),
+    resolver: threads.Back(wraith.ResolverOf(RunningPromise)),
 
     fn run(job: *RunningWait) void {
         defer std.heap.page_allocator.destroy(job);
@@ -259,7 +260,7 @@ fn classCalled(rt: *const Runtime, name: []const u8) E!*Class {
     return ManagedRuntime.findClass(rt, name) orelse error.NotFound;
 }
 
-fn classInfo(rt: *const Runtime, a: Allocator, name: []const u8) E!W.ManagedClass {
+fn classInfo(rt: *const Runtime, a: Allocator, name: []const u8) E!W.Managed.Class {
     const c = try classCalled(rt, name);
     return .{
         .full_name = ManagedRuntime.fullName(rt, a, c) catch return error.Failed,
@@ -275,9 +276,9 @@ fn typeName(rt: *const Runtime, a: Allocator, t: ?*ManagedRuntime.Type) E![]cons
     return rt.typeName(a, t orelse return "") catch error.Failed;
 }
 
-fn listFields(rt: *const Runtime, a: Allocator, name: []const u8) E![]const W.ManagedField {
+fn listFields(rt: *const Runtime, a: Allocator, name: []const u8) E![]const W.Managed.Field {
     const c = try classCalled(rt, name);
-    var out: std.ArrayList(W.ManagedField) = .empty;
+    var out: std.ArrayList(W.Managed.Field) = .empty;
     var it = rt.fields(c);
     while (it.next()) |f| {
         out.append(a, .{
@@ -291,9 +292,9 @@ fn listFields(rt: *const Runtime, a: Allocator, name: []const u8) E![]const W.Ma
     return out.items;
 }
 
-fn listMethods(rt: *const Runtime, a: Allocator, name: []const u8) E![]const W.ManagedMethod {
+fn listMethods(rt: *const Runtime, a: Allocator, name: []const u8) E![]const W.Managed.Method {
     const c = try classCalled(rt, name);
-    var out: std.ArrayList(W.ManagedMethod) = .empty;
+    var out: std.ArrayList(W.Managed.Method) = .empty;
     var it = rt.methods(c);
     while (it.next()) |m| {
         const params = a.alloc([]const u8, rt.paramCount(m)) catch return error.Failed;
@@ -360,7 +361,7 @@ const Outcome = values.Outcome;
 fn invokeOn(rt: *const Runtime, a: Allocator, class_name: []const u8, method_name: []const u8, target: usize, args: []const Value) E!Outcome {
     if (args.len > values.max_args) return error.Failed;
     const c = try classCalled(rt, class_name);
-    var kinds: [values.max_args]W.ManagedValueKind = undefined;
+    var kinds: [values.max_args]W.Managed.ValueKind = undefined;
     for (args, kinds[0..args.len]) |arg, *k| k.* = arg.kind;
     const m = values.pickMethod(rt, c, method_name, kinds[0..args.len]) orelse return error.NotFound;
     return values.call(rt, a, m, target, args);
@@ -474,9 +475,9 @@ fn stringAt(rt: *const Runtime, a: Allocator, address: usize) E![]const u8 {
 test "nothing's running outside a game" {
     const testing = std.testing;
     var loaded: Loaded = undefined;
-    try testing.expectEqual(.none, Impl.kind(&loaded));
+    try testing.expectEqual(.none, Impl.runtimeKind(&loaded));
     try testing.expectError(error.NotRunning, Impl.images(&loaded));
-    try testing.expectError(error.NotRunning, Impl.method(&loaded, "Game.Player", "Update", -1));
+    try testing.expectError(error.NotRunning, Impl.findMethod(&loaded, "Game.Player", "Update", -1));
     try testing.expectError(error.NotRunning, Impl.getField(&loaded, 0x1000, "health"));
     try testing.expectError(error.NotRunning, Impl.setField(&loaded, 0x1000, "health", .{ .kind = .integer, .integer = 1 }));
 }
@@ -504,7 +505,7 @@ test "a real game's C#, through the API" {
     }
     const m = sdk.wraith.root().?.managed();
 
-    try testing.expectEqual(if (il2cpp) W.ManagedKind.il2cpp else .mono, m.kind());
+    try testing.expectEqual(if (il2cpp) W.Managed.Kind.il2cpp else .mono, m.runtimeKind());
     const images_list = try m.images();
     try testing.expect(for (images_list) |i| {
         if (std.mem.startsWith(u8, i, "mscorlib")) break true;
@@ -532,12 +533,12 @@ test "a real game's C#, through the API" {
     try testing.expectEqualStrings("System.String", concat.return_type);
 
     // `Class:Method` in address text finds the same code
-    const code = try m.method("System.String", "Concat", -1);
+    const code = try m.findMethod("System.String", "Concat", -1);
     try testing.expect(code != 0);
     var problem: api.LocationProblem = .{};
     try testing.expectEqual(code, try addresses.resolve(&loaded, "System.String:Concat", &.{}, &problem));
     try testing.expectEqual(code + 4, try addresses.resolve(&loaded, "System.String:Concat+4", &.{}, &problem));
-    try testing.expectError(error.NotFound, m.method("System.String", "NoSuchMethod", -1));
+    try testing.expectError(error.NotFound, m.findMethod("System.String", "NoSuchMethod", -1));
     try m.running().wait();
 
     // Schemas name C# members, and they're found by name. Methods are called through Wraith, which
@@ -685,7 +686,7 @@ test "CoreCLR's C#, through the API" {
     const m = sdk.wraith.root().?.managed();
     try m.running().wait();
 
-    try testing.expectEqual(W.ManagedKind.coreclr, m.kind());
+    try testing.expectEqual(W.Managed.Kind.coreclr, m.runtimeKind());
     try testing.expect(for (try m.images()) |i| {
         if (std.mem.eql(u8, i, "System.Private.CoreLib.dll")) break true;
     } else false);
@@ -703,7 +704,7 @@ test "CoreCLR's C#, through the API" {
     try testing.expectEqualStrings("System.String", concat.return_type);
 
     // `Class:Method` in address text finds the same code
-    const code = try m.method("System.String", "IsNullOrEmpty", 1);
+    const code = try m.findMethod("System.String", "IsNullOrEmpty", 1);
     var problem: api.LocationProblem = .{};
     try testing.expectEqual(code, try addresses.resolve(&loaded, "System.String:IsNullOrEmpty", &.{}, &problem));
 
@@ -757,6 +758,7 @@ test "CoreCLR's C#, through the API" {
         \\[Managed("System.Math:Max")] usize maxWord(usize a, usize b);
     }});
     defer schemas.destroy();
+    schemas.setHome("ffxiv");
     const Concat = *const fn (srt.String, srt.String) callconv(.c) srt.String;
     const concat_of: Concat = @ptrFromInt(try schemas.address("CsString.concat"));
     try testing.expectEqualStrings("Velvet Crowe", concat_of(.init("Velvet "), .init("Crowe")).get());

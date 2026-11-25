@@ -163,6 +163,8 @@ pub fn destroy(self: *Runtime) void {
     // After plugins and the game, which register settings in it
     host.keybinds.setRegistry(null);
     host.settings.setRegistry(null);
+    // After plugins, whose work on workers it waits for
+    host.threads.stop();
     host.wraith.setIo(null);
     self.own.remove();
     self.registry.destroy();

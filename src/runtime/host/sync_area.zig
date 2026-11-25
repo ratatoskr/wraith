@@ -12,18 +12,20 @@ const sync = @import("tuft_sys").sync;
 
 const OnGone = @import("Owned.zig").OnGone;
 const wraith = @import("wraith.zig");
+const threads = @import("threads.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const sal = api.salamander;
 const W = api.wraith;
 
 pub const Sync = W.Sync;
-pub const Lock = W.Lock;
+pub const Lock = W.Sync.Lock;
 
 const allocator = std.heap.smp_allocator;
 
 const LockPromise = sal.Plain(Sync, "lock");
-const Resolver = wraith.ResolverOf(LockPromise);
+// Settles back on the thread that asked
+const Resolver = threads.Back(wraith.ResolverOf(LockPromise));
 
 /// What `Lock` objects point at. Really a lock's id.
 pub const Handle = opaque {};
@@ -137,10 +139,11 @@ pub const SyncImpl = struct {
 
     pub fn lock(loaded: *Loaded, l: Lock) LockPromise {
         const pair = LockPromise.make() catch return .{};
+        const back: Resolver = .of(pair.resolver);
         var after: After = .{};
         defer after.run();
         const lease = cleanup.lease(&loaded.owner) orelse {
-            pair.resolver.drop();
+            back.drop();
             return pair.promise;
         };
         defer lease.end();
@@ -148,19 +151,19 @@ pub const SyncImpl = struct {
         defer guard.unlock();
         const me = &loaded.owner;
         const r = find(idOf(l)) orelse {
-            after.fail.append(allocator, pair.resolver) catch pair.resolver.drop();
+            after.fail.append(allocator, back) catch back.drop();
             return pair.promise;
         };
         const waiting = for (r.queue.items) |w| {
             if (w.who == me) break true;
         } else false;
         if (r.holder == me or waiting) {
-            pair.resolver.fail(error.AlreadyHeld);
+            back.fail(error.AlreadyHeld);
         } else if (r.holder == null) {
             r.holder = me;
-            after.settle.append(allocator, pair.resolver) catch pair.resolver.settle({});
+            after.settle.append(allocator, back) catch back.settle({});
         } else {
-            r.queue.append(allocator, .{ .who = me, .resolver = pair.resolver }) catch pair.resolver.fail(error.Failed);
+            r.queue.append(allocator, .{ .who = me, .resolver = back }) catch back.fail(error.Failed);
         }
         return pair.promise;
     }

@@ -10,14 +10,15 @@ const host = @import("root.zig");
 const scans = @import("scans.zig");
 const scratch = @import("scratch.zig");
 const wraith = @import("wraith.zig");
+const threads = @import("threads.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const sal = api.salamander;
 const W = api.wraith;
 pub const Memory = W.Memory;
-pub const MemoryScan = W.MemoryScan;
-const ModuleInfo = W.Module;
-const Region = W.Region;
+pub const MemoryScan = W.Memory.Scan;
+const ModuleInfo = W.Memory.Module;
+const Region = W.Memory.Region;
 
 const local = mem.Memory.local;
 const allocator = std.heap.page_allocator;
@@ -136,7 +137,7 @@ pub const Impl = struct {
         return infoOf(scratch.begin(), mem.Module.main());
     }
 
-    pub fn module(_: *Loaded, name: []const u8) Read("module") {
+    pub fn findModule(_: *Loaded, name: []const u8) Read("findModule") {
         if (name.len == 0) return error.NoModule;
         return infoOf(scratch.begin(), try moduleNamed(name));
     }
@@ -198,7 +199,7 @@ pub const Impl = struct {
         return out.items;
     }
 
-    pub fn protect(loaded: *Loaded, address: usize, length: usize, protection: W.Protection) Read("protect") {
+    pub fn protect(loaded: *Loaded, address: usize, length: usize, protection: W.Memory.Protection) Read("protect") {
         const p: api.Protection = switch (protection) {
             inline .no_access, .read, .read_write, .read_execute, .read_write_execute => |x| @field(api.Protection, @tagName(x)),
             else => return error.Failed,
@@ -208,11 +209,11 @@ pub const Impl = struct {
             error.OutOfMemory => error.Failed,
         };
         return switch (old) {
-            inline else => |x| @field(W.Protection, @tagName(x)),
+            inline else => |x| @field(W.Memory.Protection, @tagName(x)),
         };
     }
 
-    pub fn scan(loaded: *Loaded, options: W.ScanOptions) ScanPromise {
+    pub fn scan(loaded: *Loaded, options: W.Memory.Scan.Options) ScanPromise {
         const pair = ScanPromise.make() catch return .{};
         startFirst(loaded, options, pair.resolver) catch |err| pair.resolver.fail(err);
         return pair.promise;
@@ -223,14 +224,14 @@ const ScanPromise = sal.Plain(Memory, "scan");
 const NextPromise = sal.Plain(MemoryScan, "next");
 const ScanError = error{ InvalidValue, NoModule, Busy, Failed, Cancelled };
 
-fn typeOf(t: W.ScanType) error{InvalidValue}!scans.Type {
+fn typeOf(t: W.Memory.Scan.Type) error{InvalidValue}!scans.Type {
     return switch (t) {
         inline .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f32, .f64, .string, .utf16, .bytes => |x| @field(scans.Type, @tagName(x)),
         else => error.InvalidValue,
     };
 }
 
-fn startFirst(loaded: *Loaded, options: W.ScanOptions, resolver: wraith.ResolverOf(ScanPromise)) ScanError!void {
+fn startFirst(loaded: *Loaded, options: W.Memory.Scan.Options, resolver: wraith.ResolverOf(ScanPromise)) ScanError!void {
     const tables = wraith.tablesOf(loaded) orelse return error.Cancelled;
     const t = try typeOf(options.type);
     const text = options.value;
@@ -251,7 +252,7 @@ fn startFirst(loaded: *Loaded, options: W.ScanOptions, resolver: wraith.Resolver
         step.deinit();
         return error.Failed;
     };
-    try Job.start(s, tables, step, .{ .first = resolver });
+    try Job.start(s, tables, step, .{ .first = .of(resolver) });
 }
 
 /// A scan's step on a worker. Only enters the plugin's owner to settle, so unloading doesn't wait
@@ -264,8 +265,8 @@ const Job = struct {
     table: *const sal.Table(MemoryScan),
     step: scans.Step,
     done: union(enum) {
-        first: wraith.ResolverOf(ScanPromise),
-        next: wraith.ResolverOf(NextPromise),
+        first: threads.Back(wraith.ResolverOf(ScanPromise)),
+        next: threads.Back(wraith.ResolverOf(NextPromise)),
     },
 
     /// Takes `step` either way.
@@ -326,7 +327,7 @@ pub const ScanImpl = struct {
         return s.count.load(.acquire);
     }
 
-    pub fn next(s: *scans.Scan, compare: W.ScanCompare, value: []const u8, high: []const u8) NextPromise {
+    pub fn next(s: *scans.Scan, compare: W.Memory.Scan.Compare, value: []const u8, high: []const u8) NextPromise {
         const pair = NextPromise.make() catch return .{};
         startNext(s, compare, value, high, pair.resolver) catch |err| pair.resolver.fail(err);
         return pair.promise;
@@ -349,7 +350,7 @@ pub const ScanImpl = struct {
     }
 };
 
-fn startNext(s: *scans.Scan, compare: W.ScanCompare, value: []const u8, high: []const u8, resolver: wraith.ResolverOf(NextPromise)) ScanError!void {
+fn startNext(s: *scans.Scan, compare: W.Memory.Scan.Compare, value: []const u8, high: []const u8, resolver: wraith.ResolverOf(NextPromise)) ScanError!void {
     const tables = wraith.tablesOf(s.loaded) orelse return error.Cancelled;
     const t = s.value_type;
     const step: scans.Step = switch (compare) {
@@ -375,7 +376,7 @@ fn startNext(s: *scans.Scan, compare: W.ScanCompare, value: []const u8, high: []
         },
         else => return error.InvalidValue,
     };
-    try Job.start(s, tables, step, .{ .next = resolver });
+    try Job.start(s, tables, step, .{ .next = .of(resolver) });
 }
 
 /// Names regions' modules, looking each one up once.
@@ -486,9 +487,9 @@ const tests = struct {
         try testing.expect(std.mem.endsWith(u8, exe.name, ".exe"));
         const name = try testing.allocator.dupe(u8, exe.name);
         defer testing.allocator.free(name);
-        try testing.expectEqual(exe.base, (try m.module(name)).base);
+        try testing.expectEqual(exe.base, (try m.findModule(name)).base);
         try testing.expectEqual(exe.base, (try m.containing(@intFromPtr(&memory_area_marker))).base);
-        try testing.expectError(error.NoModule, m.module("nope.dll"));
+        try testing.expectError(error.NoModule, m.findModule("nope.dll"));
         try testing.expectError(error.NoModule, m.containing(0x10));
 
         const found = try m.findAll("", "5A A5 3C C3 0F F0 69 96 11 77", 0);

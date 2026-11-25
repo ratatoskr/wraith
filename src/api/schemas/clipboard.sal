@@ -1,5 +1,7 @@
 // The system clipboard. It can stall, so it works off the caller's thread.
 
+namespace Wraith;
+
 error ClipboardError { Failed = 1 }
 
 trait Clipboard {

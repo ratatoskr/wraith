@@ -60,7 +60,7 @@ pub fn onRenderThread() bool {
 }
 
 pub const FrameSubscription = struct {
-    object: W.FrameSubscription,
+    object: W.Frame.Subscription,
 
     /// Waits for a call in flight, unless it's from inside one.
     pub fn unsubscribe(self: FrameSubscription) void {
@@ -81,7 +81,7 @@ pub fn onFrame(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!
             func(t);
         }
     };
-    const tick = W.FrameTick.init(target, Wrap.call);
+    const tick = W.Frame.Tick.init(target, Wrap.call);
     const sub = owner.root.frame().onFrame(tick) catch |err| return frameError(err);
     return .{ .object = sub };
 }
@@ -100,14 +100,14 @@ pub fn onTick(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!F
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("onTick expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
-    const tick = W.GameTick.init(target, func);
+    const tick = W.Frame.GameTick.init(target, func);
     const sub = owner.root.frame().onTick(tick) catch |err| return frameError(err);
     return .{ .object = sub };
 }
 
 /// Ticks from the game's own thread, from `driveTicks`.
 pub const TickDriver = struct {
-    object: W.TickDriver,
+    object: W.Frame.TickDriver,
 
     /// Once a game frame, on the game's thread. Runs every `onTick`, and tasks waiting for one.
     /// Does nothing unless it's active.
@@ -174,9 +174,9 @@ pub fn setColorSpace(space: W.ColorSpace) void {
 /// The game's camera as its plugin last set it, or null if it hasn't lately. Any thread.
 pub fn view() ?View {
     const owner = Owner.current() orelse return null;
-    const v = owner.root.frame().view();
+    const v = owner.root.frame().gameView();
     if (!v.known) return null;
-    return .{ .view = v.view, .projection = v.projection };
+    return .{ .view = v.viewMatrix, .projection = v.projection };
 }
 
 /// Runs once next frame, from any thread, or with `.cancelled` if the plugin's going first.

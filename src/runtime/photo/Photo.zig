@@ -221,7 +221,7 @@ test "the game's camera goes through untouched till the free camera's on, then i
     const cam = &photo.camera;
     cam.world(.{ .up = .pos_y, .look = .pos_z, .left_handed = true, .metre = 1 });
 
-    var state: W.CamState = .{ .position = .{ .x = 1 }, .aim = .rotation, .target = .{}, .up = .{ .y = 1 }, .rotation = .identity, .roll = 0, .fov = 1 };
+    var state: W.FreeCamera.State = .{ .position = .{ .x = 1 }, .aim = .rotation, .target = .{}, .up = .{ .y = 1 }, .rotation = .identity, .roll = 0, .fov = 1 };
     const before = state;
     cam.camera(&state);
     try testing.expectEqual(before, state);
@@ -254,7 +254,7 @@ test "the free camera hides only its controls from the game, unless it's set to 
     defer photo.destroy();
     const cam = &photo.camera;
     cam.world(.{ .up = .pos_y, .look = .pos_z, .left_handed = true, .metre = 1 });
-    var state: W.CamState = .{ .position = .{}, .aim = .rotation, .target = .{}, .up = .{ .y = 1 }, .rotation = .identity, .roll = 0, .fov = 1 };
+    var state: W.FreeCamera.State = .{ .position = .{}, .aim = .rotation, .target = .{}, .up = .{ .y = 1 }, .rotation = .identity, .roll = 0, .fov = 1 };
     cam.camera(&state);
     rig.present(); // attaches
 

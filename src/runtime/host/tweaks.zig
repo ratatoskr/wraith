@@ -17,7 +17,7 @@ const allocator = std.heap.page_allocator;
 const sal = api.salamander;
 const W = api.wraith;
 /// From `tweaks.sal`, kept till the tweak's gone.
-pub const Handler = W.TweakHandler;
+pub const Handler = W.Tweaks.Handler;
 
 pub const Entry = struct {
     owner: *Owner,
@@ -35,6 +35,8 @@ pub const Entry = struct {
     /// Parsed, in `arena` like the names. Like a file's, with no sections.
     def: api.tweak.Tweak,
     handler: Handler,
+    /// What `addTarget` gave it, released with it.
+    kept: ?*Kept = null,
     arena: std.heap.ArenaAllocator,
     /// The list's, plus one for each call in flight.
     refs: Atomic(u32) = .init(1),
@@ -42,6 +44,7 @@ pub const Entry = struct {
     fn release(self: *Entry) void {
         if (self.refs.fetchSub(1, .acq_rel) != 1) return;
         self.handler.release();
+        if (self.kept) |k| k.free();
         var arena = self.arena;
         arena.deinit();
     }
@@ -85,11 +88,62 @@ fn place(owner: *Owner, entry: *Entry) api.TweakError!void {
 }
 
 /// Through `tweaks.sal`, under `section` if it's not empty. The handler's released if it fails.
-pub fn add(loaded: *Loaded, section: []const u8, definition: W.TweakDefinition, handler: Handler) api.TweakError!void {
+pub fn add(loaded: *Loaded, section: []const u8, definition: W.Tweaks.Definition, handler: Handler) api.TweakError!void {
+    return addKept(loaded, section, definition, handler, null);
+}
+
+/// What `addHook` and `addOpener` turn on or open, kept till the tweak's gone.
+pub const Target = union(enum) {
+    hook: W.Hook,
+    window: W.Window,
+
+    fn release(self: Target) void {
+        switch (self) {
+            inline else => |o| o.release(),
+        }
+    }
+};
+
+const Kept = struct {
+    target: Target,
+
+    fn handle(self: *Kept, event: W.Tweaks.Event) W.TweakError!void {
+        switch (self.target) {
+            .hook => |h| switch (event.kind) {
+                .on => h.enable() catch |err| return sal.host().explain(error.Failed, "{s}", .{@errorName(err)}),
+                .off => h.disable() catch {},
+                else => {},
+            },
+            .window => |w| if (event.kind == .on) w.focus(),
+        }
+    }
+
+    fn free(self: *Kept) void {
+        self.target.release();
+        allocator.destroy(self);
+    }
+};
+
+/// A toggle for a hook, or an open button for a window. Released if it fails.
+pub fn addTarget(loaded: *Loaded, section: []const u8, definition: W.Tweaks.Definition, target: Target) api.TweakError!void {
+    const kept = allocator.create(Kept) catch {
+        target.release();
+        return error.OutOfMemory;
+    };
+    kept.* = .{ .target = target };
+    var def = definition;
+    def.mode = if (target == .hook) .toggle else .open;
+    def.fields = &.{};
+    return addKept(loaded, section, def, .init(kept, Kept.handle), kept);
+}
+
+fn addKept(loaded: *Loaded, section: []const u8, definition: W.Tweaks.Definition, handler: Handler, kept: ?*Kept) api.TweakError!void {
     const entry = typed(loaded, definition, handler) catch |err| {
         handler.release();
+        if (kept) |k| k.free();
         return err;
     };
+    entry.kept = kept;
     errdefer entry.release();
     entry.section = try entry.arena.allocator().dupe(u8, section);
     const lease = cleanup.lease(&loaded.owner) orelse return error.OwnerGone;
@@ -97,7 +151,7 @@ pub fn add(loaded: *Loaded, section: []const u8, definition: W.TweakDefinition, 
     try place(&loaded.owner, entry);
 }
 
-fn typed(loaded: *Loaded, d: W.TweakDefinition, handler: Handler) api.TweakError!*Entry {
+fn typed(loaded: *Loaded, d: W.Tweaks.Definition, handler: Handler) api.TweakError!*Entry {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
@@ -252,7 +306,7 @@ pub fn call(name: []const u8, event: api.TweakEvent, problem: *api.TweakProblem)
     defer calling -= 1;
     entry.handler.invoke(.{.{
         .kind = switch (event.kind) {
-            inline else => |k| @field(W.TweakEventKind, @tagName(k)),
+            inline else => |k| @field(W.Tweaks.EventKind, @tagName(k)),
         },
         .field = .init(event.field),
         .value = event.value,
@@ -369,7 +423,7 @@ pub fn useSwitches(switches: ?*Switches, was: ?*Switches) void {
 const Bus = @import("wraith_core").Event(fn (name: []const u8, on: bool) void);
 var bus: Bus = .init(allocator);
 
-pub const Switched = W.TweakSwitched;
+pub const Switched = W.Tweaks.Switched;
 
 pub const Listener = struct {
     loaded: *Loaded,
@@ -491,7 +545,7 @@ test "through tweaks.sal, failing with why" {
         last: f64 = 0,
         ready: bool = false,
 
-        fn handle(self: *@This(), event: W.TweakEvent) error{ InvalidId, InvalidDefinition, NotFound, Failed }!void {
+        fn handle(self: *@This(), event: W.Tweaks.Event) error{ InvalidId, InvalidDefinition, NotFound, Failed }!void {
             switch (event.kind) {
                 .changed => {
                     self.changes += 1;
@@ -503,7 +557,7 @@ test "through tweaks.sal, failing with why" {
         }
     };
     var seen: Seen = .{};
-    const fields = [_]W.TweakField{.{ .name = "speed", .value = 2, .has_min = true, .min = 1 }};
+    const fields = [_]W.Tweaks.Field{.{ .name = "speed", .value = 2, .has_min = true, .min = 1 }};
     try list.add(.{ .id = "boost", .title = "Boost", .key = "F8", .fields = &fields }, Handler.init(&seen, Seen.handle));
     try testing.expectError(error.InvalidId, list.add(.{ .id = "no spaces" }, Handler.init(&seen, Seen.handle)));
     try testing.expectError(error.InvalidDefinition, list.add(.{ .id = "bad", .key = "NotAKey" }, Handler.init(&seen, Seen.handle)));
@@ -530,4 +584,67 @@ test "through tweaks.sal, failing with why" {
     loaded.deinitForTest();
     host.wraith.forget(&loaded);
     try testing.expectEqual(.gone, call("kai:again", .{ .kind = .off }, &problem));
+}
+
+test "addHook turns its hook on and off with it, and addOpener opens its window" {
+    const testing = std.testing;
+    const sdk = @import("wraith_sdk");
+    var loaded: Loaded = undefined;
+    loaded.initForTest(testing.allocator, "kai");
+    sdk.Owner.attach(loaded.root());
+    defer sdk.Owner.detach();
+    const wraith = sdk.wraith.root().?;
+    const list = wraith.tweaks();
+
+    const Fake = struct {
+        on: bool = false,
+        refuse: bool = false,
+
+        pub fn enable(self: *@This()) sal.Plain(W.Hook, "enable") {
+            if (self.refuse) return error.Failed;
+            self.on = true;
+        }
+
+        pub fn disable(self: *@This()) sal.Plain(W.Hook, "disable") {
+            self.on = false;
+        }
+
+        pub fn destroy(_: *@This()) void {}
+
+        pub fn original(_: *@This()) usize {
+            return 0;
+        }
+
+        pub fn @"resume"(_: *@This()) usize {
+            return 0;
+        }
+    };
+    var fake: Fake = .{};
+    const hook: W.Hook = .{ .data = @intFromPtr(&fake), .table = sal.implement(W.Hook, Fake) };
+    try list.addHook("", .{ .id = "free_shopping", .title = "Free shopping" }, hook);
+    var problem: api.TweakProblem = .{};
+    try testing.expectEqual(.ok, call("kai:free_shopping", .{ .kind = .on }, &problem));
+    try testing.expect(fake.on);
+    try testing.expectEqual(.ok, call("kai:free_shopping", .{ .kind = .off }, &problem));
+    try testing.expect(!fake.on);
+    fake.refuse = true;
+    try testing.expectEqual(.failed, call("kai:free_shopping", .{ .kind = .on }, &problem));
+    try testing.expectEqualStrings("Failed", problem.message());
+
+    const Draw = struct {
+        fn draw(_: *@This()) void {}
+    };
+    var draw: Draw = .{};
+    const window = wraith.ui().addWindow(.{ .title = "Party" }, W.Window.Draw.init(&draw, Draw.draw));
+    try list.addOpener("Windows", .{ .id = "party", .title = "Party" }, window);
+    {
+        const r = read();
+        defer r.end();
+        for (r.entries) |e| if (std.mem.eql(u8, e.id, "party")) try testing.expect(e.opens);
+    }
+    try testing.expect(!window.isOpen());
+    try testing.expectEqual(.ok, call("kai:party", .{ .kind = .on }, &problem));
+    try testing.expect(window.isOpen());
+    loaded.deinitForTest();
+    host.wraith.forget(&loaded);
 }

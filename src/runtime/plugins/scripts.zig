@@ -1,10 +1,10 @@
 //! The built-in `js` and `lua` kinds, on Salamander's hosts. A script plugin's folder has `main.js` or
-//! `main.lua`, and imports Wraith's areas from the `wraith` module, like
-//! `import { settings } from "wraith"` or `require("wraith").settings`.
+//! `main.lua`, and reaches Wraith's areas through the `Wraith` global, like `Wraith.settings()`.
 //!
 //! Each runs its main file as it starts, then gets pumped once a frame on the render thread, which
 //! never waits for it, and neither does the game thread. A tick that finds the script busy skips
-//! it. Other threads calling in wait their turn.
+//! it. Other threads calling in wait their turn. After an await it carries on on the thread the
+//! promise settled on, see `Lanes`.
 
 const std = @import("std");
 
@@ -14,6 +14,8 @@ const hosts = @import("salamander_hosts");
 
 const host = @import("../host/root.zig");
 const Libraries = @import("../Libraries.zig");
+const threads = host.threads;
+const Atomic = @import("tuft_arch").atomic.Value;
 
 const sal = api.salamander;
 const engine = hosts.engine;
@@ -39,6 +41,8 @@ const Running = struct {
     owner: *sal.Owner,
     pump: sal.Task = .{},
     exposed: Exposed = .{},
+    /// Where it carries on after an await, kept after it's gone.
+    lanes: *Lanes = undefined,
 
     fn create(language: hosts.Language, guest: host.wraith.Guest) !*Running {
         const r = try allocator.create(Running);
@@ -50,8 +54,14 @@ const Running = struct {
         r.owner = try sal.host().owner(r.name);
         errdefer r.owner.drain();
 
-        r.script = try r.exposed.create(language, allocator, .{ .ctx = r, .resolve = resolve, .read = read }, .{ .ctx = r, .f = report });
+        r.lanes = try Lanes.create();
+        const schema = if (guest.schema.len > 0) guest.schema else api.wraith_sal;
+        var home: [core.manifest.namespace_max]u8 = undefined;
+        errdefer r.exposed.deinit();
+        r.script = try r.exposed.create(language, allocator, .{ .ctx = r, .resolve = resolve, .read = read }, .{ .ctx = r, .f = report }, r.lanes, schema, core.manifest.namespaceOf(&home, guest.name));
         errdefer r.script.deinit();
+        // Before main, which can await too
+        try r.lanes.start(r.script, r.owner);
         try r.expose(guest);
 
         const main = switch (language) {
@@ -75,25 +85,13 @@ const Running = struct {
         return r;
     }
 
-    /// Wraith's areas, then each plugin it depends on as a module by its name, with what it
-    /// offers, like `import { Freecam } from "freecam"`.
+    /// Every namespace at the top as a global, Wraith's areas like `Wraith.ui()`, and what each
+    /// plugin it depends on offers, like `Freecam.camera()`.
     fn expose(r: *Running, guest: host.wraith.Guest) !void {
-        try r.exposed.expose(r.script, guest.wraith, guest.schema, false);
-        const types = r.exposed.types.?;
-
-        // The loader lists each plugin's services together
-        var services: std.ArrayList(engine.Export) = .empty;
+        var services: std.ArrayList(Exposed.Service) = .empty;
         defer services.deinit(allocator);
-        var i: usize = 0;
-        while (i < guest.services.len) {
-            const plugin = guest.services[i].plugin;
-            services.clearRetainingCapacity();
-            while (i < guest.services.len and std.mem.eql(u8, guest.services[i].plugin, plugin)) : (i += 1) {
-                const s = guest.services[i];
-                try services.append(allocator, .{ .name = s.trait, .schema = types, .trait = s.trait, .obj = s.obj });
-            }
-            try r.script.module(plugin, services.items);
-        }
+        for (guest.services) |s| try services.append(allocator, .{ .trait = s.trait, .obj = s.obj });
+        try r.exposed.expose(r.script, guest.wraith, guest.schema, false, services.items);
     }
 
     fn schedule(r: *Running) void {
@@ -109,7 +107,7 @@ const Running = struct {
         r.schedule();
     }
 
-    /// Salamander's native modules, like `wraith`, come first. Then the plugin's own files, then
+    /// Salamander's native modules, like `salamander`, come first. Then the plugin's own files, then
     /// libraries shared through `Libraries`, like the runtime's `ce`.
     fn resolve(ctx: ?*anyopaque, buf: []u8, from: []const u8, name: []const u8) ?[]const u8 {
         const r: *Running = @ptrCast(@alignCast(ctx.?));
@@ -170,34 +168,53 @@ pub const Exposed = struct {
     schema: sal.Object(host.wraith.SchemaArea) = .{},
     /// Its schemas as the script sees them.
     types: ?*const engine.Module = null,
+    /// What its schema options point into, kept till `deinit`, after the script's gone.
+    arena: ?std.heap.ArenaAllocator = null,
 
-    /// A script whose memory and declared names go through Wraith. `self` has to stay put.
-    pub fn create(self: *Exposed, language: hosts.Language, gpa: std.mem.Allocator, resolver: hosts.Resolver, report: hosts.Report) !hosts.Script {
+    /// A script whose memory and declared names go through Wraith. `self` has to stay put. After a
+    /// native promise it carries on through `lanes`, which outlive it, on the thread the promise says.
+    /// It reads `schema`, the bundle `expose` gets, with each plugin's files in its namespace, and
+    /// names it's given as text are looked for in namespace `home` first, like `Kai`.
+    pub fn create(self: *Exposed, language: hosts.Language, gpa: std.mem.Allocator, resolver: hosts.Resolver, report: hosts.Report, lanes: ?*Lanes, schema: []const u8, home: []const u8) !hosts.Script {
+        self.arena = .init(allocator);
+        const options = try host.schemas.scriptOptions(self.arena.?.allocator(), schema, home);
         return hosts.create(language, .{
             .gpa = gpa,
             .resolver = resolver,
             .report = report,
             .policy = .{ .how = policy },
-            .schema_options = api.sal_options,
+            .resume_on = if (lanes) |l| .{ .ctx = l, .run = Lanes.resumeHere } else null,
+            .schema_options = options,
             .locator = @import("wraith_sdk").salamander.locator(self, locate),
         });
     }
 
-    /// Wraith's areas as the `wraith` module, and as globals too if `globals`. Its schemas, `schema`,
-    /// are in scope, so it can type things like `salamander.fn("Player.heal", f)` by what they declare.
-    pub fn expose(self: *Exposed, script: hosts.Script, wraith: @FieldType(host.wraith.Guest, "wraith"), schema: []const u8, globals: bool) !void {
+    /// Once its script's gone.
+    pub fn deinit(self: *Exposed) void {
+        if (self.arena) |*a| a.deinit();
+        self.arena = null;
+    }
+
+    /// Each namespace at the top of its schemas as a global, like `Wraith` and `Kai`, with Wraith's
+    /// areas as `Wraith.ui()` and so on, and each of `services` like `Freecam.camera()`. With
+    /// `bare`, the areas are globals by their own names too, like in Workbench scripts and tweaks.
+    pub fn expose(self: *Exposed, script: hosts.Script, wraith: @FieldType(host.wraith.Guest, "wraith"), schema: []const u8, bare: bool, services: []const Service) !void {
         const types = try script.schema(if (schema.len > 0) schema else api.wraith_sal);
         self.types = types;
         self.schema = sal.invoke(host.wraith.Wraith, "schema", wraith, .{});
-        const methods = host.wraith.Wraith.salamander.methods;
-        var exports: [methods.len]engine.Export = undefined;
-        inline for (methods, 0..) |m, i| {
+        if (bare) inline for (host.wraith.Wraith.salamander.methods) |m| {
             const area = sal.invoke(host.wraith.Wraith, m.name, wraith, .{});
-            exports[i] = .{ .name = m.name, .schema = types, .trait = @TypeOf(area).salamander.name, .obj = .of(area) };
-            if (globals) try script.expose(m.name, exports[i]);
-        }
-        try script.module("wraith", &exports);
+            try script.expose(m.name, .{ .name = m.name, .schema = types, .trait = @TypeOf(area).salamander.name, .obj = .of(area) });
+        };
+        var roots: std.ArrayList(engine.Export) = .empty;
+        defer roots.deinit(allocator);
+        try roots.append(allocator, .{ .name = "", .schema = types, .trait = host.wraith.Wraith.salamander.name, .obj = .of(wraith) });
+        for (services) |s| try roots.append(allocator, .{ .name = "", .schema = types, .trait = s.trait, .obj = s.obj });
+        try script.globals(roots.items);
     }
+
+    /// A plugin's [Service] object, by its trait's full name.
+    pub const Service = struct { trait: []const u8, obj: sal.AnyObject };
 
     fn locate(ctx: ?*anyopaque, name: []const u8) anyerror!usize {
         const self: *Exposed = @ptrCast(@alignCast(ctx.?));
@@ -238,12 +255,69 @@ pub fn policy(_: ?*anyopaque) engine.Gate.How {
     return if (host.frame.onRenderThread() or host.frame.onGameThread()) .try_ else .block;
 }
 
+/// Where a script carries on once a native promise it awaited settles: on the thread that settled
+/// it, which Wraith makes the one that awaited, or a hop's. One queue for each thread, pumped there
+/// only when something's in it. Kept for good, like the host's queues, since a promise can still
+/// settle after its script's gone.
+pub const Lanes = struct {
+    lanes: [3]Lane,
+
+    const Lane = struct {
+        queue: sal.Queue,
+        thread: threads.Thread,
+        script: ?hosts.Script = null,
+        /// Owned by the script's owner, so it does nothing once the script's going.
+        pump: sal.Task = .{},
+        scheduled: Atomic(bool) = .init(false),
+
+        fn schedule(lane: *Lane) void {
+            if (lane.pump.table == null) return;
+            if (lane.scheduled.swap(true, .acq_rel)) return;
+            // Nothing polls a thread without frames, so a worker does it then
+            const where: threads.Thread = if (threads.reachable(lane.thread)) lane.thread else .worker;
+            threads.post(where, lane.pump) catch lane.scheduled.store(false, .release);
+        }
+
+        fn pumpNow(lane: *Lane) void {
+            lane.scheduled.store(false, .release);
+            const script = lane.script orelse return;
+            // The frame threads never wait on a script, so they try again at the next frame or tick
+            if (!script.pumpQueue(lane.queue, lane.thread == .worker or !threads.reachable(lane.thread))) lane.schedule();
+        }
+    };
+
+    pub fn create() !*Lanes {
+        const self = try std.heap.page_allocator.create(Lanes);
+        errdefer std.heap.page_allocator.destroy(self);
+        inline for (&self.lanes, .{ threads.Thread.render, .game, .worker }) |*l, t| {
+            l.* = .{ .queue = sal.host().queue() catch return error.OutOfMemory, .thread = t };
+        }
+        return self;
+    }
+
+    /// Once it's running, so it can be pumped. Its pumps go with `owner`.
+    pub fn start(self: *Lanes, script: hosts.Script, owner: *sal.Owner) !void {
+        for (&self.lanes) |*l| {
+            l.script = script;
+            l.pump = try sal.Task.owned(owner, l, Lane.pumpNow);
+        }
+    }
+
+    fn resumeHere(ctx: ?*anyopaque, task: sal.Task) void {
+        const self: *Lanes = @ptrCast(@alignCast(ctx.?));
+        const lane = &self.lanes[@backingInt(threads.here())];
+        lane.queue.postTask(task) catch return log.err("A script couldn't carry on after an await: out of memory", .{});
+        lane.schedule();
+    }
+};
+
 const RunningImpl = struct {
     pub fn stop(r: *Running) void {
         // Out of anything it's stuck in, and its pump's done for good
         r.script.interrupt();
         r.owner.drain();
         r.script.deinit();
+        r.exposed.deinit();
     }
 
     pub fn unload(r: *Running) void {
@@ -256,9 +330,11 @@ const RunningImpl = struct {
         return 0;
     }
 
-    pub fn service(r: *Running, trait: []const u8) sal.Plain(host.wraith.Plugin, "service") {
+    pub fn serviceFor(r: *Running, trait: []const u8) sal.Plain(host.wraith.Plugin, "serviceFor") {
         const types = r.exposed.types orelse return .{};
-        return r.script.take(trait, types, trait) catch {
+        // Exported by its own name, like `Tally` for `Tally.Tally`
+        const export_name = trait[if (std.mem.lastIndexOfScalar(u8, trait, '.')) |d| d + 1 else 0..];
+        return r.script.take(export_name, types, trait) catch {
             log.err("{s}: {s}", .{ r.name, r.script.lastError() });
             return .{};
         };

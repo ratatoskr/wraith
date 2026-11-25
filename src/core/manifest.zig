@@ -94,9 +94,10 @@ pub const ClrMode = enum {
 
 /// The version of Wraith's API this Wraith has. It goes up when plugins and projects need
 /// updating for it, and packages say which they're made for with `apiVersion`.
-pub const api_version: u32 = 1;
-/// The oldest `apiVersion` this Wraith still loads.
-pub const min_api_version: u32 = 1;
+pub const api_version: u32 = 2;
+/// The oldest `apiVersion` this Wraith still loads. 2 put the API in `namespace Wraith`, which
+/// changed every trait's hash.
+pub const min_api_version: u32 = 2;
 
 /// Whether this Wraith loads a package made for `apiVersion`.
 pub const ApiFit = enum {
@@ -284,6 +285,39 @@ pub fn validId(id: []const u8) bool {
     if (!std.ascii.isLower(id[0]) and !std.ascii.isDigit(id[0])) return false;
     for (id) |c| if (!std.ascii.isLower(c) and !std.ascii.isDigit(c) and c != '_' and c != '-') return false;
     return true;
+}
+
+/// Room for any id's namespace, with the `_` a digit at the front gets.
+pub const namespace_max = 65;
+
+/// The namespace a plugin's schemas are in, its id in PascalCase, like `TrailsHorizon` for
+/// `trails_horizon`. `Plugin` for one with no letters or digits.
+pub fn namespaceOf(buf: *[namespace_max]u8, id: []const u8) []const u8 {
+    var n: usize = 0;
+    var up = true;
+    for (id) |c| {
+        if (!std.ascii.isAlphanumeric(c)) {
+            up = true;
+            continue;
+        }
+        if (n == 0 and std.ascii.isDigit(c)) {
+            buf[0] = '_';
+            n = 1;
+        }
+        if (n == buf.len) break;
+        buf[n] = if (up) std.ascii.toUpper(c) else c;
+        n += 1;
+        up = false;
+    }
+    if (n == 0) return "Plugin";
+    return buf[0..n];
+}
+
+test "a plugin's namespace is its id in PascalCase" {
+    var buf: [namespace_max]u8 = undefined;
+    try std.testing.expectEqualStrings("TrailsHorizon", namespaceOf(&buf, "trails_horizon"));
+    try std.testing.expectEqualStrings("QualityOfLife", namespaceOf(&buf, "quality-of-life"));
+    try std.testing.expectEqualStrings("_7thDragon", namespaceOf(&buf, "7th_dragon"));
 }
 
 /// Like `camera` or `quality-of-life`: lowercase letters, digits and `-`, up to 24.

@@ -387,9 +387,9 @@ pub fn Waited(comptime P: type) type {
 }
 
 /// Waits for an `async` call into Wraith, like `try sdk.tasks.wait(w.frame().next())`. A task parks
-/// and carries on at the frame after it settles, on the game thread if it was there, otherwise on the
-/// render thread. Elsewhere it blocks, so never on the render or game thread. A task that's
-/// cancelled lets go of it.
+/// and carries on where it was: at the frame after it settles on the render thread, at the tick after
+/// on the game thread, and a task on a worker just waits there. Elsewhere it blocks, so never on the
+/// render or game thread. A task that's cancelled lets go of it.
 pub fn wait(promise: anytype) Waited(@TypeOf(promise)) {
     if (promise.table == null) return promise.take().?;
     const t = current() orelse {
@@ -397,6 +397,17 @@ pub fn wait(promise: anytype) Waited(@TypeOf(promise)) {
         if (frame.onGameThread()) return error.OnGameThread;
         return promise.wait();
     };
+    if (t.where == .worker) {
+        // Workers can block, which keeps it on one, but cancelling still ends it
+        while (!promise.isSettled()) {
+            if (t.scheduler.canceled.load(.acquire)) {
+                promise.cancel();
+                return error.Canceled;
+            }
+            t.scheduler.io.sleep(.fromMilliseconds(1), .awake) catch {};
+        }
+        return promise.take().?;
+    }
     if (!promise.isSettled()) {
         // On the heap, since the promise can settle after a cancelled task's gone
         const Waiter = struct {
@@ -699,6 +710,31 @@ const tests = struct {
         try rig.scheduler.spawn(Awaiting.run, .{&awaiting});
         try rig.runUntil(&awaiting.done);
         try testing.expectEqual(threadId(), awaiting.thread);
+    }
+
+    const OnWorker = struct {
+        done: Atomic(bool) = .init(false),
+        worker: u32 = 0,
+        after: u32 = 0,
+
+        fn run(self: *OnWorker, io: std.Io) !void {
+            defer self.done.store(true, .release);
+            try frame.toWorker(io);
+            self.worker = threadId();
+            try wait(Owner.current().?.root.frame().next());
+            self.after = threadId();
+        }
+    };
+
+    test "a task on a worker stays on it while it waits" {
+        var rig: Rig = .{};
+        rig.init();
+        defer rig.deinit();
+        var on: OnWorker = .{};
+        try rig.scheduler.spawn(OnWorker.run, .{ &on, testing.io });
+        try rig.runUntil(&on.done);
+        try testing.expect(on.after != threadId());
+        try testing.expectEqual(on.worker, on.after);
     }
 };
 

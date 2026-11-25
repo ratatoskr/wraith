@@ -41,6 +41,8 @@ pub fn write(a: std.mem.Allocator, root: Value, w: *std.Io.Writer) !void {
         \\// `ImGui::Button` is `Button`, and its version taking every argument is `ButtonEx`. Calls outside
         \\// a frame callback do nothing.
         \\
+        \\namespace Wraith;
+        \\
         \\struct ImVec2 { f32 x; f32 y; }
         \\struct ImVec4 { f32 x; f32 y; f32 z; f32 w; }
         \\

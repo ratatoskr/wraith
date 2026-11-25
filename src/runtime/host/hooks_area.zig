@@ -38,20 +38,21 @@ fn hookError(err: anyerror) HookError {
 }
 
 pub const HooksImpl = struct {
-    pub fn detour(loaded: *Loaded, target: usize, signature: []const u8, handler: sal.AnyObject, options: W.HookOptions) sal.Plain(Hooks, "detour") {
+    pub fn detour(loaded: *Loaded, target: usize, signature: []const u8, handler: sal.AnyObject, options: W.Hook.Options) sal.Plain(Hooks, "detour") {
         return typed(loaded, target, false, signature, handler, options);
     }
 
-    pub fn detourSlot(loaded: *Loaded, at: usize, signature: []const u8, handler: sal.AnyObject, options: W.HookOptions) sal.Plain(Hooks, "detourSlot") {
+    pub fn detourSlot(loaded: *Loaded, at: usize, signature: []const u8, handler: sal.AnyObject, options: W.Hook.Options) sal.Plain(Hooks, "detourSlot") {
         return typed(loaded, at, true, signature, handler, options);
     }
 
-    pub fn named(loaded: *Loaded, name: []const u8, handler: sal.AnyObject, options: W.HookOptions) sal.Plain(Hooks, "named") {
+    pub fn named(loaded: *Loaded, name: []const u8, handler: sal.AnyObject, options: W.Hook.Options) sal.Plain(Hooks, "named") {
         const schemas = host.schemas.of(loaded) catch {
             sal.host().release(handler);
             return error.Failed;
         };
-        const f = schemas.schema().findFunction(name) orelse {
+        var buf: [512]u8 = undefined;
+        const f = schemas.schema().findFunction(schemas.fullName(&buf, name)) orelse {
             sal.host().release(handler);
             return sal.host().explain(error.NotFound, "the plugin's schemas don't declare a function or method {s}", .{name});
         };
@@ -68,19 +69,19 @@ pub const HooksImpl = struct {
         return host.hooks.runningContext();
     }
 
-    pub fn detourNative(loaded: *Loaded, target: usize, to: usize, options: W.HookOptions) sal.Plain(Hooks, "detourNative") {
+    pub fn detourNative(loaded: *Loaded, target: usize, to: usize, options: W.Hook.Options) sal.Plain(Hooks, "detourNative") {
         return native(loaded, target, false, to, options);
     }
 
-    pub fn detourSlotNative(loaded: *Loaded, at: usize, to: usize, options: W.HookOptions) sal.Plain(Hooks, "detourSlotNative") {
+    pub fn detourSlotNative(loaded: *Loaded, at: usize, to: usize, options: W.Hook.Options) sal.Plain(Hooks, "detourSlotNative") {
         return native(loaded, at, true, to, options);
     }
 
-    pub fn nativeCalls(_: *Loaded) W.NativeHookCalls {
+    pub fn nativeHookCalls(_: *Loaded) W.Hooks.NativeCalls {
         return .{ .enter = @intFromPtr(&nativeEnter), .leave = @intFromPtr(&nativeLeave) };
     }
 
-    pub fn mid(loaded: *Loaded, target: usize, options: W.MidOptions, handler: host.hooks.MidHandler) sal.Plain(Hooks, "mid") {
+    pub fn mid(loaded: *Loaded, target: usize, options: W.Hooks.MidOptions, handler: host.hooks.MidHandler) sal.Plain(Hooks, "mid") {
         const t = wraith.tablesOf(loaded) orelse {
             handler.release();
             return error.Failed;
@@ -113,7 +114,7 @@ pub const HooksImpl = struct {
     }
 };
 
-fn native(loaded: *Loaded, target: usize, slot: bool, to: usize, options: W.HookOptions) sal.Plain(Hooks, "detourNative") {
+fn native(loaded: *Loaded, target: usize, slot: bool, to: usize, options: W.Hook.Options) sal.Plain(Hooks, "detourNative") {
     const t = wraith.tablesOf(loaded) orelse return error.Failed;
     const h = (if (slot) host.hooks.createSlot(loaded, target, to, options.context) else host.hooks.createFn(loaded, target, to, options.context)) catch |err| return hookError(err);
     if (!options.disabled) host.hooks.enable(nobody, h) catch |err| {
@@ -141,7 +142,7 @@ test "generated fn values match by their call's signature, not the trait hash" {
     try std.testing.expect(!sameFn(&wrong, &bound));
 }
 
-fn nativeEnter() callconv(.c) W.HookCall {
+fn nativeEnter() callconv(.c) W.Hook.Call {
     const call = host.hooks.enter(nobody);
     return .{ .hook = @intFromPtr(call.hook), .original = call.trampoline, .context = call.user_data, .entered = call.entered };
 }
@@ -151,7 +152,7 @@ fn nativeLeave(h: usize) callconv(.c) void {
 }
 
 /// A function hook on `target`, or the pointer at it for `slot`. Takes `handler` either way.
-fn typed(loaded: *Loaded, target: usize, slot: bool, signature: []const u8, handler: sal.AnyObject, options: W.HookOptions) sal.Plain(Hooks, "detour") {
+fn typed(loaded: *Loaded, target: usize, slot: bool, signature: []const u8, handler: sal.AnyObject, options: W.Hook.Options) sal.Plain(Hooks, "detour") {
     const t = wraith.tablesOf(loaded) orelse {
         sal.host().release(handler);
         return error.Failed;
@@ -203,7 +204,7 @@ pub const HookImpl = struct {
 };
 
 pub const WatchesImpl = struct {
-    pub fn add(loaded: *Loaded, address: usize, length: u8, kind: W.WatchKind, handler: host.watches.Handler) sal.Plain(Watches, "add") {
+    pub fn add(loaded: *Loaded, address: usize, length: u8, kind: W.Watch.Kind, handler: host.watches.Handler) sal.Plain(Watches, "add") {
         const t = wraith.tablesOf(loaded) orelse {
             handler.release();
             return error.Failed;

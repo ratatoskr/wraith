@@ -38,9 +38,9 @@ pub const Presses = struct {
     }
 
     /// Gone with the plugin, if not unbound first.
-    pub fn bind(self: *Presses, action: W.Action) !void {
+    pub fn bind(self: *Presses, action: W.Input.Action) !void {
         const owner = Owner.current() orelse return error.KeybindsUnavailable;
-        self.keybind = try owner.root.input().bind(action, W.KeybindFired.init(self, fired));
+        self.keybind = try owner.root.input().bind(action, W.Keybind.Fired.init(self, fired));
     }
 
     pub fn unbind(self: *Presses) void {
@@ -49,7 +49,7 @@ pub const Presses = struct {
     }
 
     /// Like `bind`, but if it's bound already it just moves to the action's keys.
-    pub fn rebind(self: *Presses, action: W.Action) !void {
+    pub fn rebind(self: *Presses, action: W.Input.Action) !void {
         if (self.keybind) |k| {
             var buf: [4]W.Chord = undefined;
             buf[0] = action.chord;
@@ -60,7 +60,7 @@ pub const Presses = struct {
         try self.bind(action);
     }
 
-    fn fired(self: *Presses, phase: W.KeyPhase) void {
+    fn fired(self: *Presses, phase: W.Keybind.Phase) void {
         if (phase == .pressed) self.pressed();
     }
 

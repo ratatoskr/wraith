@@ -548,7 +548,7 @@ fn onCaptured(self: *Overlay, event: tuft_imgui.capture.Event) void {
 /// clicks go to the game otherwise.
 fn drawGizmos(self: *Overlay) void {
     const v = host_frame.view();
-    Gizmos.draw(if (v.known) .{ .view = v.view, .projection = v.projection } else null, self.taken(.mouse));
+    Gizmos.draw(if (v.known) .{ .view = v.viewMatrix, .projection = v.projection } else null, self.taken(.mouse));
 }
 
 fn onSurfaceChange(self: *Overlay, _: *const Graphics.Frame) void {

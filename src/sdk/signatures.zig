@@ -78,7 +78,7 @@ fn diskCopy(start: usize, len: usize) ?[*]const u8 {
     return copyOf(start, len, .disk);
 }
 
-fn copyOf(start: usize, len: usize, source: api.wraith.AddressSource) ?[*]const u8 {
+fn copyOf(start: usize, len: usize, source: api.wraith.Addresses.Source) ?[*]const u8 {
     const owner = Owner.own() orelse return null;
     return @ptrFromInt(owner.root.diagnostics().codeCopy(start, len, source));
 }

@@ -15,29 +15,26 @@ const deps = @import("deps.zig");
 const log = core.log.scoped(.wraith_cli);
 
 pub const usage =
-    \\  sdk js types [--out <folder>] [--pointer-size 4|8] [--globals] [<file.sal | folder> ...]
+    \\  sdk js types [--out <folder>] [--pointer-size 4|8] [--namespace NS] [<file.sal | folder> ...]
     \\                                       TypeScript typings for a JavaScript plugin (run from
     \\                                       its folder), in <folder> (default .wraith/types):
-    \\                                       wraith.d.ts (import ... from "wraith"),
-    \\                                       salamander.d.ts, and schema.d.ts for its schemas
-    \\                                       folder and any .sal given (import ... from "schema").
-    \\                                       With --globals, Wraith's areas are globals too, like
-    \\                                       in Workbench scripts and tweaks. Each plugin its
-    \\                                       wraith.json depends on is a module of its [Service]
-    \\                                       traits, like the "freecam" module, found like
+    \\                                       wraith.d.ts and salamander.d.ts. Each namespace at the
+    \\                                       top is a global, like Wraith.tweaks() and Wraith.Window,
+    \\                                       and its own schemas folder and any .sal given are in NS
+    \\                                       (default its id in PascalCase, like Kai). Each plugin
+    \\                                       its wraith.json depends on is in its own, with its
+    \\                                       [Service] traits like Freecam.camera(), found like
     \\                                       sdk deps does. --offline doesn't download them
-    \\  sdk lua types [--out <folder>] [--pointer-size 4|8] [--globals] [<file.sal | folder> ...]
+    \\  sdk lua types [--out <folder>] [--pointer-size 4|8] [--namespace NS] [<file.sal | folder> ...]
     \\                                       LuaLS annotations for a Lua plugin, like sdk js types:
-    \\                                       wraith.lua, salamander.lua, schema.lua, traits.lua,
-    \\                                       one per dependency, and globals.lua with --globals.
-    \\                                       Writes .luarc.json pointing there if there isn't one
+    \\                                       wraith.lua and salamander.lua. Writes .luarc.json
+    \\                                       pointing there if there isn't one
     \\  sdk cs types [--out <folder>] [--pointer-size 4|8] [--namespace NS] [<file.sal | folder> ...]
     \\                                       C# for a C# plugin, for its .csproj to compile, in
     \\                                       <folder> (default .wraith/cs): Wraith's API in
-    \\                                       Ratatoskr.Wraith, the SDK's WraithPlugin, Salamander's
-    \\                                       runtime, and Schema.cs for its schemas and those of
-    \\                                       plugins it depends on, in NS (default its id in
-    \\                                       PascalCase)
+    \\                                       Wraith, the SDK's WraithPlugin, Salamander's runtime,
+    \\                                       and Schema.cs for its schemas in NS and those of
+    \\                                       plugins it depends on in theirs
     \\  sdk deps [--json] [--offline]       where the plugins wraith.json here depends on are: a
     \\                                       dev plugin, a folder by its name next to this one,
     \\                                       installed, or downloaded from the hub into the cache
@@ -68,8 +65,6 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--out")) {
             options.out = args.next() orelse return usageError();
-        } else if (std.mem.eql(u8, arg, "--globals")) {
-            options.globals = true;
         } else if (std.mem.eql(u8, arg, "--namespace")) {
             options.namespace = args.next() orelse return usageError();
         } else if (std.mem.eql(u8, arg, "--offline")) {
@@ -134,17 +129,16 @@ const Options = struct {
 
     out: []const u8 = default_out,
     pointer_size: u8 = 8,
-    globals: bool = false,
     /// Don't download dependencies from the hub.
     offline: bool = false,
-    /// Plugins its manifest depends on, each a module of the [Service] traits in its schemas.
+    /// Plugins its manifest depends on. Their schemas are in their namespaces, with their [Service]
+    /// traits as `Freecam.camera()`.
     depends: []const []const u8 = &.{},
-    /// C#'s for its schemas. Its id in PascalCase if empty.
+    /// Its schemas', and C#'s home for anything without one. Its id in PascalCase if empty.
     namespace: []const u8 = "",
 };
 
-/// Wraith's own typings, then the `schema` module's from Wraith's schema with the plugin's, and a
-/// module per plugin it depends on.
+/// Wraith's schema with the plugin's as globals, each in its namespace.
 fn writeTypes(ctx: ops.Context, arena: std.mem.Allocator, language: Language, options_in: Options, inputs: []const []const u8) !u8 {
     const io = ctx.io;
     const cwd = std.Io.Dir.cwd();
@@ -166,10 +160,8 @@ fn writeTypes(ctx: ops.Context, arena: std.mem.Allocator, language: Language, op
         try collectDependency(arena, io, f, &files);
     }
     options.depends = names;
-    if (language == .cs) {
-        if (std.mem.eql(u8, options.out, Options.default_out)) options.out = ".wraith/cs";
-        if (options.namespace.len == 0) options.namespace = try namespaceOf(arena, io);
-    }
+    if (language == .cs and std.mem.eql(u8, options.out, Options.default_out)) options.out = ".wraith/cs";
+    if (options.namespace.len == 0) options.namespace = try namespaceOf(arena, io);
     const made = generate(arena, language, options, files.items) catch |err| switch (err) {
         error.InvalidSchema => return 1,
         else => return err,
@@ -187,10 +179,29 @@ fn writeTypes(ctx: ops.Context, arena: std.mem.Allocator, language: Language, op
 
 const Made = struct { name: []const u8, text: []const u8 };
 
+/// How a plugin's schemas parse: its own files in its namespace, and each dependency's, named like
+/// `freecam/...`, in theirs. Every file uses Wraith's and its dependencies' without a `use`.
+fn parseOptions(arena: std.mem.Allocator, options: Options) !salamander_schema.Options {
+    var o = api.sal_options;
+    o.pointer_size = options.pointer_size;
+    o.namespace = options.namespace;
+    const base = api.sal_options.global_uses;
+    const uses = try arena.alloc([]const u8, base.len + options.depends.len);
+    @memcpy(uses[0..base.len], base);
+    const files = try arena.alloc(salamander_schema.FileNamespace, options.depends.len);
+    for (options.depends, files, uses[base.len..]) |d, *f, *u| {
+        const ns = try pascal(arena, d);
+        f.* = .{ .prefix = try std.fmt.allocPrint(arena, "{s}/", .{d}), .namespace = ns };
+        u.* = ns;
+    }
+    o.global_uses = uses;
+    o.file_namespaces = files;
+    return o;
+}
+
 /// Each file's name and text, in `arena`. Says what's wrong with a schema that doesn't parse.
 fn generate(arena: std.mem.Allocator, language: Language, options: Options, files: []const salamander_schema.File) ![]const Made {
-    var parse_options = api.sal_options;
-    parse_options.pointer_size = options.pointer_size;
+    const parse_options = try parseOptions(arena, options);
     var diag: salamander_schema.Schema.Diagnostic = .{};
     var wraith = salamander_schema.parse(arena, api.wraith_sal, parse_options, &diag) catch |err| {
         if (err == error.InvalidSchema) log.err("Wraith's own schema: {s}", .{diag.message()});
@@ -207,56 +218,27 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
     };
     defer all.deinit();
 
-    const area: types.Api = .{ .module = "wraith", .root = "Wraith", .globals = options.globals };
+    // What its dependencies give it, like `Freecam.camera()`
+    var services: std.ArrayList([]const u8) = .empty;
+    for (options.depends) |d| for (all.schema.traits) |*t| if (isServiceOf(all, t, d)) try services.append(arena, t.name);
+
     var list: std.ArrayList(Made) = .empty;
     switch (language) {
         .js => {
             var w: std.Io.Writer.Allocating = .init(arena);
-            try types.ts.api(&w.writer, wraith.schema, wraith.source, area);
+            try types.ts.globals(&w.writer, all.schema, all.source, services.items);
             try list.append(arena, .{ .name = "wraith.d.ts", .text = w.written() });
             w = .init(arena);
             try types.ts.builtins(&w.writer);
             try list.append(arena, .{ .name = "salamander.d.ts", .text = w.written() });
-            w = .init(arena);
-            try types.ts.schema(&w.writer, all.schema, all.source);
-            try list.append(arena, .{ .name = "schema.d.ts", .text = w.written() });
-            if (options.depends.len > 0) {
-                w = .init(arena);
-                for (options.depends) |d| {
-                    try w.writer.print("declare module \"{s}\" {{\n", .{d});
-                    for (all.schema.traits) |t| if (isServiceOf(all, &t, d)) try w.writer.print("  export const {s}: import(\"schema\").{s};\n", .{ t.name, t.name });
-                    try w.writer.writeAll("}\n\n");
-                }
-                try list.append(arena, .{ .name = "services.d.ts", .text = w.written() });
-            }
         },
         .lua => {
             var w: std.Io.Writer.Allocating = .init(arena);
-            try types.luals.api(&w.writer, wraith.schema, wraith.source, area);
+            try types.luals.globals(&w.writer, all.schema, all.source, services.items);
             try list.append(arena, .{ .name = "wraith.lua", .text = w.written() });
             w = .init(arena);
             try types.luals.builtins(&w.writer);
             try list.append(arena, .{ .name = "salamander.lua", .text = w.written() });
-            w = .init(arena);
-            try types.luals.schema(&w.writer, all.schema, all.source);
-            try list.append(arena, .{ .name = "schema.lua", .text = w.written() });
-            // Its own traits and those of plugins it depends on. Wraith's are in wraith.lua
-            w = .init(arena);
-            try w.writer.writeAll("---@meta\n\n");
-            for (all.schema.traits) |*t| if (t.at > api.wraith_sal.len) try types.luals.trait(&w.writer, all.schema, all.source, t);
-            try list.append(arena, .{ .name = "traits.lua", .text = w.written() });
-            for (options.depends) |d| {
-                w = .init(arena);
-                try w.writer.print("---@meta {s}\n\n---@class {s}\n", .{ d, d });
-                for (all.schema.traits) |t| if (isServiceOf(all, &t, d)) try w.writer.print("---@field {s} {s}\n", .{ t.name, t.name });
-                try w.writer.writeAll("local m = {}\nreturn m\n");
-                try list.append(arena, .{ .name = try std.fmt.allocPrint(arena, "{s}.lua", .{d}), .text = w.written() });
-            }
-            if (options.globals) {
-                w = .init(arena);
-                try types.luals.globals(&w.writer, wraith.schema, wraith.source, area);
-                try list.append(arena, .{ .name = "globals.lua", .text = w.written() });
-            }
         },
         .cs => {
             try list.append(arena, .{ .name = "Salamander.cs", .text = salamander_cs.base_file });
@@ -265,7 +247,7 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
             try salamander_cs.writeCore(arena, &w.writer, options.pointer_size);
             try list.append(arena, .{ .name = "SalamanderCore.cs", .text = w.written() });
             w = .init(arena);
-            try salamander_cs.write(arena, wraith.schema, &w.writer, .{ .label = "wraith.sal", .namespace = cs_namespace, .class = "Api" }, &diag);
+            try salamander_cs.write(arena, wraith.schema, &w.writer, .{ .label = "wraith.sal", .namespace = cs_namespace, .class = cs_class }, &diag);
             try list.append(arena, .{ .name = "Wraith.cs", .text = w.written() });
             // Its own, with Wraith's files named like plugin builds name them, so they're used from Wraith.cs
             const renamed = try std.mem.replaceOwned(u8, arena, api.wraith_sal, "\n" ++ salamander_schema.Schema.bundle_marker, "\n" ++ salamander_schema.Schema.bundle_marker ++ "wraith/");
@@ -282,6 +264,7 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
                 .class = "Schema",
                 .source = mine.source,
                 .aliases = &.{.{ .prefix = "wraith/", .namespace = cs_namespace }},
+                .singletons = services.items,
             }, &diag) catch |err| {
                 if (err == error.NameClash) log.err("{s}", .{diag.message()});
                 return if (err == error.NameClash) error.InvalidSchema else err;
@@ -292,8 +275,10 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
     return list.items;
 }
 
-/// Where Wraith's API goes in C#. Not `Wraith`, since its root's called that.
-const cs_namespace = "Ratatoskr.Wraith";
+/// Wraith's API is in its own `Wraith` namespace. That's also home to its `Raw`, and its constants
+/// class, which can't be `Api` or `Schema` since those are traits of Wraith's.
+const cs_namespace = "Wraith";
+const cs_class = "Constants";
 
 /// The plugin's id from its wraith.json in PascalCase, like `TrailsHorizon`, or `Plugin` without one.
 fn namespaceOf(arena: std.mem.Allocator, io: std.Io) ![]const u8 {
@@ -302,21 +287,10 @@ fn namespaceOf(arena: std.mem.Allocator, io: std.Io) ![]const u8 {
     return pascal(arena, m.id);
 }
 
-/// The C# namespace for a plugin's id, like `TrailsHorizon`.
+/// The namespace for a plugin's id, like `TrailsHorizon`.
 pub fn pascal(arena: std.mem.Allocator, id: []const u8) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var up = true;
-    for (id) |c| {
-        if (!std.ascii.isAlphanumeric(c)) {
-            up = true;
-            continue;
-        }
-        try out.append(arena, if (up) std.ascii.toUpper(c) else c);
-        up = false;
-    }
-    if (out.items.len == 0) return "Plugin";
-    if (std.ascii.isDigit(out.items[0])) try out.insert(arena, 0, '_');
-    return out.items;
+    var buf: [core.manifest.namespace_max]u8 = undefined;
+    return arena.dupe(u8, core.manifest.namespaceOf(&buf, id));
 }
 
 /// A [Service] trait in one of `plugin`'s files.
@@ -334,12 +308,12 @@ fn writeLuarc(ctx: ops.Context, arena: std.mem.Allocator, options: Options) !voi
         error.FileNotFound => {},
         else => return err,
     }
-    try cwd.writeFile(io, .{ .sub_path = ".luarc.json", .data = try luarc(arena, options.out, options.globals) });
+    try cwd.writeFile(io, .{ .sub_path = ".luarc.json", .data = try luarc(arena, options.out) });
     log.printLn(".luarc.json", .{});
 }
 
 /// LuaLS settings for wraith's Lua: the annotations, and none of the libraries it leaves out.
-fn luarc(arena: std.mem.Allocator, out: []const u8, globals: bool) ![]const u8 {
+fn luarc(arena: std.mem.Allocator, out: []const u8) ![]const u8 {
     var text: std.Io.Writer.Allocating = .init(arena);
     const w = &text.writer;
     try w.writeAll("{\n  \"$schema\": \"https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json\",\n");
@@ -349,8 +323,7 @@ fn luarc(arena: std.mem.Allocator, out: []const u8, globals: bool) ![]const u8 {
     // Just a library, not more files to check
     try w.writeAll("],\n  \"workspace.ignoreDir\": [");
     try std.json.Stringify.value(out, .{}, w);
-    // Scripts set globals as they please
-    try w.print("]{s}\n}}\n", .{if (globals) ",\n  \"diagnostics.disable\": [\"lowercase-global\"]" else ""});
+    try w.writeAll("]\n}\n");
     return text.written();
 }
 
@@ -408,23 +381,24 @@ test "typings for Wraith's whole schema and a plugin's" {
         \\}
     };
     const want = [_]struct { Language, []const u8, []const u8 }{
-        .{ .js, "wraith.d.ts", "  export const frame: Frame;" },
-        .{ .js, "wraith.d.ts", "declare const frame: import(\"wraith\").Frame;" },
+        .{ .js, "wraith.d.ts", "declare namespace Wraith {" },
+        .{ .js, "wraith.d.ts", "    frame(): Wraith.Frame;" },
+        .{ .js, "wraith.d.ts", "Given<Wraith.Tweaks.Definition>" },
         .{ .js, "salamander.d.ts", "declare const salamander: typeof import(\"salamander\");" },
-        .{ .js, "schema.d.ts", "  /**\n   * The one playing\n   */\n  export interface Player {" },
-        .{ .js, "schema.d.ts", "    instance: import(\"schema\").Player | null;" },
-        .{ .lua, "wraith.lua", "---@field frame Frame" },
-        .{ .lua, "globals.lua", "---@type Frame\nframe = nil" },
-        .{ .lua, "schema.lua", "---The one playing\n---@class schema.Player" },
-        .{ .lua, "schema.lua", "function c:heal(amount) end" },
-        .{ .cs, "Wraith.cs", "namespace Ratatoskr.Wraith\n" },
+        .{ .js, "wraith.d.ts", "declare namespace Kai {" },
+        .{ .js, "wraith.d.ts", "The one playing" },
+        .{ .lua, "wraith.lua", "---@class Wraith.Tweaks.Definition" },
+        .{ .lua, "wraith.lua", "---@class Kai.Player" },
+        .{ .lua, "wraith.lua", "function c:heal(amount) end" },
+        .{ .cs, "Wraith.cs", "namespace Wraith\n" },
         .{ .cs, "WraithPlugin.cs", "public abstract class WraithPlugin" },
         .{ .cs, "SalamanderCore.cs", "namespace Salamander.Raw\n" },
-        .{ .cs, "Schema.cs", "public static global::Kai.Player* Instance() => *(global::Kai.Player**)global::Salamander.Declared.Address(\"Player.instance\");" },
+        .{ .cs, "Schema.cs", "namespace Kai\n" },
+        .{ .cs, "Schema.cs", "Declared.Address(\"Kai.Player.instance\")" },
         .{ .cs, "Schema.cs", "    public void Heal(uint amount)" },
     };
     for (std.enums.values(Language)) |language| {
-        const made = try generate(arena, language, .{ .globals = true, .namespace = "Kai" }, &.{game});
+        const made = try generate(arena, language, .{ .namespace = "Kai" }, &.{game});
         for (want) |w| {
             if (w[0] != language) continue;
             const text = for (made) |m| {
@@ -438,19 +412,21 @@ test "typings for Wraith's whole schema and a plugin's" {
     }
 }
 
-test "a module per dependency, with its [Service] traits" {
+test "each dependency's in its namespace, with its [Service] traits as functions" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const files = [_]salamander_schema.File{
         .{ .name = "tally/tally.sal", .text = "[Service] trait Tally { u32 add(u32 n); }\ntrait Helper { void help(); }" },
-        .{ .name = "schemas/own.sal", .text = "[Service] trait Mine { void go(); }" },
+        .{ .name = "schemas/own.sal", .text = "[Service] trait Mine { void go(); }\nstruct Uses { Helper* h; }" },
     };
-    const options: Options = .{ .depends = &.{"tally"} };
+    const options: Options = .{ .depends = &.{"tally"}, .namespace = "Mod" };
     const want = [_]struct { Language, []const u8, []const u8 }{
-        .{ .js, "services.d.ts", "declare module \"tally\" {\n  export const Tally: import(\"schema\").Tally;\n}" },
-        .{ .lua, "tally.lua", "---@meta tally\n\n---@class tally\n---@field Tally Tally\nlocal m = {}" },
-        .{ .lua, "traits.lua", "---@class Mine" },
+        .{ .js, "wraith.d.ts", "tally(): Tally.Tally;" },
+        .{ .js, "wraith.d.ts", "instance(): Tally.Tally" },
+        .{ .lua, "wraith.lua", "function c.tally() end" },
+        .{ .lua, "wraith.lua", "---@class Mod.Mine" },
+        .{ .cs, "Schema.cs", "public static Tally Instance => global::Salamander.Singletons.Get<Tally>();" },
     };
     for (std.enums.values(Language)) |language| {
         const made = try generate(arena, language, options, &files);
@@ -463,8 +439,6 @@ test "a module per dependency, with its [Service] traits" {
                 std.debug.print("{s} is missing:\n{s}\nin:\n{s}\n", .{ w[1], w[2], text });
                 return error.TestUnexpectedResult;
             }
-            // Only its [Service] traits are in its module
-            try std.testing.expect(std.mem.indexOf(u8, text, "Helper:") == null and std.mem.indexOf(u8, text, "field Helper") == null);
         }
     }
 }

@@ -318,7 +318,7 @@ const tests = struct {
         const files = [_]struct { []const u8, []const u8, []const u8, []const u8 }{
             .{
                 "hello_js", "js", "main.js",
-                \\import { settings, frame, log } from "wraith";
+                \\const settings = Wraith.settings(), frame = Wraith.frame(), log = Wraith.log();
                 \\import { double } from "shared";
                 \\const fov = settings.add({ id: "fov", kind: "number", min: 60, max: 120, has_default: true, default_value: { number: 90 } }, null);
                 \\let ticks = 0;
@@ -327,11 +327,11 @@ const tests = struct {
             },
             .{
                 "hello_lua", "lua", "main.lua",
-                \\local wraith = require("wraith")
+                \\local settings = Wraith.settings()
                 \\local shared = require("shared")
-                \\wraith.settings:add({ id = "speed", kind = "toggle", has_default = true, default_value = { toggle = true } }, nil)
-                \\local count = wraith.settings:add({ id = "count", kind = "number", min = 0, max = 100 }, nil)
-                \\wraith.frame:post(function() count:set({ number = shared.double(21) }) end)
+                \\settings:add({ id = "speed", kind = "toggle", has_default = true, default_value = { toggle = true } }, nil)
+                \\local count = settings:add({ id = "count", kind = "number", min = 0, max = 100 }, nil)
+                \\Wraith.frame():post(function() count:set({ number = shared.double(21) }) end)
             },
             .{ "broken", "js", "main.js", "throw new Error('nope');" },
         };
@@ -391,7 +391,7 @@ const tests = struct {
         try install.init(.{});
         defer install.deinit();
         const js = try std.fmt.allocPrint(testing.allocator,
-            \\import {{ hooks }} from "wraith";
+            \\const hooks = Wraith.hooks();
             \\import {{ fn, native }} from "salamander";
             \\const sig = "fn i32 (i32 a, i32 b)";
             \\let original;
@@ -400,11 +400,10 @@ const tests = struct {
         , .{@intFromPtr(&jsTarget)});
         defer testing.allocator.free(js);
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local wraith = require("wraith")
             \\local sal = require("salamander")
             \\local sig = "fn i32 (i32 a, i32 b)"
             \\local original
-            \\local h = wraith.hooks:detour({d}, sig, sal.fn(sig, function(a, b) return original(a, b) + 1 end), {{}})
+            \\local h = Wraith.hooks():detour({d}, sig, sal.fn(sig, function(a, b) return original(a, b) + 1 end), {{}})
             \\original = sal.native(sig, h:original())
         , .{@intFromPtr(&luaTarget)});
         defer testing.allocator.free(lua);
@@ -525,15 +524,15 @@ const tests = struct {
             \\}
         });
         const js = try std.fmt.allocPrint(testing.allocator,
-            \\import {{ hooks, schema as declared }} from "wraith";
             \\import {{ fn, native }} from "salamander";
-            \\import {{ Manager, default as game }} from "schema";
+            \\const hooks = Wraith.hooks(), declared = Wraith.schema();
+            \\const Manager = NamedJs.Manager;
             \\let original;
             \\const h = hooks.named("four", fn("four", (x) => original(x) + 1), {{}});
             \\original = native("four", h.original());
             \\if (native("five", declared.address("five"))(3) !== 15) throw new Error("five");
             \\const m = Manager.at({d});
-            \\m.level = game.answer;
+            \\m.level = NamedJs.answer;
             \\m.bump();
             \\m.health = Manager.six(2) + m.six(1);
         , .{@intFromPtr(&js_manager)});
@@ -543,12 +542,11 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/named_lua");
         try install.pluginManifest("named_lua", "\"provider\": \"lua\", \"depends\": [\"named_js\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local wraith = require("wraith")
             \\local sal = require("salamander")
-            \\local game = require("schema")
+            \\local game = NamedJs
             \\local original
-            \\local h = wraith.hooks:named("five", sal.fn("five", function(x) return original(x) * 2 end), {{}})
-            \\original = sal.native("five", h:original())
+            \\local h = Wraith.hooks():named("NamedJs.five", sal.fn("NamedJs.five", function(x) return original(x) * 2 end), {{}})
+            \\original = sal.native("NamedJs.five", h:original())
             \\local m = game.Manager.at({d})
             \\m.level = game.answer
             \\m:bump()
@@ -608,8 +606,8 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/counter");
         try install.pluginManifest("counter", "\"provider\": \"lua\", \"depends\": [\"tally\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local tally = require("tally").Tally
-            \\local out = require("schema").Out.at({d})
+            \\local tally = Tally.tally()
+            \\local out = Tally.Out.at({d})
             \\tally:watch({{ saw = function(self, n) out.seen = n end }})
             \\out.total = tally:add(5) + tally:add(1)
             \\out.count = tally:count()
@@ -631,10 +629,11 @@ const tests = struct {
         try testing.expectEqual(5 + 6, out.total);
         try testing.expectEqual(2, out.count);
         try testing.expectEqual(6, out.seen);
-        // Scripts get pumped once a frame, so the promise settles a few in
-        for (0..20) |_| {
-            if (out.later != 0) break;
+        // Settled by tally's pump, a few frames in. Without frames, counter carries on on a worker
+        var waited: u32 = 0;
+        while (@atomicLoad(u32, &out.later, .acquire) == 0 and waited < 2000) : (waited += 1) {
             host.salamander.pollRender();
+            @import("tuft_sys").thread.sleepMs(1);
         }
         try testing.expectEqual(42, out.later);
         try testing.expectEqual(1, loader.find("tally").?.services.items.len);
@@ -665,9 +664,9 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/user");
         try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"fixture\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local s = require("fixture").FixtureService
+            \\local s = Fixture.fixtureService()
             \\s:next()
-            \\require("schema").Out.at({d}).n = s:next()
+            \\Fixture.Out.at({d}).n = s:next()
         , .{@intFromPtr(&out)});
         defer testing.allocator.free(lua);
         try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/main.lua", .data = lua });
@@ -679,6 +678,101 @@ const tests = struct {
         const offered = loader.find("fixture").?.services.items;
         try testing.expectEqual(1, offered.len);
         try testing.expectEqual(3, offered[0].obj.as(Service).next());
+    }
+
+    /// Which thread it's called on: 1 the render thread, 2 the game thread, 4 any other.
+    fn whereAmI() callconv(.c) u32 {
+        const frame = @import("host/root.zig").frame;
+        if (frame.onRenderThread()) return 1;
+        if (frame.onGameThread()) return 2;
+        return 4;
+    }
+
+    test "script plugins hop between threads, and carry on where they hopped to" {
+        const host = @import("host/root.zig");
+        const sys = @import("tuft_sys");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        host.frame.setFrames(true);
+        defer host.frame.setFrames(false);
+        defer host.threads.stop();
+        // This is the render thread, and ticks come from one of the test's own
+        host.frame.run();
+        var driving: Loaded = undefined;
+        driving.initForTest(testing.allocator, "driver");
+        defer driving.deinitForTest();
+        const driver = try host.frame.driveTicks(&driving);
+        defer driver.release();
+        const Game = struct {
+            fn tick(d: *host.frame.Driver, stopping: *std.atomic.Value(bool)) void {
+                while (!stopping.load(.acquire)) {
+                    d.tick();
+                    sys.thread.sleepMs(1);
+                }
+            }
+        };
+        var stopping: std.atomic.Value(bool) = .init(false);
+        const game = try std.Thread.spawn(.{}, Game.tick, .{ driver, &stopping });
+        defer {
+            stopping.store(true, .release);
+            game.join();
+        }
+
+        const Out = extern struct { worker: u32 = 0, game: u32 = 0, render: u32 = 0, later: u32 = 0, done: u32 = 0 };
+        var js_out: Out = .{};
+        var lua_out: Out = .{};
+        var install: Install = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const io = testing.io;
+        const out_sal = "struct Out { u32 worker; u32 game; u32 render; u32 later; u32 done; }";
+        try install.addScript("hop_js", "js");
+        try install.tmp.dir.createDirPath(io, "plugins/hop_js/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/hop_js/schemas/out.sal", .data = out_sal });
+        const js = try std.fmt.allocPrint(testing.allocator,
+            \\import {{ native }} from "salamander";
+            \\const frame = Wraith.frame(), Out = HopJs.Out;
+            \\const where = native("fn u32 ()", {d});
+            \\const out = Out.at({d});
+            \\(async () => {{
+            \\    await frame.toWorker(); out.worker = where();
+            \\    await frame.toGame(); out.game = where();
+            \\    await frame.toRender(); out.render = where();
+            \\    await frame.delay(1); out.later = where();
+            \\    out.done = 1;
+            \\}})();
+        , .{ @intFromPtr(&whereAmI), @intFromPtr(&js_out) });
+        defer testing.allocator.free(js);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/hop_js/main.js", .data = js });
+        try install.tmp.dir.createDirPath(io, "plugins/hop_lua/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/hop_lua/schemas/out.sal", .data = out_sal });
+        try install.pluginManifest("hop_lua", "\"provider\": \"lua\"");
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local frame = Wraith.frame()
+            \\local where = require("salamander").native("fn u32 ()", {d})
+            \\local out = HopLua.Out.at({d})
+            \\task.spawn(function()
+            \\    frame:toWorker():await(); out.worker = where()
+            \\    frame:toGame():await(); out.game = where()
+            \\    frame:toRender():await(); out.render = where()
+            \\    frame:delay(1):await(); out.later = where()
+            \\    out.done = 1
+            \\end)
+        , .{ @intFromPtr(&whereAmI), @intFromPtr(&lua_out) });
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/hop_lua/main.lua", .data = lua });
+
+        try install.loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("hop_js").?.state);
+        try testing.expectEqual(.loaded, install.info("hop_lua").?.state);
+        var waited: u32 = 0;
+        while ((@atomicLoad(u32, &js_out.done, .acquire) == 0 or @atomicLoad(u32, &lua_out.done, .acquire) == 0) and waited < 3000) : (waited += 1) {
+            host.frame.run();
+            sys.thread.sleepMs(1);
+        }
+        const want: Out = .{ .worker = 4, .game = 2, .render = 1, .later = 1, .done = 1 };
+        try testing.expectEqual(want, js_out);
+        try testing.expectEqual(want, lua_out);
     }
 
     // Starts a CoreCLR here, like a .NET game would. Skipped without .NET 10.
@@ -718,7 +812,7 @@ const tests = struct {
             \\struct Out { u32 js_length; i32 js_parsed; u32 lua_length; i32 lua_parsed; }
         });
         const js = try std.fmt.allocPrint(testing.allocator,
-            \\import {{ CsString, parse, Out }} from "schema";
+            \\const {{ CsString, parse, Out }} = CsJs;
             \\const out = Out.at({d});
             \\out.js_length = CsString.concat("Velvet ", "Crowe").length;
             \\out.js_parsed = parse("42");
@@ -729,7 +823,7 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/cs_lua");
         try install.pluginManifest("cs_lua", "\"provider\": \"lua\", \"depends\": [\"cs_js\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local game = require("schema")
+            \\local game = CsJs
             \\local out = game.Out.at({d})
             \\out.lua_length = #game.CsString.concat("Velvet ", "Crowe!")
             \\out.lua_parsed = game.parse("-7")
@@ -802,8 +896,8 @@ const tests = struct {
         try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/schemas/out.sal", .data = "struct Out { u32 first; u32 second; }" });
         try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"cs_fixture\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local s = require("cs_fixture").CsService
-            \\local out = require("schema").Out.at({d})
+            \\local s = CsFixture.csService()
+            \\local out = User.Out.at({d})
             \\out.first = s:next()
             \\out.second = s:next()
         , .{@intFromPtr(&out)});
@@ -859,7 +953,7 @@ const tests = struct {
 
         const Send = struct {
             fn runIn(thread: protocol.Thread) !void {
-                return runAs(1, "lua", "return require('fixture').FixtureService:next()", thread);
+                return runAs(1, "lua", "return Fixture.fixtureService():next()", thread);
             }
 
             fn runAs(session: u32, language: []const u8, code: []const u8, thread: protocol.Thread) !void {
@@ -892,7 +986,7 @@ const tests = struct {
         try testing.expectEqual(first + 1, try std.fmt.parseInt(u32, heard.line(3), 10));
 
         // JS has them too
-        try Send.runAs(2, "js", "require('fixture').FixtureService.next()", .game);
+        try Send.runAs(2, "js", "Fixture.fixtureService().next()", .game);
         host.frame.tickForTests();
         host.messages.deliver();
         try testing.expectEqual(6, heard.lines.items.len);

@@ -68,7 +68,7 @@ pub fn addPanel(target: anytype, comptime func: fn (@TypeOf(target)) void, optio
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("addPanel expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
-    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .engine = options.engine }, W.WorkbenchDraw.init(target, func));
+    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .engine = options.engine }, W.WorkbenchPanel.Draw.init(target, func));
     if (object.table == null) return error.Failed;
     return .{ .object = object };
 }

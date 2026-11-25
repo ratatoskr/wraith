@@ -21,6 +21,7 @@ pub const LoadError = frame.MoveError || std.Io.Dir.ReadFileAllocError || error{
     InvalidImage,
     TooBig,
     Failed,
+    NotFound,
     Gone,
     Unsupported,
     Cancelled,
@@ -119,7 +120,7 @@ test "load reads on a worker" {
     const image = try state.result;
     defer image.destroy();
     try std.testing.expect(state.back_on_render);
-    try std.testing.expectEqual(1, image.size().width);
+    try std.testing.expectEqual(1, image.dimensions().width);
 }
 
 const Fake = @import("testing.zig").Fake;

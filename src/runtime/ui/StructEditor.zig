@@ -76,19 +76,19 @@ fn members(schema: *const Schema, t: *const Schema.Type, ref: Ref, depth: u8) vo
                 if (has(f.annotations, "Hidden")) continue;
                 const scope = ui.id(f);
                 defer scope.end();
-                member(schema, f.name, f.annotations, ref.field(f.name), depth);
+                member(schema, t.name, f.name, f.annotations, ref.field(f.name), depth);
             }
         },
         .bitfield => |bf| for (bf.members) |*b| {
             const scope = ui.id(b);
             defer scope.end();
-            member(schema, b.name, &.{}, ref.field(b.name), depth);
+            member(schema, t.name, b.name, &.{}, ref.field(b.name), depth);
         },
         else => {},
     }
 }
 
-fn member(schema: *const Schema, name: []const u8, notes: []const Schema.Annotation, r: Ref, depth: u8) void {
+fn member(schema: *const Schema, owner: []const u8, name: []const u8, notes: []const Schema.Annotation, r: Ref, depth: u8) void {
     var label_buf: [96]u8 = undefined;
     const label = labelOf(&label_buf, name, notes);
     const read_only = has(notes, "ReadOnly");
@@ -100,7 +100,7 @@ fn member(schema: *const Schema, name: []const u8, notes: []const Schema.Annotat
         },
         .array => |a| {
             if (StructRows.isTextUnit(a.child.*)) return textRow(label, r);
-            return elements(schema, label, notes, r, a.len, depth);
+            return elements(schema, owner, label, notes, r, a.len, depth);
         },
         .pointer, .optional => {
             const to = r.deref();
@@ -118,7 +118,7 @@ fn member(schema: *const Schema, name: []const u8, notes: []const Schema.Annotat
     ui.alignTextToFramePadding();
     ui.text("{s}", .{label});
     _ = ui.tableNextColumn();
-    value(schema, r, notes, read_only);
+    value(schema, owner, r, notes, read_only);
 }
 
 /// Its fields among its parent's, for `[Flatten]`.
@@ -144,7 +144,7 @@ fn fold(schema: *const Schema, label: []const u8, r: Ref, t: *const Schema.Type,
     members(schema, t, r, depth + 1);
 }
 
-fn elements(schema: *const Schema, label: []const u8, notes: []const Schema.Annotation, r: Ref, len: usize, depth: u8) void {
+fn elements(schema: *const Schema, owner: []const u8, label: []const u8, notes: []const Schema.Annotation, r: Ref, len: usize, depth: u8) void {
     ui.tableNextRow();
     _ = ui.tableNextColumn();
     var buf: [112]u8 = undefined;
@@ -158,7 +158,7 @@ fn elements(schema: *const Schema, label: []const u8, notes: []const Schema.Anno
         defer scope.end();
         var name_buf: [24]u8 = undefined;
         // Each element keeps the array's [Range] and [ReadOnly], not its [Label]
-        member(schema, std.fmt.bufPrint(&name_buf, "#{d}", .{i + 1}) catch "?", withoutLabel(notes), r.index(i), depth + 1);
+        member(schema, owner, std.fmt.bufPrint(&name_buf, "#{d}", .{i + 1}) catch "?", withoutLabel(notes), r.index(i), depth + 1);
     }
     if (len > max_elements) {
         ui.tableNextRow();
@@ -189,7 +189,7 @@ fn emptyRow(label: []const u8, what: []const u8) void {
     ui.textDisabled("{s}", .{what});
 }
 
-fn value(schema: *const Schema, r: Ref, notes: []const Schema.Annotation, read_only: bool) void {
+fn value(schema: *const Schema, owner: []const u8, r: Ref, notes: []const Schema.Annotation, read_only: bool) void {
     const v = r.load() catch {
         ui.alignTextToFramePadding();
         return ui.textDisabled("Can't read it", .{});
@@ -205,7 +205,7 @@ fn value(schema: *const Schema, r: Ref, notes: []const Schema.Annotation, read_o
                 .@"enum" => |e| e.value,
                 else => unreachable,
             };
-            if (TweakFields.choose("##v", choicesOf(schema, a), @floatFromInt(current), false)) |n| write(r, .{ .int = std.math.lossyCast(i64, n) });
+            if (TweakFields.choose("##v", choicesOf(schema, owner, a), @floatFromInt(current), false)) |n| write(r, .{ .int = std.math.lossyCast(i64, n) });
             return;
         },
         else => {},
@@ -275,9 +275,9 @@ const reread_ns = 2 * std.time.ns_per_s;
 
 /// What `[Choices(path)]` lists now, by its items' `id` and `name`, or the fields named after the
 /// path. Empty till the game has it.
-pub fn choicesOf(schema: *const Schema, a: *const Schema.Annotation) []const TweakFields.Choice {
+pub fn choicesOf(schema: *const Schema, owner: []const u8, a: *const Schema.Annotation) []const TweakFields.Choice {
     const path = if (a.args.len > 0 and a.args[0] == .string) a.args[0].string else return &.{};
-    const key = std.hash.Wyhash.hash(@intFromPtr(schema), path);
+    const key = std.hash.Wyhash.hash(@intFromPtr(schema) +% std.hash.Wyhash.hash(0, owner), path);
     const now = core.timing.now();
     const l = for (&lists) |*l| {
         if (l.key == key) break l;
@@ -291,14 +291,17 @@ pub fn choicesOf(schema: *const Schema, a: *const Schema.Annotation) []const Twe
     if (l.read_ns != 0 and now -| l.read_ns < reread_ns) return l.list;
     l.read_ns = now;
     _ = l.arena.reset(.retain_capacity);
-    l.list = readChoices(schema, a, path, l.arena.allocator()) catch &.{};
+    l.list = readChoices(schema, owner, a, path, l.arena.allocator()) catch &.{};
     return l.list;
 }
 
-fn readChoices(schema: *const Schema, a: *const Schema.Annotation, path: []const u8, arena: std.mem.Allocator) ![]const TweakFields.Choice {
+fn readChoices(schema: *const Schema, owner: []const u8, a: *const Schema.Annotation, written: []const u8, arena: std.mem.Allocator) ![]const TweakFields.Choice {
     const id_field = if (a.args.len > 1) a.args[1].name() orelse return error.BadChoices else "id";
     const name_field = if (a.args.len > 2) a.args[2].name() orelse return error.BadChoices else "name";
-    const dot = schema.typePrefix(path) orelse return error.BadChoices;
+    var buf: [512]u8 = undefined;
+    const found = @import("../host/schemas.zig").choicesPath(schema.*, &buf, owner, written) orelse return error.BadChoices;
+    const path = found.path;
+    const dot = found.dot;
     const type_name = path[0..dot];
     const ptr = instanceOf(schema, type_name) orelse return error.NotThere;
     return readList(Ref.of(schema, type_name, ptr), path[dot + 1 ..], id_field, name_field, arena);

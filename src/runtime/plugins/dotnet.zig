@@ -1,7 +1,7 @@
 //! The built-in `cs` kind, for C# plugins made with Wraith's C# SDK. One compiled with NativeAOT is a
 //! native plugin, `wraith_<id>_<arch>.dll`, and runs like one. Otherwise it's `wraith_<id>.dll`, run
 //! by CoreCLR in a load context of its own that goes when it unloads. Either way its
-//! `Ratatoskr.Wraith.Entry.Get` gives the same `NativeEntry`, so it starts like a native plugin.
+//! `Wraith.Entry.Get` gives the same `NativeEntry`, so it starts like a native plugin.
 //!
 //! A process only gets one CoreCLR. This joins the game's, or starts the installed .NET if its
 //! `clrMode` lets it, and then every C# plugin shares it.
@@ -133,8 +133,8 @@ fn load(loaded: *Loaded) !*Instance {
         return error.LoadFailed;
     };
     errdefer cc.unloadIsolated(isolated);
-    const at = cc.isolatedFunction(isolated, "Ratatoskr.Wraith.Entry", "Get") orelse {
-        log.err("{s} isn't a Wraith plugin (it has no Ratatoskr.Wraith.Entry, which Wraith's C# SDK makes)", .{file});
+    const at = cc.isolatedFunction(isolated, "Wraith.Entry", "Get") orelse {
+        log.err("{s} isn't a Wraith plugin (it has no Wraith.Entry, which Wraith's C# SDK makes)", .{file});
         return error.NotAPlugin;
     };
     const entry = try native.entryOf(@ptrFromInt(at), file);
@@ -165,7 +165,7 @@ const Running = struct {
         return 0;
     }
 
-    pub fn service(instance: *Instance, trait: []const u8) sal.AnyObject {
+    pub fn serviceFor(instance: *Instance, trait: []const u8) sal.AnyObject {
         return instance.entry.service(.init(trait));
     }
 };

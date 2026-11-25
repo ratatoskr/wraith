@@ -2,32 +2,36 @@
 // timing zones and heap usages in the plugin's memory, laid out like C, with the layout's version.
 // Ones of another version aren't listed. They're listed till they're removed or the plugin goes.
 
-enum ScanOutcome : u8 { found, not_found, not_unique }
+namespace Wraith;
 
-struct SignatureScan {
-    string name;
-    string pattern;
-    usize start;
-    usize length;
-    // Scanned the game's code as it was before anything patched it
-    bool original;
-    ScanOutcome outcome;
-    usize address;
-    u64 ns;
-}
+namespace Diagnostics {
+    enum ScanOutcome : u8 { found, not_found, not_unique }
 
-// A scan, saying which copy of the code it read
-struct ScanRecord {
-    string name;
-    string pattern;
-    usize start;
-    usize length;
-    AddressSource source;
-    // Took the first of several matches
-    bool first_match;
-    ScanOutcome outcome;
-    usize address;
-    u64 ns;
+    struct SignatureScan {
+        string name;
+        string pattern;
+        usize start;
+        usize length;
+        // Scanned the game's code as it was before anything patched it
+        bool original;
+        ScanOutcome outcome;
+        usize address;
+        u64 ns;
+    }
+
+    // A scan, saying which copy of the code it read
+    struct ScanRecord {
+        string name;
+        string pattern;
+        usize start;
+        usize length;
+        Addresses.Source source;
+        // Took the first of several matches
+        bool first_match;
+        ScanOutcome outcome;
+        usize address;
+        u64 ns;
+    }
 }
 
 trait Diagnostics {
@@ -42,5 +46,5 @@ trait Diagnostics {
     // Like `recordScan`, with which copy it read
     void recordScanFrom(ScanRecord scan);
     // Where `source`'s copy of the game's code from `start` is, or 0. Live memory has none
-    usize codeCopy(usize start, usize length, AddressSource source);
+    usize codeCopy(usize start, usize length, Addresses.Source source);
 }

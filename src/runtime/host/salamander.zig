@@ -1,6 +1,7 @@
 //! Salamander's host for wraith. The runtime's binary is the host, so it outlives every plugin.
 //! Each tuft owner, a plugin's or later a script's, has a Salamander owner that closes with it, so
-//! nothing calls into code that's going. The render thread has a queue it polls each frame.
+//! nothing calls into code that's going. The render thread has a queue it polls each frame, and the
+//! game thread one it polls each tick.
 
 const std = @import("std");
 
@@ -41,6 +42,28 @@ pub fn renderQueueOf() sal.Queue {
 pub fn pollRender() void {
     lock.lockShared();
     const q = if (render_queue_made) render_queue else null;
+    lock.unlockShared();
+    if (q) |queue| _ = queue.poll();
+}
+
+var game_queue: sal.Queue = .{};
+var game_queue_made: bool = false;
+
+/// Polled each tick, on the game thread, like the render thread's each frame.
+pub fn gameQueueOf() sal.Queue {
+    lock.lock();
+    defer lock.unlock();
+    if (!game_queue_made) {
+        game_queue = sal.host().queue() catch return .{};
+        game_queue_made = true;
+    }
+    return game_queue;
+}
+
+/// Game thread, each tick.
+pub fn pollGame() void {
+    lock.lockShared();
+    const q = if (game_queue_made) game_queue else null;
     lock.unlockShared();
     if (q) |queue| _ = queue.poll();
 }

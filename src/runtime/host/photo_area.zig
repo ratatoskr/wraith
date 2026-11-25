@@ -29,13 +29,13 @@ pub fn set(p: ?*Photo) void {
 }
 
 pub const CameraImpl = struct {
-    pub fn world(_: *Loaded, w: W.CamWorld) void {
+    pub fn setWorld(_: *Loaded, w: W.FreeCamera.World) void {
         lock.lockShared();
         defer lock.unlockShared();
         if (photo) |p| p.camera.world(w);
     }
 
-    pub fn camera(_: *Loaded, state: *W.CamState) void {
+    pub fn camera(_: *Loaded, state: *W.FreeCamera.State) void {
         lock.lockShared();
         defer lock.unlockShared();
         if (photo) |p| p.camera.camera(state);
@@ -63,7 +63,7 @@ pub const PosingImpl = struct {
         return p.posing.active();
     }
 
-    pub fn pose(loaded: *Loaded, skeleton: W.PosingSkeleton, matrices: *math.Mat4) void {
+    pub fn pose(loaded: *Loaded, skeleton: W.Posing.Skeleton, matrices: *math.Mat4) void {
         const lease = posing_cleanup.lease(&loaded.owner) orelse return;
         defer lease.end();
         lock.lockShared();
@@ -71,7 +71,7 @@ pub const PosingImpl = struct {
         if (photo) |p| p.posing.pose(@intFromPtr(&loaded.owner), skeleton, matrices);
     }
 
-    pub fn shapes(loaded: *Loaded, actor: u64, list: []const W.PosingShape, weights: *f32) void {
+    pub fn shapes(loaded: *Loaded, actor: u64, list: []const W.Posing.Shape, weights: *f32) void {
         const lease = posing_cleanup.lease(&loaded.owner) orelse return;
         defer lease.end();
         lock.lockShared();

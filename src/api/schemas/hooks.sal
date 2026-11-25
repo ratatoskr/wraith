@@ -1,6 +1,8 @@
 // Hooks on the game's code. Handlers run on the game's thread that hit them, which waits. Everything's
 // put back when the plugin goes. Errors say what's wrong.
 
+namespace Wraith;
+
 error HookError {
     // Someone else hooked it already
     AlreadyHooked = 1,
@@ -22,49 +24,24 @@ error HookError {
     Failed,
 }
 
-struct MidOptions {
-    // Replaces code there, so returning carries on after it. Else it goes before the instruction
-    // there, which runs after it.
-    bool replace;
-    // Bytes it replaces, ending between instructions. 0 is what `expect` covers, or else the
-    // instruction there.
-    u32 size;
-    // What has to be there, a byte pattern like `89 83 ?? ??` or asm like `cmp ecx, eax`. Empty
-    // skips the check.
-    string expect;
-    // Starts off rather than on
-    bool disabled;
-    // Before the address list's, for `expect`
-    []Name names;
-}
+namespace Hook {
+    struct Options {
+        // For the handler to read with `context()` while it runs, like what it's for
+        usize context;
+        // Starts off rather than on
+        bool disabled;
+    }
 
-// Changes to the registers go back into the thread.
-fn void MidHandler(inout Cpu cpu);
-
-struct HookOptions {
-    // For the handler to read with `context()` while it runs, like what it's for
-    usize context;
-    // Starts off rather than on
-    bool disabled;
-}
-
-// What a native detour's `enter` gives, see `NativeHookCalls`.
-struct HookCall {
-    // The hook's object data, for its `Hook`
-    usize hook;
-    // The function as it was, to call on
-    usize original;
-    usize context;
-    // False while it's being destroyed. Then just call `original`, and don't `leave`.
-    bool entered;
-}
-
-// C functions for native detours, which go around the plugin's owner, since a hook can be hit while
-// the plugin's unloading. `enter` is `fn () HookCall`, called first thing on the hooked thread.
-// `leave` is `fn (usize hook)`, called once done if it entered.
-struct NativeHookCalls {
-    usize enter;
-    usize leave;
+    // What a native detour's `enter` gives, see `Hooks.NativeCalls`.
+    struct Call {
+        // The hook's object data, for its `Hook`
+        usize hook;
+        // The function as it was, to call on
+        usize original;
+        usize context;
+        // False while it's being destroyed. Then just call `original`, and don't `leave`.
+        bool entered;
+    }
 }
 
 trait Hook {
@@ -79,25 +56,54 @@ trait Hook {
     usize resume();
 }
 
+namespace Hooks {
+    struct MidOptions {
+        // Replaces code there, so returning carries on after it. Else it goes before the instruction
+        // there, which runs after it.
+        bool replace;
+        // Bytes it replaces, ending between instructions. 0 is what `expect` covers, or else the
+        // instruction there.
+        u32 size;
+        // What has to be there, a byte pattern like `89 83 ?? ??` or asm like `cmp ecx, eax`. Empty
+        // skips the check.
+        string expect;
+        // Starts off rather than on
+        bool disabled;
+        // Before the address list's, for `expect`
+        []Addresses.Name names;
+    }
+
+    // Changes to the registers go back into the thread.
+    fn void MidHandler(inout Cpu cpu);
+
+    // C functions for native detours, which go around the plugin's owner, since a hook can be hit while
+    // the plugin's unloading. `enter` is `fn () Hook.Call`, called first thing on the hooked thread.
+    // `leave` is `fn (usize hook)`, called once done if it entered.
+    struct NativeCalls {
+        usize enter;
+        usize leave;
+    }
+}
+
 trait Hooks {
     // Runs `handler` with the registers when the code at `target` is about to run.
     Hook!HookError mid(usize target, MidOptions options, keep MidHandler handler);
     // Sends calls to the function at `target` to `handler` instead, a fn value of `signature`'s type,
     // like `[Thiscall] fn i32 (usize self, f32 amount)`. Scripts make one with `salamander.fn`, and
     // the signature can use wraith.sal's types.
-    Hook!HookError detour(usize target, string signature, keep object handler, HookOptions options);
+    Hook!HookError detour(usize target, string signature, keep object handler, Hook.Options options);
     // The same for the function pointer at `slot`, like a vtable's, which gets swapped.
-    Hook!HookError detourSlot(usize slot, string signature, keep object handler, HookOptions options);
+    Hook!HookError detourSlot(usize slot, string signature, keep object handler, Hook.Options options);
     // A function or method the plugin's schemas declare, like `Player.heal`, typed as declared. A
     // [Virtual(n)] one swaps its slot in the struct's [VirtualTable]. Scripts make the handler with
     // `salamander.fn("Player.heal", f)`.
-    Hook!HookError named(string name, keep object handler, HookOptions options);
+    Hook!HookError named(string name, keep object handler, Hook.Options options);
     // The context of the hook whose handler's running on this thread, or 0.
     usize context();
     // For native code: sends calls to the function at `target` to the native function at `detour`,
     // which works out which hook it is through `nativeCalls`.
-    Hook!HookError detourNative(usize target, usize detour, HookOptions options);
+    Hook!HookError detourNative(usize target, usize detour, Hook.Options options);
     // The same for the function pointer at `slot`.
-    Hook!HookError detourSlotNative(usize slot, usize detour, HookOptions options);
-    NativeHookCalls nativeCalls();
+    Hook!HookError detourSlotNative(usize slot, usize detour, Hook.Options options);
+    NativeCalls nativeHookCalls();
 }

@@ -14,7 +14,7 @@ const host = @import("root.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const W = api.wraith;
-pub const Draw = W.WorkbenchDraw;
+pub const Draw = W.WorkbenchPanel.Draw;
 
 const gpa = std.heap.page_allocator;
 
@@ -133,7 +133,7 @@ fn heldHere(p: *const Panel) bool {
 }
 
 /// Through `ui.sal`. Null if the plugin's going or out of memory, with `draw` released.
-pub fn add(loaded: *Loaded, options: W.WorkbenchPanelOptions, draw: Draw) ?*Panel {
+pub fn add(loaded: *Loaded, options: W.WorkbenchPanel.Options, draw: Draw) ?*Panel {
     const p = make(loaded, options, draw) catch {
         draw.release();
         return null;
@@ -156,7 +156,7 @@ pub fn add(loaded: *Loaded, options: W.WorkbenchPanelOptions, draw: Draw) ?*Pane
     return p;
 }
 
-fn make(loaded: *Loaded, options: W.WorkbenchPanelOptions, draw: Draw) !*Panel {
+fn make(loaded: *Loaded, options: W.WorkbenchPanel.Options, draw: Draw) !*Panel {
     const p = try gpa.create(Panel);
     errdefer gpa.destroy(p);
     const title = try gpa.dupeSentinel(u8, if (options.title.len > 0) options.title else loaded.displayName(), 0);

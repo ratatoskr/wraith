@@ -160,6 +160,7 @@ fn useSchemas(p: *Project) void {
         }
         return;
     };
+    made.setHome(p.loaded.name);
     retire(p, made);
 }
 

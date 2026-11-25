@@ -3,6 +3,8 @@
 // say what's wrong, like which asm line. Text and slices it gives are good till the thread's next
 // call into Wraith. Any thread.
 
+namespace Wraith;
+
 error CodeError {
     InvalidAsm = 1,
     TooLong,
@@ -24,17 +26,19 @@ error CodeError {
     Failed,
 }
 
-struct PatchOptions {
-    // Bytes it replaces, ending between instructions. 0 is what `expect` covers, or else the
-    // instruction there. Bytes patches write exactly theirs.
-    u32 size;
-    // What has to be there first, bytes like `89 83 ?? ??` or asm like `cmp ecx, eax; jl 0x1234`.
-    // Empty skips the check.
-    string expect;
-    // Starts off rather than on
-    bool disabled;
-    // Before the address list's
-    []Name names;
+namespace Patch {
+    struct Options {
+        // Bytes it replaces, ending between instructions. 0 is what `expect` covers, or else the
+        // instruction there. Bytes patches write exactly theirs.
+        u32 size;
+        // What has to be there first, bytes like `89 83 ?? ??` or asm like `cmp ecx, eax; jl 0x1234`.
+        // Empty skips the check.
+        string expect;
+        // Starts off rather than on
+        bool disabled;
+        // Before the address list's
+        []Addresses.Name names;
+    }
 }
 
 trait Patch {
@@ -44,53 +48,55 @@ trait Patch {
     void destroy();
 }
 
-struct Instruction {
-    usize address;
-    u32 length;
-    []u8 bytes;
-    // Intel syntax, like `mov eax, dword ptr [rcx+0x10]`
-    string text;
-}
+namespace Code {
+    struct Instruction {
+        usize address;
+        u32 length;
+        []u8 bytes;
+        // Intel syntax, like `mov eax, dword ptr [rcx+0x10]`
+        string text;
+    }
 
-// A name for somewhere in data `place` places.
-struct PlaceName {
-    string name;
-    // Bytes into the data
-    u32 offset;
-}
+    // A name for somewhere in data `place` places.
+    struct PlaceName {
+        string name;
+        // Bytes into the data
+        u32 offset;
+    }
 
-struct PlaceData {
-    u32 size;
-    // 0 is 8
-    u32 alignment;
-    // Names its code can use
-    []PlaceName names;
-}
+    struct PlaceData {
+        u32 size;
+        // 0 is 8
+        u32 alignment;
+        // Names its code can use
+        []PlaceName names;
+    }
 
-struct PlaceCode {
-    usize target;
-    string source;
-    // Goes before the instruction there like `inject`, else replaces code like `patch`
-    bool inject;
-    // Like `PatchOptions`
-    u32 size;
-    string expect;
-    // After the data's and before the address list's
-    []Name names;
-}
+    struct PlaceCode {
+        usize target;
+        string source;
+        // Goes before the instruction there like `inject`, else replaces code like `patch`
+        bool inject;
+        // Like `Patch.Options`
+        u32 size;
+        string expect;
+        // After the data's and before the address list's
+        []Addresses.Name names;
+    }
 
-struct PlaceRequest {
-    // What the data's near when no code jumps to it, like `alloc`'s
-    usize near;
-    []PlaceData data;
-    []PlaceCode code;
-}
+    struct PlaceRequest {
+        // What the data's near when no code jumps to it, like `alloc`'s
+        usize near;
+        []PlaceData data;
+        []PlaceCode code;
+    }
 
-struct Placed {
-    // Where each data went, in order
-    []usize data;
-    // Each code's patch, in order. They start off.
-    []Patch code;
+    struct Placed {
+        // Where each data went, in order
+        []usize data;
+        // Each code's patch, in order. They start off.
+        []Patch code;
+    }
 }
 
 trait Code {
@@ -98,12 +104,12 @@ trait Code {
     []u8!CodeError assemble(string source, usize address);
     // Replaces code at `target` with asm, in place if it fits, else in a cave that then runs any
     // other instructions its jump covered. `jmp original` runs it as it was.
-    Patch!CodeError patch(usize target, string source, PatchOptions options);
+    Patch!CodeError patch(usize target, string source, Patch.Options options);
     // Writes exactly `bytes` over the code at `target`.
-    Patch!CodeError patchBytes(usize target, []u8 bytes, PatchOptions options);
+    Patch!CodeError patchBytes(usize target, []u8 bytes, Patch.Options options);
     // Puts asm in a cave before the instruction at `target`, which runs after it. `jmp resume`
     // skips it. Only `disabled` and `names` count.
-    Patch!CodeError inject(usize target, string source, PatchOptions options);
+    Patch!CodeError inject(usize target, string source, Patch.Options options);
     // Read, write and execute memory, within a jump of `near` unless it's 0.
     usize!CodeError alloc(u32 size, usize near);
     void free(usize address);

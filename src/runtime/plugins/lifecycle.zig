@@ -414,7 +414,7 @@ fn collectServices(loaded: *Loaded) ServiceError!void {
     const names = try s.services(gpa, loaded.name);
     defer gpa.free(names);
     for (names) |trait| {
-        const obj = loaded.runner.plugin.service(trait);
+        const obj = loaded.runner.plugin.serviceFor(trait);
         if (obj.table == null) {
             log.err("Plugin {s} says it offers {s}, but its main doesn't export one", .{ loaded.name, trait });
             return error.MissingService;

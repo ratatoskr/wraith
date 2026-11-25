@@ -27,18 +27,18 @@ pub const Error = error{SalamanderUnavailable};
 
 var own_owner: ?*rt.Owner = null;
 var render_queue: ?rt.Queue = null;
-var services: []api.wraith.raw.Service = &.{};
+var services: []api.wraith_raw.Wraith_Plugin_Service = &.{};
 
 /// The runtime's host from now on, for every Salamander call this plugin makes. Code its schemas
 /// declare, like `Player.heal` in generated Zig, is found through its `Schema` area, and memory is
 /// read like scripts read it.
-pub fn attach(h: rt.Host, o: ?*rt.Owner, queue: rt.Queue, offered: []const api.wraith.raw.Service) void {
+pub fn attach(h: rt.Host, o: ?*rt.Owner, queue: rt.Queue, offered: []const api.wraith_raw.Wraith_Plugin_Service) void {
     rt.setHost(h);
     own_owner = o;
     render_queue = if (queue.table != null) queue else null;
     rt.declared.setLocator(locator(null, locate));
     // Only good during start, so it's copied. What it points at lives as long as those plugins
-    services = std.heap.page_allocator.dupe(api.wraith.raw.Service, offered) catch &.{};
+    services = std.heap.page_allocator.dupe(api.wraith_raw.Wraith_Plugin_Service, offered) catch &.{};
 }
 
 pub fn detach() void {

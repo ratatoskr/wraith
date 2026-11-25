@@ -117,7 +117,7 @@ pub fn read(_: *Loaded, path: []const u8, out: []u8) api.VfsError!usize {
 
 const W = api.wraith;
 /// From `vfs.sal`, kept till the watch stops.
-pub const Handler = W.VfsHandler;
+pub const Handler = W.Vfs.Handler;
 
 /// What a handler said, with a read's new bytes if it gave some.
 const Reply = struct {
@@ -173,7 +173,7 @@ pub const Watch = struct {
         const f = self.handler orelse return .{};
         const got = f.invoke(.{.{
             .kind = switch (event.kind) {
-                inline else => |k| @field(W.VfsEventKind, @tagName(k)),
+                inline else => |k| @field(W.Vfs.EventKind, @tagName(k)),
             },
             .path = .init(event.path),
             .requested = .init(event.requested),
@@ -345,7 +345,7 @@ const tests = struct {
         opens: u32 = 0,
         reads: u32 = 0,
 
-        fn handle(self: *Replier, event: W.VfsEvent) W.VfsReply {
+        fn handle(self: *Replier, event: W.Vfs.Event) W.Vfs.Reply {
             switch (event.kind) {
                 .open => {
                     self.opens += 1;
@@ -380,7 +380,7 @@ const tests = struct {
         try testing.expectError(error.InvalidPath, vfs.put("relative.txt", ""));
 
         var r: Replier = .{};
-        const w = try vfs.watch(.{ .kinds = .{ .open = true, .read = true }, .pattern = "c:/wraith_vfs_zy/a.*" }, Handler.init(&r, Replier.handle));
+        const w = try vfs.addWatch(.{ .kinds = .{ .open = true, .read = true }, .pattern = "c:/wraith_vfs_zy/a.*" }, Handler.init(&r, Replier.handle));
         var buf: [16]u8 = undefined;
         try testing.expectEqualStrings("Brom b", readVia(std.unicode.utf8ToUtf16LeStringLiteral("C:\\wraith_vfs_zy\\a.txt"), &buf).?);
         try testing.expectEqual(1, r.opens);

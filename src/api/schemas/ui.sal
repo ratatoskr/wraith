@@ -1,15 +1,14 @@
 // The overlay: drawing with Dear ImGui in a frame callback, toasts, the cursor and the game's input,
 // and the overlay's menu. ImGui itself is the `imgui` area, from imgui.sal.
 
-enum CursorHint : u8 { auto, visible, hidden }
+namespace Wraith;
 
-// What the overlay can take from the game.
-enum InputDevice : u8 { keyboard, mouse, gamepad }
-
-enum ToastKind : u8 { info, success, warning, failure }
+namespace Toast {
+    enum Kind : u8 { info, success, warning, failure }
+}
 
 struct Toast {
-    ToastKind kind;
+    Kind style;
     // Empty shows the plugin's name
     string title;
     string text;
@@ -17,49 +16,21 @@ struct Toast {
     f32 seconds;
 }
 
-// How a table's sorted.
-struct SortSpec {
-    // In the order its columns were set up
-    i32 column;
-    bool descending;
-}
-
 error DialogError { Failed = 1 }
 
-// A file to open.
-struct FileDialog {
-    bool save;
-    string title;
-    string folder;
-    string file_name;
-    string kind;
-    string extension;
-}
+namespace WorkbenchPanel {
+    // Draws a Workbench panel, on the Workbench's own thread inside its ImGui frame. Not the render
+    // thread or the game thread, so only touch what's safe from any thread. Read what your game-thread
+    // code left for you and queue changes for it, rather than calling into the game.
+    fn void Draw();
 
-// A folder to open.
-struct FolderDialog {
-    string title;
-    string folder;
-}
-
-// One row of a clipped list.
-fn void ClipRow(u32 index);
-
-// What the Mods page's Settings button calls, on the render thread inside a frame. Open your
-// settings window from it.
-fn void OpenSettings();
-
-// Draws a Workbench panel, on the Workbench's own thread inside its ImGui frame. Not the render
-// thread or the game thread, so only touch what's safe from any thread. Read what your game-thread
-// code left for you and queue changes for it, rather than calling into the game.
-fn void WorkbenchDraw();
-
-struct WorkbenchPanelOptions {
-    // Its tab's label
-    string title;
-    // In the game engine's group with Classes, like Unity's, rather than with the other plugins'
-    // panels
-    bool engine;
+    struct Options {
+        // Its tab's label
+        string title;
+        // In the game engine's group with Classes, like Unity's, rather than with the other plugins'
+        // panels
+        bool engine;
+    }
 }
 
 // A panel of the plugin's in the Workbench.
@@ -74,6 +45,42 @@ trait WorkbenchPanel {
     void remove();
 }
 
+namespace Window {
+    // Draws what's in a window, on the render thread between its Begin and End.
+    fn void Draw();
+
+    struct Options {
+        // Its title, which also tells it apart from the plugin's other windows
+        string title;
+        // How big it starts the first time, unscaled. Zero lets ImGui pick
+        ImVec2 size;
+        ImVec2 min_size;
+        // Zero for no limit that way
+        ImVec2 max_size;
+        ImGuiWindowFlags flags;
+        // No close button in its title bar
+        bool no_close;
+        // Esc doesn't close it
+        bool keep_on_escape;
+        // An entry under the plugin's button on the overlay's bar that opens and closes it. Empty for
+        // none
+        string menu;
+        // The plugin's Settings button on the Mods page opens it
+        bool settings;
+    }
+}
+
+// A window of the plugin's on the overlay. It starts closed.
+trait Window {
+    bool isOpen();
+    void setOpen(bool open);
+    // Opens it and brings it to the front
+    void focus();
+    // A dot in its title, for changes that aren't saved yet
+    void setUnsaved(bool unsaved);
+    // Never shows again. Fine to call twice, or from inside its draw.
+    void remove();
+}
 
 // An entry under the plugin's own button on the overlay's bar, which opens and closes something of
 // the plugin's.
@@ -84,7 +91,9 @@ trait MenuItem {
     void remove();
 }
 
-enum GizmoTool : u8 { move, rotate, scale }
+namespace Gizmo {
+    enum Tool : u8 { move, rotate, scale }
+}
 
 // Handles over the game, drawn by Wraith on the render thread with the camera the game's plugin
 // sets. Only one shows at a time, the one shown last, so posing's and yours never both do. Every
@@ -95,10 +104,10 @@ trait Gizmo {
     // Till the next `show`, like when what it's for isn't picked or its panel's closed. Whichever
     // was shown before it shows again.
     void hide();
-    // Where it is in the world, each tick so it keeps up. Row-vector, like `GameView`. While it's
+    // Where it is in the world, each tick so it keeps up. Row-vector, like `Frame.View`. While it's
     // dragged it stays where it's dragged to.
     void place(Mat4 world);
-    void setTool(GizmoTool tool);
+    void setTool(Tool tool);
     // Along the world's axes rather than its own
     void setWorldAxes(bool on);
     // Where it's been dragged to since you last asked, or null. Move yours there, and keep placing
@@ -110,6 +119,43 @@ trait Gizmo {
     bool hovered();
     // Never shows again. Fine to call twice.
     void remove();
+}
+
+namespace Ui {
+    enum CursorHint : u8 { auto, visible, hidden }
+
+    // What the overlay can take from the game.
+    enum InputDevice : u8 { keyboard, mouse, gamepad }
+
+    // How a table's sorted.
+    struct SortSpec {
+        // In the order its columns were set up
+        i32 column;
+        bool descending;
+    }
+
+    // A file to open.
+    struct FileDialog {
+        bool save;
+        string title;
+        string folder;
+        string file_name;
+        string kind;
+        string extension;
+    }
+
+    // A folder to open.
+    struct FolderDialog {
+        string title;
+        string folder;
+    }
+
+    // One row of a clipped list.
+    fn void ClipRow(u32 index);
+
+    // What the Mods page's Settings button calls, on the render thread inside a frame. Open your
+    // settings window from it.
+    fn void OpenSettings();
 }
 
 // Plugins built against an older order still work, since tables are matched up by name
@@ -176,6 +222,9 @@ trait Ui {
 
     // Wraith's own UI
 
+    // A window on the overlay, drawn by `draw` while it's open. Close buttons, Esc, its menu entry
+    // and the Settings button all work without any code of yours. Gone with the plugin. Any thread.
+    Window addWindow(Window.Options options, keep Window.Draw draw);
     // Under the plugin's own button on the overlay's bar, named after it
     MenuItem addMenuItem(string label);
     // What the plugin's Settings button on the Mods page does, like opening a window of its own.
@@ -187,7 +236,7 @@ trait Ui {
 
     // A panel in the Workbench, drawn by `draw` on the Workbench's thread whenever it's showing.
     // Gone with the plugin. Any thread.
-    WorkbenchPanel addWorkbenchPanel(WorkbenchPanelOptions options, keep WorkbenchDraw draw);
+    WorkbenchPanel addWorkbenchPanel(WorkbenchPanel.Options options, keep WorkbenchPanel.Draw draw);
     // Opens the Workbench's Classes on a C# class by full name, like `UnityEngine.Transform`. Any
     // thread.
     void showClass(string class_name);

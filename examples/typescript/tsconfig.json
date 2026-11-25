@@ -11,8 +11,6 @@
     "allowJs": true,
     "checkJs": true,
     "paths": {
-      "wraith": ["./.wraith/types/wraith.d.ts"],
-      "schema": ["./.wraith/types/schema.d.ts"],
       "salamander": ["./.wraith/types/salamander.d.ts"]
     }
   },

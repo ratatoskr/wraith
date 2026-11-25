@@ -1,8 +1,13 @@
 // Where a plugin keeps its own files.
 
+namespace Wraith;
+
 trait Config {
     // For every game. Made when the plugin loads.
     string directory();
     // Just for this game.
     string gameDirectory();
+    // The plugin's own files, as it was installed, like its images. A copy that's deleted once it's
+    // unloaded, so keep what you write in `directory`.
+    string pluginDirectory();
 }

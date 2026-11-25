@@ -42,7 +42,7 @@ pub fn startNative(guest: host.wraith.Guest) sal.Plain(host.wraith.PluginKind, "
 /// Starts a plugin from what its `wraith_plugin` gave. Stops it again if it fails.
 pub fn startEntry(loaded: *Loaded, guest: host.wraith.Guest, entry: *const api.NativeEntry) bool {
     // It calls back through its own root, guarded by its own owner
-    const services = allocator.alloc(api.wraith.raw.Service, guest.services.len) catch return false;
+    const services = allocator.alloc(api.wraith_raw.Wraith_Plugin_Service, guest.services.len) catch return false;
     defer allocator.free(services);
     for (guest.services, services) |s, *out| out.* = .{ .plugin = .init(s.plugin), .trait = .init(s.trait), .obj = s.obj };
     if (entry.start(sal.host(), .{
@@ -130,7 +130,7 @@ const Running = struct {
         return instance.library;
     }
 
-    pub fn service(instance: *Instance, trait: []const u8) sal.AnyObject {
+    pub fn serviceFor(instance: *Instance, trait: []const u8) sal.AnyObject {
         const entry = instance.entry orelse return .{};
         return entry.service(.init(trait));
     }

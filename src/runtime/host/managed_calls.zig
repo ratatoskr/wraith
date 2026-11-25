@@ -75,7 +75,7 @@ const Kind = union(enum) {
     }
 
     /// What `invoke` calls it, for picking an overload.
-    fn valueKind(k: Kind) W.ManagedValueKind {
+    fn valueKind(k: Kind) W.Managed.ValueKind {
         return switch (k) {
             .none => .none,
             .flag => .flag,
@@ -193,7 +193,7 @@ fn resolve(rt: *const Runtime, b: *Binding) PickError!*Method {
 
 /// The most derived class's overload that fits, or the one that fits exactly if more than one does.
 fn pick(rt: *const Runtime, class: *ManagedRuntime.Class, b: *const Binding) PickError!*Method {
-    var kinds: [values.max_args]W.ManagedValueKind = undefined;
+    var kinds: [values.max_args]W.Managed.ValueKind = undefined;
     for (b.params, kinds[0..b.params.len]) |k, *v| v.* = k.valueKind();
     var here: ?*ManagedRuntime.Class = class;
     while (here) |c| : (here = rt.classParent(c)) {

@@ -8,6 +8,10 @@ const wraith_platform = @import("wraith_platform");
 const api = @import("wraith_api");
 
 const host = @import("root.zig");
+const threads = @import("threads.zig");
+const wraith = @import("wraith.zig");
+const sync = @import("tuft_sys").sync;
+const sal = api.salamander;
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const Keybinds = @import("tuft_input").Keybinds;
 const Registry = @import("../settings/Registry.zig");
@@ -66,20 +70,37 @@ pub fn mousePos(_: *Loaded) ?tuft_input.Point {
 
 const W = api.wraith;
 /// From `input.sal`, kept till it's unbound.
-pub const Fired = W.KeybindFired;
+pub const Fired = W.Keybind.Fired;
 
 pub const Record = struct {
     loaded: *Loaded,
     fired: Fired,
     setting: ?*Registry.Setting = null,
+    /// What `next` gave out, settled at the next press. Under `waiting_lock`.
+    waiting: std.ArrayList(NextResolver) = .empty,
+    waiting_lock: sync.RwLock = .{},
 
     /// Render thread.
     fn fire(ctx: *anyopaque, phase: Keybinds.Phase) void {
         const self: *Record = @ptrCast(@alignCast(ctx));
+        if (phase == .pressed) self.wake(null);
         self.fired.invoke(.{switch (phase) {
             .pressed => .pressed,
             .released => .released,
         }});
+    }
+
+    /// Settles every `next`, or fails them with `err`.
+    fn wake(self: *Record, err: ?anyerror) void {
+        var list = blk: {
+            self.waiting_lock.lock();
+            defer self.waiting_lock.unlock();
+            const l = self.waiting;
+            self.waiting = .empty;
+            break :blk l;
+        };
+        defer list.deinit(gpa);
+        for (list.items) |r| if (err) |e| r.fail(e) else r.settle({});
     }
 
     pub fn going(self: *Record) bool {
@@ -91,6 +112,7 @@ pub const Record = struct {
         const setting = self.setting orelse return;
         if (registry) |r| r.remove(setting);
         self.setting = null;
+        self.wake(error.Unavailable);
         // Won't be called again
         self.fired.release();
     }
@@ -100,6 +122,24 @@ pub const Record = struct {
         self.loaded.allocator.destroy(self);
     }
 };
+
+const gpa = std.heap.page_allocator;
+pub const NextPromise = sal.Plain(W.Keybind, "next");
+const NextResolver = threads.Back(wraith.ResolverOf(NextPromise));
+
+/// Through `input.sal`. Settles at its next press.
+pub fn next(record: *Record) NextPromise {
+    const pair = NextPromise.make() catch return .{};
+    const r: NextResolver = .of(pair.resolver);
+    record.waiting_lock.lock();
+    defer record.waiting_lock.unlock();
+    if (!record.going()) {
+        r.fail(error.Unavailable);
+        return pair.promise;
+    }
+    record.waiting.append(gpa, r) catch r.fail(error.Failed);
+    return pair.promise;
+}
 
 var records: host.Owned(Record) = .{};
 
@@ -219,7 +259,7 @@ const tests = struct {
         presses: u32 = 0,
         releases: u32 = 0,
 
-        fn fired(self: *State, phase: api.wraith.KeyPhase) void {
+        fn fired(self: *State, phase: api.wraith.Keybind.Phase) void {
             switch (phase) {
                 .pressed => self.presses += 1,
                 .released => self.releases += 1,
@@ -228,7 +268,7 @@ const tests = struct {
         }
 
         fn bind(self: *State, id: []const u8, key: api.wraith.Key, consume: bool) !api.wraith.Keybind {
-            return sdk.wraith.root().?.input().bind(.{ .id = id, .name = "Toggle", .chord = .{ .key = key }, .passthrough = !consume }, api.wraith.KeybindFired.init(self, fired));
+            return sdk.wraith.root().?.input().bind(.{ .id = id, .name = "Toggle", .chord = .{ .key = key }, .passthrough = !consume }, api.wraith.Keybind.Fired.init(self, fired));
         }
     };
 
@@ -276,7 +316,7 @@ const tests = struct {
         defer fake.unload();
         var state: State = .{};
         const input = sdk.wraith.root().?.input();
-        const fast = try input.bind(.{ .id = "fast", .name = "Faster", .chord = .{ .key = .left_shift }, .also = &.{.{ .key = .gamepad_right_shoulder }}, .passthrough = true, .held = true }, api.wraith.KeybindFired.init(&state, State.fired));
+        const fast = try input.bind(.{ .id = "fast", .name = "Faster", .chord = .{ .key = .left_shift }, .also = &.{.{ .key = .gamepad_right_shoulder }}, .passthrough = true, .held = true }, api.wraith.Keybind.Fired.init(&state, State.fired));
         try testing.expectEqual(2, fast.chords().len);
         try testing.expectEqual(api.wraith.Key.left_shift, fast.chords()[0].key);
         try testing.expectEqual(api.wraith.Key.gamepad_right_shoulder, fast.chords()[1].key);
@@ -371,7 +411,7 @@ const tests = struct {
             presses: u32 = 0,
             releases: u32 = 0,
 
-            fn fired(self: *@This(), phase: api.wraith.KeyPhase) void {
+            fn fired(self: *@This(), phase: api.wraith.Keybind.Phase) void {
                 switch (phase) {
                     .pressed => self.presses += 1,
                     .released => self.releases += 1,
@@ -380,7 +420,7 @@ const tests = struct {
             }
         };
         var seen: Seen = .{};
-        const Fn = api.wraith.KeybindFired;
+        const Fn = api.wraith.Keybind.Fired;
         const input = sdk.wraith.root().?.input();
         const kb = try input.bind(.{ .id = "toggle", .name = "Toggle", .chord = .{ .key = .f8 } }, Fn.init(&seen, Seen.fired));
         try testing.expectError(error.AlreadyBound, input.bind(.{ .id = "toggle", .chord = .{ .key = .f9 } }, Fn.init(&seen, Seen.fired)));
@@ -408,6 +448,33 @@ const tests = struct {
         fake.unload();
         host.wraith.forget(&fake.loaded);
         try testing.expectError(error.Gone, kb.rebind(&.{.{ .key = .f10 }}));
+    }
+
+    test "next settles at the next press, and fails once it's unbound" {
+        var rig: Rig = undefined;
+        try rig.init(.{ .overlay = false });
+        defer rig.deinit();
+        rig.present();
+        const reg = try attach(&rig);
+        defer detach(reg);
+
+        var fake: FakePlugin = undefined;
+        fake.init("kai");
+        defer fake.unload();
+        var state: State = .{};
+        const kb = try state.bind("toggle", .f8, true);
+        const pressed = kb.next();
+        rig.present();
+        try testing.expect(!pressed.isSettled());
+        _ = rig.send(win.WM_KEYDOWN, VK_F8, 1);
+        rig.present();
+        try testing.expect(pressed.isSettled());
+        try pressed.take().?;
+
+        const never = kb.next();
+        kb.unbind();
+        try testing.expectError(error.Unavailable, never.take().?);
+        try testing.expectError(error.Unavailable, kb.next().take().?);
     }
 
     test "unbind early" {

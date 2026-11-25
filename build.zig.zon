@@ -1,7 +1,7 @@
 .{
     .name = .wraith,
     .version = "0.0.0",
-    .minimum_zig_version = "0.18.0-dev.1279+81de6a1c6",
+    .minimum_zig_version = "0.18.0-dev.1295+1fb0e6330",
     .fingerprint = 0xe8511a24f73f9ab1,
     .paths = .{
         "src",
@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .salamander = .{
-            .url = "git+https://github.com/ratatoskr/salamander.git#8ed8e7cbaba312be8499acaa3d1aa351516decf7",
-            .hash = "salamander-0.0.1-6ZeDNmzJEADhWbNo_-f1Qby9oN91Y-ecGv2-bDi4gG4m",
+            .url = "git+https://github.com/ratatoskr/salamander.git#b6f3aa84382f23ea08916aedac18a8afad5ba15a",
+            .hash = "salamander-0.0.1-6ZeDNnC3EQBxbqYoa9Q6nzuQQPsE3ZB4Dmw254FqJjMJ",
         },
         .tuft = .{
-            .url = "git+https://github.com/ratatoskr/tuft.git#31b034b73a8044cda242f44415395fbaf483fdf4",
-            .hash = "tuft-0.0.0-DNo4yrERKwChG_tCLKOaX_lpDM1UiSBqbQohWI2fHtdr",
+            .url = "git+https://github.com/ratatoskr/tuft.git#bdcfdab805ca626756a32f25d676a06b9d415299",
+            .hash = "tuft-0.0.0-DNo4yrERKwBR2eAVpSJpG9I3R1ByjOqZET2Vjw-jLaPH",
         },
         .sqlite = .{
             .url = "https://sqlite.org/2026/sqlite-amalgamation-3540100.zip",

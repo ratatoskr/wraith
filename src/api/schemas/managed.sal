@@ -12,6 +12,8 @@
 //
 // Address text takes `Class:Method` too, like `Game.Player:Update+0x3a`, for the method's code.
 
+namespace Wraith;
+
 error ManagedError {
     // The game has none, or hasn't started it yet
     NotRunning = 1,
@@ -23,60 +25,62 @@ error ManagedError {
     Threw,
 }
 
-enum ManagedKind : u8 { none, mono, il2cpp, coreclr }
+namespace Managed {
+    enum Kind : u8 { none, mono, il2cpp, coreclr }
 
-// Which of `ManagedValue`'s fields it is.
-enum ManagedValueKind : u8 { none, flag, integer, number, text, object }
+    // Which of `Value`'s fields it is.
+    enum ValueKind : u8 { none, flag, integer, number, text, object }
 
-// An argument to `invoke`, or what it gives back. Integers go for any whole number type or enum,
-// numbers for floats, text for strings, and objects for everything else, as their address. A struct
-// or a `ref` parameter is an object too, the address of its bytes.
-struct ManagedValue {
-    ManagedValueKind kind;
-    bool flag;
-    i64 integer;
-    f64 number;
-    string text;
-    usize object;
-}
+    // An argument to `invoke`, or what it gives back. Integers go for any whole number type or enum,
+    // numbers for floats, text for strings, and objects for everything else, as their address. A struct
+    // or a `ref` parameter is an object too, the address of its bytes.
+    struct Value {
+        ValueKind kind;
+        bool flag;
+        i64 integer;
+        f64 number;
+        string text;
+        usize object;
+    }
 
-struct ManagedClass {
-    // Like `Game.Player`, or `Game.Player/Stats` nested
-    string full_name;
-    // Like `Player`
-    string name;
-    // Like `Assembly-CSharp.dll`
-    string image;
-    // Its parent's full name. Empty for none.
-    string parent;
-    // Bytes in one, object header and all
-    u32 size;
-    bool value_type;
-}
+    struct Class {
+        // Like `Game.Player`, or `Game.Player/Stats` nested
+        string full_name;
+        // Like `Player`
+        string name;
+        // Like `Assembly-CSharp.dll`
+        string image;
+        // Its parent's full name. Empty for none.
+        string parent;
+        // Bytes in one, object header and all
+        u32 size;
+        bool value_type;
+    }
 
-struct ManagedField {
-    string name;
-    // Like `System.Int32` or `System.Collections.Generic.List<Game.Item>`
-    string type;
-    // From the start of the object, header and all, even in value types. For statics, from where
-    // the class keeps them, which `staticAddress` adds in.
-    usize offset;
-    bool is_static;
-    // A `const`, with no storage
-    bool literal;
-}
+    struct Field {
+        string name;
+        // Like `System.Int32` or `System.Collections.Generic.List<Game.Item>`
+        string type;
+        // From the start of the object, header and all, even in value types. For statics, from where
+        // the class keeps them, which `staticAddress` adds in.
+        usize offset;
+        bool is_static;
+        // A `const`, with no storage
+        bool literal;
+    }
 
-struct ManagedMethod {
-    string name;
-    string return_type;
-    // Each parameter's type
-    []string params;
-    bool is_static;
+    struct Method {
+        string name;
+        string return_type;
+        // Each parameter's type
+        []string params;
+        bool is_static;
+    }
 }
 
 trait Managed {
     // Which runtime it is, `none` till it's running
-    ManagedKind kind();
+    Kind runtimeKind();
     // Waits till the game's started its runtime, which is after plugins load. Fails with
     // `NotRunning` if this game has none Wraith can use.
     async void!ManagedError running();
@@ -84,11 +88,11 @@ trait Managed {
     []string!ManagedError images();
     // An image's classes by full name, nested ones too
     []string!ManagedError classes(string image);
-    ManagedClass!ManagedError find(string class_name);
+    Class!ManagedError find(string class_name);
     // Its own fields, not its parents'
-    []ManagedField!ManagedError fields(string class_name);
+    []Field!ManagedError fields(string class_name);
     // Its own methods, not its parents'
-    []ManagedMethod!ManagedError methods(string class_name);
+    []Method!ManagedError methods(string class_name);
     // Looks in parents too
     usize!ManagedError fieldOffset(string class_name, string field);
     // Where a static field is now. May run its class's static constructor. `Unsupported` for
@@ -96,7 +100,7 @@ trait Managed {
     usize!ManagedError staticAddress(string class_name, string field);
     // A method's code, to hook or call, with `params` parameters or any number if it's -1. Looks in
     // parents too. Under Mono this compiles it if nothing's run it yet.
-    usize!ManagedError method(string class_name, string name, i32 params);
+    usize!ManagedError findMethod(string class_name, string name, i32 params);
     // The native function behind an `extern` method, like Unity's engine calls such as
     // `UnityEngine.Transform` `get_position_Injected`. They're the same functions under both
     // runtimes, so a plugin can call them directly with their C signature, `this` first. Only on the
@@ -114,7 +118,7 @@ trait Managed {
     // runtime knows, like Unity's main thread in `frame.onTick` with the `unity` plugin, which
     // Unity's own methods need. Anywhere else it runs on Wraith's own thread. If it throws, it fails
     // with `Threw`, saying what. Structs come back as their boxed object.
-    ManagedValue!ManagedError invoke(string class_name, string method, usize target, []ManagedValue args);
+    Value!ManagedError invoke(string class_name, string method, usize target, []Value args);
     // Keeps the C# object at `object` from being collected till `release`. The garbage collector
     // doesn't see what a plugin keeps in its own memory, so hold anything kept past the call it came
     // from, like Unity objects kept between frames. Any thread, straight away. They're released
@@ -131,9 +135,9 @@ trait Managed {
     // An instance field of the object at `object`, by name, looking in its parents too. Whole
     // numbers, enums, floats, bools and strings come back as themselves. A struct comes back as the
     // address of its bytes inside the object, and anything else as its object. Any thread.
-    ManagedValue!ManagedError getField(usize object, string field);
+    Value!ManagedError getField(usize object, string field);
     // Sets one, through the runtime so the garbage collector sees new references. Text makes a new
     // string, and an object or a struct's address is copied in. Any thread, but a Unity object's
     // own fields want Unity's main thread.
-    void!ManagedError setField(usize object, string field, ManagedValue value);
+    void!ManagedError setField(usize object, string field, Value value);
 }

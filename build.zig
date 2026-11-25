@@ -210,6 +210,12 @@ pub const Plugin = struct {
         }
     };
 
+    /// Its id in PascalCase, the namespace its schemas are in.
+    fn namespaceOf(b: *std.Build, id: []const u8) []const u8 {
+        var buf: [core_manifest.namespace_max]u8 = undefined;
+        return b.dupe(core_manifest.namespaceOf(&buf, id));
+    }
+
     fn create(b: *std.Build, wraith: Sdk, salamander: *std.Build.Dependency, options: Options, depends: []const Salamander.ZigOptions.With) Arch {
         const sdk = wraith.sdk;
         const module = b.createModule(.{
@@ -227,7 +233,25 @@ pub const Plugin = struct {
         if (folder) |dir| {
             const rest = if (schemas != null) depends else depends[1..];
             const with = std.mem.concat(b.allocator, Salamander.ZigOptions.With, &.{ &.{own}, rest }) catch @panic("OOM");
-            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{ .folder = dir, .target = options.target, .uses = &.{"wraith"}, .instances = &.{instance_tag}, .with = with, .aliases = aliases }));
+            // Its own files are in its namespace and each dependency's in theirs, as Wraith reads them
+            const global_uses = b.allocator.alloc([]const u8, depends.len + 1) catch @panic("OOM");
+            const file_namespaces = b.allocator.alloc([]const u8, depends.len) catch @panic("OOM");
+            global_uses[0] = "Wraith";
+            for (depends, global_uses[1..], file_namespaces) |d, *u, *f| {
+                u.* = namespaceOf(b, d.name);
+                f.* = b.fmt("{s}/={s}", .{ d.name, u.* });
+            }
+            module.addImport(options.schema_import, Salamander.zigModule(salamander, .{
+                .folder = dir,
+                .target = options.target,
+                .uses = &.{"wraith"},
+                .global_uses = global_uses,
+                .namespace = namespaceOf(b, options.name),
+                .file_namespaces = file_namespaces,
+                .instances = &.{instance_tag},
+                .with = with,
+                .aliases = aliases,
+            }));
         }
         const arch = if (options.target.result.cpu.arch == .x86) "x86" else "x64";
         return .{
@@ -526,10 +550,11 @@ const Modules = struct {
         api.addAnonymousImport("wraith.sal", .{ .root_source_file = @import("salamander").bundle(salamander_dep, b.path("src/api/schemas")) });
         // And as Zig with real methods, made for the target's pointer size each build. The maths
         // types are tuft's, so they have its methods
+        const math_alias = b.createModule(.{ .root_source_file = b.path("src/api/math_alias.zig"), .imports = &.{.{ .name = "tuft_math", .module = tuft.module("tuft_math") }} });
         const api_zig = @import("salamander").zigModule(salamander_dep, .{
             .folder = b.path("src/api/schemas"),
             .target = target,
-            .aliases = &.{.{ .prefix = "math.sal", .name = "tuft_math", .module = tuft.module("tuft_math") }},
+            .aliases = &.{.{ .prefix = "math.sal", .name = "wraith_math", .module = math_alias }},
         });
         api.addImport("wraith_api_zig", api_zig);
         // Plugins' schemas take Wraith's types from it, so they're the SDK's own

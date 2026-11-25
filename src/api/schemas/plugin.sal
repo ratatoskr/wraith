@@ -1,27 +1,37 @@
 // How a plugin runs, whatever language it's in.
 
-// What a plugin gets as it starts.
-struct Guest {
-    string name;
-    // A copy of its folder, deleted once it's unloaded
-    string dir;
-    // Everything it can use. Stops working once it's unloaded.
-    Wraith wraith;
-    // Wraith's schemas with its own and those of plugins it depends on, as one bundle, for languages
-    // that read them while running, like scripts.
-    string schema;
-    // What the plugins it depends on offer, one per [Service] trait in their schemas.
-    []Service services;
-}
-
-// A plugin's [Service] trait, as its main exports it.
-struct Service {
-    string plugin;
-    string trait;
-    object obj;
-}
+namespace Wraith;
 
 error StartError { Failed = 1 }
+
+namespace Plugin {
+    // What a plugin gets as it starts.
+    struct Guest {
+        string name;
+        // A copy of its folder, deleted once it's unloaded
+        string dir;
+        // Everything it can use. Stops working once it's unloaded.
+        Api wraith;
+        // Wraith's schemas with its own and those of plugins it depends on, as one bundle, for languages
+        // that read them while running, like scripts.
+        string schema;
+        // What the plugins it depends on offer, one per [Service] trait in their schemas.
+        []Service services;
+    }
+
+    // A plugin's [Service] trait, as its main exports it.
+    struct Service {
+        string plugin;
+        string trait;
+        object obj;
+    }
+
+    // What runs plugins of one kind, provided as `wraith.kind.<name>` at major 1. JS and Lua are built in.
+    // A plugin's manifest names its kind as its provider.
+    trait Kind {
+        Plugin!StartError start(keep Guest guest);
+    }
+}
 
 // One running plugin, from its kind's start.
 trait Plugin {
@@ -32,11 +42,6 @@ trait Plugin {
     // Where its module's loaded, or 0 for things like scripts.
     usize module();
     // What its main exports for a [Service] trait in its schemas, or nothing.
-    object service(string trait);
+    object serviceFor(string trait);
 }
 
-// What runs plugins of one kind, provided as `wraith.kind.<name>` at major 1. JS and Lua are built in.
-// A plugin's manifest names its kind as its provider.
-trait PluginKind {
-    Plugin!StartError start(keep Guest guest);
-}

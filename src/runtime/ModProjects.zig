@@ -123,10 +123,10 @@ test "only projects for this game, with their tweak files" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     const files = [_][2][]const u8{
-        .{ "tables/wraith.json", "{ \"id\": \"tables\", \"kind\": \"project\", \"apiVersion\": 1, \"title\": \"Tables\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
+        .{ "tables/wraith.json", "{ \"id\": \"tables\", \"kind\": \"project\", \"apiVersion\": 2, \"title\": \"Tables\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
         .{ "tables/tweaks/speed.rwt", "@js" },
         .{ "tables/tweaks/readme.md", "no" },
-        .{ "elsewhere/wraith.json", "{ \"id\": \"elsewhere\", \"kind\": \"project\", \"apiVersion\": 1, \"game\": { \"ids\": [\"steam-2\"] } }" },
+        .{ "elsewhere/wraith.json", "{ \"id\": \"elsewhere\", \"kind\": \"project\", \"apiVersion\": 2, \"game\": { \"ids\": [\"steam-2\"] } }" },
         .{ "elsewhere/tweaks/a.rwt", "@js" },
         .{ "old/wraith.json", "{ \"id\": \"old\", \"kind\": \"project\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
         .{ "old/tweaks/a.rwt", "@js" },

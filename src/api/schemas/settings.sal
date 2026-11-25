@@ -1,66 +1,70 @@
 // Settings a plugin registers. Wraith keeps their values, saves them and lists them under the plugin in
 // its Settings, and the plugin can still show them on a screen of its own. Keys are keybinds.
 
-// A path is text, a folder or file picked with a Browse button or typed
-enum SettingKind : u8 { toggle, number, choice, text, colour, path }
-
-// Where a value's kept: for every game, or just this one.
-enum SettingScope : u8 { global, game }
+namespace Wraith;
 
 struct Colour { f32 r; f32 g; f32 b; f32 a; }
 
-// A value of any kind. Only the setting's kind's field means anything. Choices and paths are text.
-struct SettingValue {
-    bool toggle;
-    f64 number;
-    string text;
-    Colour colour;
-}
-
-struct SettingDefinition {
-    // Unique for the plugin. Letters, digits, `_`, `-` and `.`.
-    string id;
-    // Defaults to the id
-    string name;
-    string help;
-    // A heading in the plugin's part of Settings
-    string section;
-    SettingScope scope;
-    // Only takes effect next time the game starts
-    bool restart;
-    SettingKind kind;
-    // Without one it's the kind's zero: false, min, the first option, "" or white
-    bool has_default;
-    SettingValue default_value;
-    // For numbers. 1 or more steps whole numbers.
-    f64 min;
-    f64 max;
-    f64 step;
-    // For choices
-    []string options;
-    // For paths: a file, not a folder
-    bool file;
-    // For a file: its type, like ".json"
-    string extension;
-    // For paths: what it uses while it's empty, like "Pictures\Wraith"
-    string placeholder;
-}
-
 error SettingError { Unavailable = 1, InvalidDefinition, InvalidId, AlreadyAdded, InvalidValue, Failed }
 
-// After its value changes, on the thread that changed it. From Wraith's Settings that's the render thread.
-fn void SettingChanged(Setting setting);
+namespace Setting {
+    // A path is text, a folder or file picked with a Browse button or typed
+    enum Kind : u8 { toggle, number, choice, text, colour, path }
+
+    // Where a value's kept: for every game, or just this one.
+    enum Scope : u8 { global, game }
+
+    // A value of any kind. Only the setting's kind's field means anything. Choices and paths are text.
+    struct Value {
+        bool toggle;
+        f64 number;
+        string text;
+        Colour colour;
+    }
+
+    struct Definition {
+        // Unique for the plugin. Letters, digits, `_`, `-` and `.`.
+        string id;
+        // Defaults to the id
+        string name;
+        string help;
+        // A heading in the plugin's part of Settings
+        string section;
+        Scope scope;
+        // Only takes effect next time the game starts
+        bool restart;
+        Kind kind;
+        // Without one it's the kind's zero: false, min, the first option, "" or white
+        bool has_default;
+        Value default_value;
+        // For numbers. 1 or more steps whole numbers.
+        f64 min;
+        f64 max;
+        f64 step;
+        // For choices
+        []string options;
+        // For paths: a file, not a folder
+        bool file;
+        // For a file: its type, like ".json"
+        string extension;
+        // For paths: what it uses while it's empty, like "Pictures\Wraith"
+        string placeholder;
+    }
+
+    // After its value changes, on the thread that changed it. From Wraith's Settings that's the render thread.
+    fn void Changed(Setting setting);
+}
 
 trait Setting {
     // Text is good till this setting's next get().
-    SettingValue!SettingError get();
+    Value!SettingError get();
     // Saved and listed like picking it in Settings. Numbers get clamped.
-    void!SettingError set(SettingValue value);
+    void!SettingError set(Value value);
     // Gone from Settings. Its saved value stays.
     void remove();
 }
 
 trait Settings {
     // Gone with the plugin.
-    Setting!SettingError add(SettingDefinition definition, keep ?SettingChanged changed);
+    Setting!SettingError add(Setting.Definition definition, keep ?Setting.Changed changed);
 }

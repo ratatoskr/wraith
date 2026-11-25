@@ -35,12 +35,12 @@ ce.load {
 local handle = require("ce").install(env, {
   name = "Tales of Arise",       -- the group's title, shown in toasts and warnings
   path = "",                     -- the group's path in its file
-  tweaks = wraith.tweaks,        -- turns tweaks on and off, below
+  tweaks = Wraith.tweaks(),      -- turns tweaks on and off, below
 })
 ```
 
 `install(env, options)` puts CE's globals in `env` and gives back a handle. It doesn't assume it lives in
-any provider and only reaches Wraith through `options.wraith`, which defaults to `require("wraith")`.
+any provider and only reaches Wraith through `options.wraith`, which defaults to the `Wraith` global's areas, see `areas(Wraith)`.
 
 Options:
 
@@ -49,7 +49,7 @@ Options:
 | `name` | The table's name, for toasts and warnings. |
 | `records` | The records manifest. Without it the address list is empty. |
 | `tweaks` | The tweak bridge. Without it, `.Active` on a tweak record raises. |
-| `wraith` | Wraith's API. Defaults to `require("wraith")`. |
+| `wraith` | Wraith's areas as fields, like `memory`. Defaults to `areas(Wraith)`. |
 | `publish` | `false` keeps `registerSymbol` from listing symbols with `addresses:add`. |
 | `version` | What `AddressList.LoadedTableVersion` gives. |
 

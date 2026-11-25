@@ -109,7 +109,8 @@ const sal = api.salamander;
 const W = api.wraith;
 /// What `frame.sal`'s `capture` gives.
 pub const Promise = sal.Plain(W.Frame, "capture");
-const Request = @import("wraith.zig").ResolverOf(Promise);
+// Settles back on the thread that asked
+const Request = @import("threads.zig").Back(@import("wraith.zig").ResolverOf(Promise));
 
 /// Settles with a copy of the frame in a blob, which the taker owns.
 fn settle(r: Request, image: *const api.Image) void {
@@ -249,7 +250,7 @@ pub fn capture(loaded: *Loaded, point: Point) Promise {
         pair.resolver.fail(error.Failed);
         return pair.promise;
     });
-    queue.capture(point, pair.resolver) catch pair.resolver.fail(error.Failed);
+    queue.capture(point, .of(pair.resolver)) catch pair.resolver.fail(error.Failed);
     return pair.promise;
 }
 

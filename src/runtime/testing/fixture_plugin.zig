@@ -13,7 +13,9 @@ pub const Settings = struct {
 };
 
 /// What it provides through Salamander, so tests can call into it from another binary.
-const schema = @import("schema");
+const generated = @import("schema");
+// Its own types are in its namespace, its id in PascalCase
+const schema = generated.Fixture;
 const Counter = schema.FixtureCounter;
 
 const Count = struct {
@@ -29,10 +31,10 @@ var count: Count = .{};
 
 /// A plugin kind, `wraith.kind.fixture`, which the loader refuses, since only Wraith's own run plugins.
 const W = sdk.wraith.types;
-const PluginKind = W.PluginKind;
+const PluginKind = W.Plugin.Kind;
 
 const Kind = struct {
-    pub fn start(_: *Kind, _: W.Guest) sdk.salamander.rt.Plain(PluginKind, "start") {
+    pub fn start(_: *Kind, _: W.Plugin.Guest) sdk.salamander.rt.Plain(PluginKind, "start") {
         return error.Failed;
     }
 };
@@ -69,6 +71,6 @@ pub const Plugin = struct {
 comptime {
     sdk.exportPlugin(Plugin);
     // A plugin's schemas have Wraith's types, and they're the SDK's own
-    std.debug.assert(schema.Vec3 == sdk.api.wraith.Vec3);
-    std.debug.assert(schema.Point == sdk.api.wraith.Point);
+    std.debug.assert(generated.Wraith.Vec3 == sdk.api.wraith.Vec3);
+    std.debug.assert(generated.Wraith.Point == sdk.api.wraith.Point);
 }

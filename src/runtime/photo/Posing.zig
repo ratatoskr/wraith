@@ -151,7 +151,7 @@ pub fn active(self: *const Posing) bool {
     return self.wanted.load(.monotonic);
 }
 
-pub fn pose(self: *Posing, owner: usize, skeleton: W.PosingSkeleton, matrices: *Mat4) void {
+pub fn pose(self: *Posing, owner: usize, skeleton: W.Posing.Skeleton, matrices: *Mat4) void {
     const bones = skeleton.bones;
     const many: [*]Mat4 = @ptrCast(matrices);
     const t = core.timing.scope("posing a skeleton");
@@ -162,7 +162,7 @@ pub fn pose(self: *Posing, owner: usize, skeleton: W.PosingSkeleton, matrices: *
     if (self.store.byId(skeleton.id)) |a| a.owner = owner;
 }
 
-pub fn shapes(self: *Posing, actor: u64, list: []const W.PosingShape, weights: *f32) void {
+pub fn shapes(self: *Posing, actor: u64, list: []const W.Posing.Shape, weights: *f32) void {
     const many: [*]f32 = @ptrCast(weights);
     self.acquire();
     defer self.release();
@@ -258,7 +258,7 @@ fn draw(self: *Posing) void {
     }
     // The game's plugin sets it each frame
     const v = frame.view();
-    if (v.known) store.setCamera(v.view, v.projection) else store.view_proj = null;
+    if (v.known) store.setCamera(v.viewMatrix, v.projection) else store.view_proj = null;
     if (!self.overlay_on) {
         _ = self.hideGizmo();
         return;

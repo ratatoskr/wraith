@@ -119,6 +119,11 @@ jobs:
       - name: run tests with C#
         run: zig build test -Dcs-tests --test-timeout 3m --summary all
 
+      - name: zig example
+        working-directory: examples/zig
+        run: |
+          zig build --summary all
+
       - name: typescript example
         working-directory: examples/typescript
         run: |

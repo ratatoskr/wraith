@@ -10,6 +10,7 @@ const Atomic = @import("tuft_arch").atomic.Value;
 
 const host = @import("root.zig");
 const wraith = @import("wraith.zig");
+const threads = @import("threads.zig");
 const imgui = @import("../ui/imgui.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const MenuItems = @import("../ui/MenuItems.zig");
@@ -22,6 +23,7 @@ const sal = api.salamander;
 const W = api.wraith;
 pub const Ui = W.Ui;
 pub const MenuItem = W.MenuItem;
+pub const Window = W.Window;
 pub const Gizmo = W.Gizmo;
 pub const WorkbenchPanel = W.WorkbenchPanel;
 pub const DrawList = W.ImDrawList;
@@ -105,8 +107,8 @@ const Dialog = struct {
     arena: std.heap.ArenaAllocator,
     owner: *sal.Owner,
     what: union(enum) {
-        file: struct { resolver: wraith.ResolverOf(FilePromise), options: tuft_window.FileDialog },
-        folder: struct { resolver: wraith.ResolverOf(FilePromise), options: tuft_window.FolderDialog },
+        file: struct { resolver: threads.Back(wraith.ResolverOf(FilePromise)), options: tuft_window.FileDialog },
+        folder: struct { resolver: threads.Back(wraith.ResolverOf(FilePromise)), options: tuft_window.FolderDialog },
     },
 
     fn start(comptime kind: enum { file, folder }, loaded: *Loaded, options: anytype) FilePromise {
@@ -129,7 +131,7 @@ const Dialog = struct {
             const title = a.dupe(u8, options.title) catch break :copy false;
             const folder = a.dupe(u8, options.folder) catch break :copy false;
             if (kind == .file) {
-                d.what = .{ .file = .{ .resolver = pair.resolver, .options = .{
+                d.what = .{ .file = .{ .resolver = .of(pair.resolver), .options = .{
                     .mode = if (options.save) .save else .open,
                     .over = over,
                     .title = title,
@@ -139,7 +141,7 @@ const Dialog = struct {
                     .extension = a.dupe(u8, options.extension) catch break :copy false,
                 } } };
             } else {
-                d.what = .{ .folder = .{ .resolver = pair.resolver, .options = .{ .over = over, .title = title, .folder = folder } } };
+                d.what = .{ .folder = .{ .resolver = .of(pair.resolver), .options = .{ .over = over, .title = title, .folder = folder } } };
             }
             break :copy true;
         };
@@ -231,7 +233,7 @@ pub const UiImpl = struct {
         }
     }
 
-    pub fn clip(_: *Loaded, count: u32, row: W.ClipRow) void {
+    pub fn clip(_: *Loaded, count: u32, row: W.Ui.ClipRow) void {
         if (!host.ui.inFrame()) return;
         var clipper = std.mem.zeroes(c.ImGuiListClipper);
         c.ImGuiListClipper_Begin(&clipper, @intCast(count), -1);
@@ -242,7 +244,7 @@ pub const UiImpl = struct {
         }
     }
 
-    pub fn tableSortedBy(_: *Loaded) ?W.SortSpec {
+    pub fn tableSortedBy(_: *Loaded) ?W.Ui.SortSpec {
         if (!host.ui.inFrame()) return null;
         const specs = c.ImGui_TableGetSortSpecs() orelse return null;
         if (specs.*.SpecsCount == 0) return null;
@@ -267,7 +269,7 @@ pub const UiImpl = struct {
         host.ui.showCursor(loaded, show);
     }
 
-    pub fn setCursorHint(loaded: *Loaded, hint: W.CursorHint) void {
+    pub fn setCursorHint(loaded: *Loaded, hint: W.Ui.CursorHint) void {
         host.ui.setCursorHint(loaded, switch (hint) {
             .visible => .visible,
             .hidden => .hidden,
@@ -279,11 +281,11 @@ pub const UiImpl = struct {
         host.ui.setMouseFree(loaded, free);
     }
 
-    pub fn takeInput(loaded: *Loaded, device: W.InputDevice, take: bool) void {
+    pub fn takeInput(loaded: *Loaded, device: W.Ui.InputDevice, take: bool) void {
         host.ui.takeInput(loaded, deviceOf(device) orelse return, take);
     }
 
-    pub fn inputTaken(loaded: *Loaded, device: W.InputDevice) bool {
+    pub fn inputTaken(loaded: *Loaded, device: W.Ui.InputDevice) bool {
         return host.ui.inputTaken(loaded, deviceOf(device) orelse return false);
     }
 
@@ -316,12 +318,21 @@ pub const UiImpl = struct {
         return host.ui.imguiVersion();
     }
 
-    pub fn pickFile(loaded: *Loaded, options: W.FileDialog) FilePromise {
+    pub fn pickFile(loaded: *Loaded, options: W.Ui.FileDialog) FilePromise {
         return Dialog.start(.file, loaded, options);
     }
 
-    pub fn pickFolder(loaded: *Loaded, options: W.FolderDialog) FolderPromise {
+    pub fn pickFolder(loaded: *Loaded, options: W.Ui.FolderDialog) FolderPromise {
         return Dialog.start(.folder, loaded, options);
+    }
+
+    pub fn addWindow(loaded: *Loaded, options: W.Window.Options, draw: W.Window.Draw) sal.Object(Window) {
+        const t = wraith.tablesOf(loaded) orelse {
+            draw.release();
+            return .{};
+        };
+        const w = host.windows.add(loaded, options, draw) orelse return .{};
+        return .init(w, t.window);
     }
 
     pub fn addMenuItem(loaded: *Loaded, label: []const u8) sal.Object(MenuItem) {
@@ -355,7 +366,7 @@ pub const UiImpl = struct {
         return .init(m, t.menu_item);
     }
 
-    pub fn onOpenSettings(loaded: *Loaded, open: W.OpenSettings) void {
+    pub fn onOpenSettings(loaded: *Loaded, open: W.Ui.OpenSettings) void {
         const held = settings_handlers.lease(&loaded.owner) orelse return open.release();
         defer held.end();
         // The last one wins. The old one's kept till the plugin goes, in case it's being called
@@ -368,7 +379,7 @@ pub const UiImpl = struct {
         };
     }
 
-    pub fn addWorkbenchPanel(loaded: *Loaded, options: W.WorkbenchPanelOptions, draw: W.WorkbenchDraw) sal.Object(WorkbenchPanel) {
+    pub fn addWorkbenchPanel(loaded: *Loaded, options: W.WorkbenchPanel.Options, draw: W.WorkbenchPanel.Draw) sal.Object(WorkbenchPanel) {
         const t = wraith.tablesOf(loaded) orelse {
             draw.release();
             return .{};
@@ -401,7 +412,7 @@ pub const WorkbenchPanelImpl = struct {
 /// A plugin's Settings button in the Mods window and under its button on the bar.
 const SettingsHandler = struct {
     loaded: *Loaded,
-    open: W.OpenSettings,
+    open: W.Ui.OpenSettings,
     replaced: Atomic(bool) = .init(false),
     released: bool = false,
 
@@ -480,7 +491,7 @@ pub const GizmoImpl = struct {
         g.place(world);
     }
 
-    pub fn setTool(g: *G, tool: W.GizmoTool) void {
+    pub fn setTool(g: *G, tool: W.Gizmo.Tool) void {
         g.setTool(switch (tool) {
             .rotate => .rotate,
             .scale => .scale,
@@ -520,7 +531,7 @@ fn drawList(loaded: *Loaded, comptime get: anytype) ?sal.Object(DrawList) {
     return .init(list, t.draw_list);
 }
 
-fn deviceOf(d: W.InputDevice) ?api.InputDevice {
+fn deviceOf(d: W.Ui.InputDevice) ?api.InputDevice {
     return switch (d) {
         .keyboard => .keyboard,
         .mouse => .mouse,
@@ -531,7 +542,7 @@ fn deviceOf(d: W.InputDevice) ?api.InputDevice {
 
 fn toastOf(t: W.Toast) api.Toast {
     return .{
-        .kind = switch (t.kind) {
+        .kind = switch (t.style) {
             .success => .success,
             .warning => .warning,
             .failure => .@"error",

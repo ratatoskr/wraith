@@ -95,7 +95,7 @@ pub const MidHook = struct {
     }
 };
 
-/// Like `MidOptions` in hooks.sal.
+/// Like `Hooks.MidOptions` in hooks.sal.
 pub const MidOptions = struct {
     /// The callback replaces code there, so returning carries on after it. Else it goes before
     /// the instruction there, which runs after it.
@@ -115,10 +115,10 @@ pub const Options = struct {
 };
 
 /// The runtime's way into native detours, made once and fine from any thread.
-var calls: ?W.NativeHookCalls = null;
+var calls: ?W.Hooks.NativeCalls = null;
 var hook_table: ?*const anyopaque = null;
 
-const HookCall = W.HookCall;
+const HookCall = W.Hook.Call;
 
 pub fn createFn(comptime T: type, target: anytype, comptime callback: anytype, context: anytype) !FnHook(T) {
     return createFnWith(T, target, callback, context, .{});
@@ -140,11 +140,11 @@ fn native(slot: bool, target: usize, detour: usize, context: usize, options: Opt
     const owner = Owner.current() orelse return error.HooksUnavailable;
     const hooks = owner.root.hooks();
     if (calls == null) {
-        const c = hooks.nativeCalls();
+        const c = hooks.nativeHookCalls();
         if (c.enter == 0 or c.leave == 0) return error.HooksUnavailable;
         calls = c;
     }
-    const hook_options: W.HookOptions = .{ .context = context, .disabled = !options.enabled };
+    const hook_options: W.Hook.Options = .{ .context = context, .disabled = !options.enabled };
     const h = (if (slot) hooks.detourSlotNative(target, detour, hook_options) else hooks.detourNative(target, detour, hook_options)) catch |err| return hookError(err);
     hook_table = h.table;
     return h;
@@ -175,7 +175,7 @@ pub fn createMidWith(target: anytype, comptime callback: anytype, context: anyty
             @call(.auto, callback, cb_args);
         }
     };
-    const handler = W.MidHandler.init(meta.addressFromAny(context), Bridge.run);
+    const handler = W.Hooks.MidHandler.init(meta.addressFromAny(context), Bridge.run);
     const h = owner.root.hooks().mid(at, .{
         .replace = options.replace,
         .size = options.size,

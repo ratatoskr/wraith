@@ -1,11 +1,10 @@
 .{
     .name = .example_zig,
-    .version = "0.1.0",
+    .version = "0.0.0",
     .dependencies = .{
         // This checkout of Wraith. A plugin of your own takes it from git, like `wraith new` does
         .wraith = .{ .path = "../.." },
     },
-    .minimum_zig_version = "0.18.0-dev.1279+81de6a1c6",
-    .paths = .{""},
+    .paths = .{ "src", "schemas", "wraith.json" },
     .fingerprint = 0xc0015f27d5a7fdfc,
 }

@@ -684,7 +684,7 @@ const tests = struct {
         last: f64 = 0,
         fail: bool = false,
 
-        fn handle(self: *PluginSide, event: api.wraith.TweakEvent) error{ InvalidId, InvalidDefinition, NotFound, Failed }!void {
+        fn handle(self: *PluginSide, event: api.wraith.Tweaks.Event) error{ InvalidId, InvalidDefinition, NotFound, Failed }!void {
             switch (event.kind) {
                 .on => self.ons += 1,
                 .off => self.offs += 1,
@@ -697,7 +697,7 @@ const tests = struct {
             if (self.fail and event.kind == .on) return api.salamander.host().explain(error.Failed, "too fast", .{});
         }
 
-        fn handler(self: *PluginSide) api.wraith.TweakHandler {
+        fn handler(self: *PluginSide) api.wraith.Tweaks.Handler {
             return .init(self, handle);
         }
     };
@@ -717,7 +717,7 @@ const tests = struct {
         defer sdk.Owner.detach();
         var side: PluginSide = .{};
         const list = sdk.wraith.root().?.tweaks();
-        const def: api.wraith.TweakDefinition = .{ .id = "speed", .title = "Fast", .fields = &.{.{ .name = "speed", .type = .f32, .value = 2, .has_min = true, .min = 1, .has_max = true, .max = 10 }} };
+        const def: api.wraith.Tweaks.Definition = .{ .id = "speed", .title = "Fast", .fields = &.{.{ .name = "speed", .type = .f32, .value = 2, .has_min = true, .min = 1, .has_max = true, .max = 10 }} };
         try list.add(def, side.handler());
         try testing.expectError(error.InvalidId, list.add(.{ .id = "a:b" }, side.handler()));
         try testing.expectError(error.InvalidDefinition, list.add(.{ .id = "a", .key = "Hyper+F8" }, side.handler()));

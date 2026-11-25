@@ -14,6 +14,7 @@ const OnGone = @import("Owned.zig").OnGone;
 const host = @import("root.zig");
 const scratch = @import("scratch.zig");
 const wraith = @import("wraith.zig");
+const threads = @import("threads.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const sal = api.salamander;
@@ -24,14 +25,14 @@ pub const Game = W.Game;
 const allocator = std.heap.page_allocator;
 
 const HashPromise = sal.Plain(Game, "sha512");
-const HashResolver = wraith.ResolverOf(HashPromise);
+const HashResolver = threads.Back(wraith.ResolverOf(HashPromise));
 
 /// The speed asked for, which `speed` gives. Under `speed_lock`, like the rest.
 var wanted: f64 = 1;
 /// Who set the speed last, so it goes back to 1 when they go. Null for the player.
 var setter: ?*Owner = null;
 /// A plugin's own way of changing the speed, asked first.
-const Provider = struct { owner: *Owner, handler: W.SpeedHandler };
+const Provider = struct { owner: *Owner, handler: W.Game.SpeedHandler };
 var provider: ?Provider = null;
 var speed_lock: tuft_sys.sync.RwLock = .{};
 var speed_cleanup: OnGone(.closing, speedOwnerGone) = .{};
@@ -176,10 +177,10 @@ pub fn currentSpeed() f64 {
 }
 
 pub const Impl = struct {
-    pub fn info(_: *Loaded) W.GameInfo {
+    pub fn gameInfo(_: *Loaded) W.Game.Info {
         const g = &GameInfo.global;
         const a = scratch.begin();
-        var out: W.GameInfo = .{
+        var out: W.Game.Info = .{
             .id = g.id(),
             .store = @tagName(g.store),
             .title = g.title(),
@@ -198,7 +199,7 @@ pub const Impl = struct {
             out.product_version = std.fmt.allocPrint(a, "{f}", .{v.product}) catch "";
         }
         const found = g.anticheat();
-        const list = a.alloc(W.AntiCheat, found.len) catch return out;
+        const list = a.alloc(W.Game.AntiCheat, found.len) catch return out;
         for (list, found) |*item, product| item.* = .{ .id = @tagName(product), .name = product.label() };
         out.anticheat = list;
         return out;
@@ -228,7 +229,7 @@ pub const Impl = struct {
         return controllable();
     }
 
-    pub fn provideSpeed(loaded: *Loaded, handler: W.SpeedHandler) void {
+    pub fn provideSpeed(loaded: *Loaded, handler: W.Game.SpeedHandler) void {
         const lease = speed_cleanup.lease(&loaded.owner) orelse return handler.release();
         defer lease.end();
         speed_lock.lock();
@@ -245,14 +246,14 @@ pub const Impl = struct {
             return pair.promise;
         };
         switch (GameInfo.global.hash_state.load(.acquire)) {
-            .done => settleHash(pair.resolver),
+            .done => settleHash(.of(pair.resolver)),
             .idle, .failed => pair.resolver.fail(error.Failed),
             .hashing => {
                 const job = allocator.create(HashWait) catch {
                     pair.resolver.fail(error.Failed);
                     return pair.promise;
                 };
-                job.* = .{ .owner = t.owner, .resolver = pair.resolver };
+                job.* = .{ .owner = t.owner, .resolver = .of(pair.resolver) };
                 const thread = std.Thread.spawn(.{}, HashWait.run, .{job}) catch {
                     allocator.destroy(job);
                     pair.resolver.fail(error.Failed);
@@ -304,7 +305,7 @@ test "a plugin asks about the game" {
     defer sdk.Owner.detach();
 
     const game = sdk.wraith.root().?.game();
-    const info = game.info();
+    const info = game.gameInfo();
     try testing.expectEqualStrings(GameInfo.global.path(), info.exe);
     try testing.expect(std.ascii.endsWithIgnoreCase(info.exe, ".exe"));
     try testing.expectEqualStrings(std.fs.path.dirname(info.exe).?, info.dir);
@@ -344,7 +345,7 @@ test "a plugin that provides speed gets it first, and the clocks carry on once i
     };
     var state: State = .{};
     const game = sdk.wraith.root().?.game();
-    game.provideSpeed(W.SpeedHandler.init(&state, State.handle));
+    game.provideSpeed(W.Game.SpeedHandler.init(&state, State.handle));
     // Told straight away
     try testing.expectEqual(1, state.got);
 
@@ -409,7 +410,7 @@ test "pausing with a plugin goes back to the speed from before" {
         }
     };
     var takes: Takes = .{};
-    sdk.wraith.root().?.game().provideSpeed(W.SpeedHandler.init(&takes, Takes.handle));
+    sdk.wraith.root().?.game().provideSpeed(W.Game.SpeedHandler.init(&takes, Takes.handle));
     defer setSpeedForPlayer(1) catch {};
 
     try setSpeedForPlayer(0.5);
@@ -439,7 +440,7 @@ test "a game's plugin keeps the speed off, and another turns it on where it work
     game_plugin.initForTest(testing.allocator, "ffxiv");
     sdk.Owner.attach(game_plugin.root());
     const game = sdk.wraith.root().?.game();
-    game.provideSpeed(W.SpeedHandler.init(&takes, Takes.handle));
+    game.provideSpeed(W.Game.SpeedHandler.init(&takes, Takes.handle));
     game.setSpeedControl(false);
     sdk.Owner.detach();
     try testing.expect(!game.speedControl());

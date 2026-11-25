@@ -7,7 +7,7 @@ const std = @import("std");
 
 const api = @import("wraith_api");
 
-pub const Wraith = api.wraith.Wraith;
+pub const Wraith = api.wraith.Api;
 
 /// Stops working once the plugin's unloading.
 root: Wraith,
@@ -18,6 +18,8 @@ threadlocal var entered: ?Wraith = null;
 /// `root` is a `Wraith` object, from anywhere `wraith.sal` was loaded.
 pub fn attach(root: anytype) void {
     own_root = of(root).root;
+    // So `W.Tweaks.instance()` and the rest give the plugin's own
+    Wraith.current = own_root;
 }
 
 pub fn of(root: anytype) Owner {
@@ -26,6 +28,7 @@ pub fn of(root: anytype) Owner {
 
 pub fn detach() void {
     own_root = null;
+    Wraith.current = null;
 }
 
 pub fn own() ?Owner {

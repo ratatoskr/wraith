@@ -302,14 +302,14 @@ fn number(self: *Camera, comptime id: []const u8, name: []const u8, help: []cons
 
 // The API, from game and engine plugins, on any thread
 
-pub fn world(self: *Camera, w: W.CamWorld) void {
+pub fn world(self: *Camera, w: W.FreeCamera.World) void {
     self.shared.acquire();
     defer self.shared.release();
     self.shared.basis = .init(@fromBackingInt(@intCast(@backingInt(w.up))), @fromBackingInt(@intCast(@backingInt(w.look))), w.left_handed);
     self.shared.metre = if (w.metre > 0) w.metre else 1;
 }
 
-pub fn camera(self: *Camera, cam: *W.CamState) void {
+pub fn camera(self: *Camera, cam: *W.FreeCamera.State) void {
     self.shared.acquire();
     defer self.shared.release();
     var c = fromApi(cam.*);
@@ -339,7 +339,7 @@ pub fn hasCamera(self: *Camera) bool {
     return self.shared.seen;
 }
 
-fn fromApi(c: W.CamState) rig.Camera {
+fn fromApi(c: W.FreeCamera.State) rig.Camera {
     return .{
         .position = c.position,
         .aim = @fromBackingInt(@intCast(@backingInt(c.aim))),
@@ -351,7 +351,7 @@ fn fromApi(c: W.CamState) rig.Camera {
     };
 }
 
-fn toApi(c: rig.Camera, out: *W.CamState) void {
+fn toApi(c: rig.Camera, out: *W.FreeCamera.State) void {
     out.position = c.position;
     out.target = c.target;
     out.up = c.up;

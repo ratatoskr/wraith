@@ -12,13 +12,18 @@ pub const salamander = @import("salamander_runtime");
 /// Wraith's API as Salamander traits, from every file in `schemas`, bundled. Every plugin and
 /// script sees the same.
 pub const wraith_sal = @embedFile("wraith.sal");
-/// Made from `schemas` as the build runs, with real methods like `root.frame().stats()`.
-pub const wraith = @import("wraith_api_zig");
-/// How every schema wraith reads is parsed. Plugins' write `[Sig]` and the rest without a `use`.
+/// Made from `schemas` as the build runs, with real methods like `root.frame().stats()`. It's all in
+/// `namespace Wraith`.
+pub const wraith = @import("wraith_api_zig").Wraith;
+/// Every type as it crosses, for passing tables around.
+pub const wraith_raw = @import("wraith_api_zig").raw;
+/// How every schema wraith reads is parsed. Plugins' write `[Sig]` and the rest without a `use`, and
+/// name Wraith's types like `Vec3` without `Wraith.`.
 /// `[Instance("..")] struct Player` is `static Player* instance` with that sig, so it's found the same.
 pub const sal_options: @import("salamander_schema").Options = .{
     .namespaces = &.{.{ .name = "wraith", .annotations = &.{ "Sig", "Module", "Section", "VirtualTable", "Instance", "Service", "Tweak", "Label", "Range", "ReadOnly", "Hidden", "Flatten", "Choices", "Managed", "Icall" } }},
     .uses = &.{"wraith"},
+    .global_uses = &.{"Wraith"},
     .instances = &.{.{ .namespace = "wraith", .name = "Instance", .as = "Sig" }},
 };
 
@@ -860,7 +865,7 @@ pub const NativeGuest = extern struct {
     owner: ?*salamander.Owner,
     render_queue: salamander.Queue,
     /// What the plugins it depends on offer.
-    services: salamander.Slice(wraith.raw.Service),
+    services: salamander.Slice(wraith_raw.Wraith_Plugin_Service),
 };
 
 /// What a native plugin's `wraith_plugin` export gives. Everything else goes through `wraith.sal`, so

@@ -1,7 +1,7 @@
 //! The workbench's script sessions, in JS or Lua on Salamander. Requests come as runtime messages,
 //! and each session is a script of its own that keeps its state between runs, with Wraith's areas
-//! as globals like `frame` and `hooks`, and every loaded plugin's services as modules by its name,
-//! like `require("unreal")`. Tweaks run in them too, each in a session of its own. Each is for a
+//! as globals like `frame` and `hooks`, and every loaded plugin's services under its namespace,
+//! like `Unreal.engine()`. Tweaks run in them too, each in a session of its own. Each is for a
 //! project, and starts with its schemas and names, see `host.projects`.
 //!
 //! Each session runs on the game thread or the render thread, as its runs ask. Game thread ones are
@@ -638,12 +638,20 @@ fn makeLive(self: *Sessions, session: *Session, project: []const u8) !*Live {
     try useProject(live, gpa, project, self.loader);
     errdefer freeProject(live, gpa);
 
-    live.script = try live.exposed.create(session.language, gpa, .{ .ctx = live, .resolve = resolve, .read = read }, .{ .ctx = session, .f = thrownLater });
+    // Hops and awaits carry on where they say, the same as in plugins
+    const lanes = try scripts.Lanes.create();
+    const schema = if (live.loaded.schemas) |s| s.text else api.wraith_sal;
+    const home = if (live.loaded.schemas) |s| s.options.namespace else "";
+    errdefer live.exposed.deinit();
+    live.script = try live.exposed.create(session.language, gpa, .{ .ctx = live, .resolve = resolve, .read = read }, .{ .ctx = session, .f = thrownLater }, lanes, schema, home);
     errdefer live.script.deinit();
+    try lanes.start(live.script, host.salamander.owner(&live.loaded) orelse return error.OutOfMemory);
     const wraith = host.wraith.root(&live.loaded).as(@FieldType(host.wraith.Guest, "wraith"));
     if (wraith.table == null) return error.OutOfMemory;
-    try live.exposed.expose(live.script, wraith, if (live.loaded.schemas) |s| s.text else api.wraith_sal, true);
-    if (live.with_plugins) try exposeServices(live, gpa, self.loader.?);
+    var services: std.ArrayList(scripts.Exposed.Service) = .empty;
+    defer services.deinit(gpa);
+    if (live.with_plugins) try servicesOf(self.loader.?, gpa, &services);
+    try live.exposed.expose(live.script, wraith, schema, true, services.items);
     session.live = live;
     return live;
 }
@@ -669,31 +677,30 @@ fn useProject(live: *Live, gpa: std.mem.Allocator, project: []const u8, loader: 
             try files.append(a, f);
         }
     };
+    // Names it's given as text are the project's, like a plugin's are its own
+    const home = if (own.len > 0) own[0].name[0 .. std.mem.indexOfScalar(u8, own[0].name, '/') orelse 0] else "";
     if (files.items.len > own.len) {
         if (host.schemas.fromFiles(files.items)) |s| {
+            s.setHome(home);
             live.loaded.schemas = s;
             live.with_plugins = true;
         } else |err| log.warn("Script sessions for {s} don't get plugins' services, since their schemas and the project's don't go together ({t})", .{ if (project.len == 0) "your project" else project, err });
     }
     if (own.len == 0) return;
-    if (live.loaded.schemas == null) live.loaded.schemas = host.schemas.fromFiles(own) catch null;
+    if (live.loaded.schemas == null) {
+        live.loaded.schemas = host.schemas.fromFiles(own) catch null;
+        if (live.loaded.schemas) |s| s.setHome(home);
+    }
     if (live.loaded.schemas == null) return;
     live.project_text = try gpa.dupe(u8, host.projects.bundle(project, a));
 }
 
-/// Each plugin that offers services as a module by its name, like `require("unreal")`, the way
-/// plugins that depend on it get them. Under the loader's lock. What's called once its plugin's
-/// gone just fails with `Gone`.
-fn exposeServices(live: *Live, gpa: std.mem.Allocator, loader: *PluginLoader) !void {
-    const types = live.exposed.types orelse return;
-    var exports: std.ArrayList(engine.Export) = .empty;
-    defer exports.deinit(gpa);
+/// What each loaded plugin offers, like `Unreal.objects()`, the way plugins that depend on it get
+/// them. Under the loader's lock. What's called once its plugin's gone just fails with `Gone`.
+fn servicesOf(loader: *PluginLoader, gpa: std.mem.Allocator, out: *std.ArrayList(scripts.Exposed.Service)) !void {
     for (loader.known.items.items) |k| {
         const loaded = k.loaded orelse continue;
-        if (loaded.services.items.len == 0) continue;
-        exports.clearRetainingCapacity();
-        for (loaded.services.items) |s| try exports.append(gpa, .{ .name = s.trait, .schema = types, .trait = s.trait, .obj = s.obj });
-        try live.script.module(loaded.name, exports.items);
+        for (loaded.services.items) |s| try out.append(gpa, .{ .trait = s.trait, .obj = s.obj });
     }
 }
 
@@ -713,6 +720,7 @@ fn reset(self: *Sessions, session: *Session) void {
     live.loaded.owner.close();
     live.script.interrupt();
     live.script.deinit();
+    live.exposed.deinit();
     live.loaded.owner.release();
     live.loaded.free();
     self.gpa.free(live.loaded.name);
@@ -912,11 +920,11 @@ const tests = struct {
         defer host.projects.keep(&.{});
         try testing.expect(Names.global.has(.plugin, "kai_tables.gold"));
 
-        // Its project's types under its own, and its names without the mod's in front
+        // Its project's types with its own, in its namespace, and its names without the mod's in front
         try rig.send(protocol.topics.run, protocol.Run{
             .session = 4,
             .name = "t",
-            .code = "@schema\nstruct Wallet { Bank bank; }\n@js\nglobalThis.both = String(!!types.Wallet && !!types.Bank); globalThis.at = String(addresses.resolve(\"gold\", []));",
+            .code = "@schema\nstruct Wallet { Bank bank; }\n@js\nglobalThis.both = String(!!types.KaiTables.Wallet && !!types.KaiTables.Bank); globalThis.at = String(addresses.resolve(\"gold\", []));",
             .tweak = true,
             .project = "kai_tables",
         });
@@ -925,8 +933,8 @@ const tests = struct {
         try testing.expectEqualStrings("true", rig.eval(4, "both"));
         const at = try std.fmt.bufPrint(&buf, "{d}", .{@intFromPtr(&gold)});
         try testing.expectEqualStrings(at, rig.eval(4, "at"));
-        // A script session has them as its `schema` module
-        try rig.send(protocol.topics.run, protocol.Run{ .session = 6, .language = "lua", .code = "return tostring(require('schema').Bank ~= nil)", .project = "kai_tables" });
+        // A script session has them under its namespace
+        try rig.send(protocol.topics.run, protocol.Run{ .session = 6, .language = "lua", .code = "return tostring(KaiTables.Bank ~= nil)", .project = "kai_tables" });
         rig.step();
         try rig.expectFine();
         try testing.expectEqualStrings("true", rig.heard.lines.items[rig.heard.lines.items.len - 1].text);

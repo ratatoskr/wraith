@@ -1,6 +1,8 @@
 // Virtual files, and watching the game's file I/O. Paths use forward slashes, like
 // `C:/Game/data.pak`, and either slash works going in. Any thread.
 
+namespace Wraith;
+
 error VfsError {
     // The game's file I/O isn't being watched, like when it's off in Settings
     Unavailable = 1,
@@ -12,76 +14,78 @@ error VfsError {
     Failed,
 }
 
-enum VfsEventKind : u8 {
-    // Before an open. The reply can redirect or refuse it.
-    open,
-    opened,
-    // An open that failed, with its status
-    failed,
-    // After a read. The reply can replace what it read.
-    read,
-    // Before a write. The reply can refuse it.
-    write,
-    // The last handle to a file closed
-    closed,
-}
+namespace Vfs {
+    enum EventKind : u8 {
+        // Before an open. The reply can redirect or refuse it.
+        open,
+        opened,
+        // An open that failed, with its status
+        failed,
+        // After a read. The reply can replace what it read.
+        read,
+        // Before a write. The reply can refuse it.
+        write,
+        // The last handle to a file closed
+        closed,
+    }
 
-bitfield VfsKinds : u8 { bool open; bool opened; bool failed; bool read; bool write; bool closed; }
+    bitfield Kinds : u8 { bool open; bool opened; bool failed; bool read; bool write; bool closed; }
 
-enum VfsDenial : u8 { none, access_denied, not_found, sharing_violation, write_protected }
+    enum Denial : u8 { none, access_denied, not_found, sharing_violation, write_protected }
 
-struct VfsWatchOptions {
-    VfsKinds kinds;
-    // Paths it's called for, like `C:/Game/data/*.pak`. `*` matches anything, slashes too, and `?`
-    // any one character. Case doesn't matter. Empty is every path.
-    string pattern;
-    // Also while the loader opens a DLL. It holds a lock then, so the handler mustn't wait on
-    // other threads.
-    bool loader;
-    // Also existence checks like `GetFileAttributes`, as opens with `query` set
-    bool queries;
-}
+    struct WatchOptions {
+        Kinds kinds;
+        // Paths it's called for, like `C:/Game/data/*.pak`. `*` matches anything, slashes too, and `?`
+        // any one character. Case doesn't matter. Empty is every path.
+        string pattern;
+        // Also while the loader opens a DLL. It holds a lock then, so the handler mustn't wait on
+        // other threads.
+        bool loader;
+        // Also existence checks like `GetFileAttributes`, as opens with `query` set
+        bool queries;
+    }
 
-struct VfsEvent {
-    VfsEventKind kind;
-    // Where the file is. For `open`, where it'll be opened after any earlier redirect.
-    string path;
-    // What the game asked for. The same as `path` unless it's redirected.
-    string requested;
-    // The same for every handle to one open file. 0 for `open` and `failed`.
-    u64 file;
-    bool read_access;
-    bool write_access;
-    bool virtual;
-    bool directory;
-    // An existence check, with no handle coming of it
-    bool query;
-    u32 thread;
-    // Where a read or write starts. -1 for the file's current position.
-    i64 offset;
-    // What a read got or what a write writes
-    []u8 data;
-    // The system's status for `failed`, an NTSTATUS on Windows
-    u32 status;
-}
+    struct Event {
+        EventKind kind;
+        // Where the file is. For `open`, where it'll be opened after any earlier redirect.
+        string path;
+        // What the game asked for. The same as `path` unless it's redirected.
+        string requested;
+        // The same for every handle to one open file. 0 for `open` and `failed`.
+        u64 file;
+        bool read_access;
+        bool write_access;
+        bool virtual;
+        bool directory;
+        // An existence check, with no handle coming of it
+        bool query;
+        u32 thread;
+        // Where a read or write starts. -1 for the file's current position.
+        i64 offset;
+        // What a read got or what a write writes
+        []u8 data;
+        // The system's status for `failed`, an NTSTATUS on Windows
+        u32 status;
+    }
 
-// What a handler wants done. Left zero, it goes ahead.
-struct VfsReply {
-    // For `open` and `write`
-    VfsDenial deny;
-    // For `open`, where to open instead, which can be a virtual file
-    string redirect;
-    // For `read`, bytes to put over what it read, as many as fit
-    bool replace;
-    []u8 data;
-}
+    // What a handler wants done. Left zero, it goes ahead.
+    struct Reply {
+        // For `open` and `write`
+        Denial deny;
+        // For `open`, where to open instead, which can be a virtual file
+        string redirect;
+        // For `read`, bytes to put over what it read, as many as fit
+        bool replace;
+        []u8 data;
+    }
 
-// On the thread doing the I/O, which waits for it.
-fn VfsReply VfsHandler(VfsEvent event);
+    // On the thread doing the I/O, which waits for it.
+    fn Reply Handler(Event event);
 
-trait VfsWatch {
-    // Waits for the handler if it's running, unless it's from inside it. Fine to call twice.
-    void cancel();
+    trait Watch {
+        // Waits for the handler if it's running, unless it's from inside it. Fine to call twice.
+        void cancel();
+    }
 }
 
 trait Vfs {
@@ -94,5 +98,5 @@ trait Vfs {
     // A copy of a virtual file's bytes, which the caller owns.
     blob!VfsError read(string path);
     // Until it's cancelled or the plugin goes.
-    VfsWatch!VfsError watch(VfsWatchOptions options, keep VfsHandler handler);
+    Watch!VfsError addWatch(WatchOptions options, keep Handler handler);
 }
