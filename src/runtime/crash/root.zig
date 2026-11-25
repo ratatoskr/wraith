@@ -105,6 +105,97 @@ var dumped_outside = false;
 const Picked = enum(u8) { waiting, crash, workbench };
 
 const Last = sys.exceptions.Unhandled(route);
+const Watched = sys.exceptions.Vectored(Seen.record);
+
+/// Faults as they're raised, before the game's own handlers. Unreal catches crashes in its own
+/// `__except` and shows "Fatal error!", so `Last` never sees them, and this is all there is to go
+/// on. Last in the chain, so what other vectored handlers deal with never gets here. Nothing's
+/// handled, it's only noted, and the watcher logs it.
+const Seen = struct {
+    const slots = 4;
+    const stack_words = 512;
+    /// After that many it stops logging, for games that fault on purpose
+    const max_logged = 48;
+
+    const Fill = enum(u8) { free, filling, full };
+
+    const Slot = struct {
+        what: Report.What,
+        ip: usize,
+        thread: u32,
+        stack: [stack_words]usize,
+        stack_len: usize,
+    };
+
+    var fill: [slots]Atomic(Fill) = @splat(.init(.free));
+    var items: [slots]Slot = undefined;
+    var dropped: Atomic(u32) = .init(0);
+    // The watcher's
+    var logged: u32 = 0;
+
+    /// On the faulting thread. Copies and goes.
+    fn record(e: *Exception) Action {
+        switch (e.kind) {
+            .access_violation, .in_page_error, .illegal_instruction, .privileged_instruction, .misaligned_data, .int_divide_by_zero, .int_overflow => {},
+            else => return .pass,
+        }
+        if (state.load(.acquire) == .off) return .pass;
+        const at = for (&fill, 0..) |*f, i| {
+            if (f.cmpxchgStrong(.free, .filling, .acq_rel, .acquire) == null) break i;
+        } else {
+            _ = dropped.fetchAdd(1, .monotonic);
+            return .pass;
+        };
+        const s = &items[at];
+        s.* = .{ .what = .{ .kind = e.kind, .code = e.code, .fault = e.fault }, .ip = e.cpu.ip(), .thread = std.Thread.getCurrentId(), .stack = undefined, .stack_len = 0 };
+        const sp: usize = if (comptime @import("tuft_arch").bits == 64) @intCast(e.cpu.rsp) else @intCast(e.cpu.esp);
+        // As much as reads, near the end of a stack less is there
+        var n: usize = stack_words;
+        while (n >= 16) : (n /= 2) {
+            if (sys.memory.readSafe(sp, std.mem.sliceAsBytes(s.stack[0..n]))) {
+                s.stack_len = n;
+                break;
+            }
+        }
+        fill[at].store(.full, .release);
+        signal.?.set();
+        return .pass;
+    }
+
+    /// The watcher's, whenever it wakes.
+    fn logAll() void {
+        for (&fill, &items) |*f, *s| {
+            if (f.load(.acquire) != .full) continue;
+            if (logged < max_logged) {
+                logged += 1;
+                logOne(s);
+                if (logged == max_logged) log.info("That's a lot of faults the game might handle itself, so no more are logged", .{});
+            }
+            f.store(.free, .release);
+        }
+        const missed = dropped.swap(0, .monotonic);
+        if (missed > 0 and logged < max_logged) log.debug("{d} more faults came too fast to note", .{missed});
+    }
+
+    fn logOne(s: *const Slot) void {
+        var what_buf: [400]u8 = undefined;
+        var stack_buf: [2048]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&stack_buf);
+        var found: usize = 0;
+        for (s.stack[0..s.stack_len]) |word| {
+            if (found == 16) break;
+            if (!Report.inCode(word)) continue;
+            var buf: [300]u8 = undefined;
+            w.print("{s}{s}", .{ if (found == 0) "" else ", ", Report.describe(word, &buf) }) catch break;
+            found += 1;
+        }
+        log.warn("Fault on thread {d}: {s}. The game may handle it itself, or show its own crash. Stack: {s}", .{
+            s.thread,
+            Report.summaryOf(s.what, s.ip, &what_buf),
+            if (found == 0) "nothing that looks like code" else w.buffered(),
+        });
+    }
+};
 
 /// `logs_dir` is where the report and dump go, next to the log. `crash_handler` is the
 /// `wraith_crashhandler_<arch>.exe` for our arch, to write the dump from outside the game.
@@ -135,10 +226,12 @@ pub fn install(logs_dir: []const u8, exe: []const u8, process_id: u32, crash_han
     state.store(.idle, .release);
     Last.install();
     keep_first.start(Last.address(), Last.setNext);
+    Watched.install(false) catch |err| log.warn("Crashes the game handles itself won't be logged: {t}", .{err});
 }
 
 pub fn uninstall() void {
     if (state.load(.acquire) == .off) return;
+    Watched.uninstall();
     // In this order, since taking ours out goes through what the hook catches
     keep_first.stop();
     Last.uninstall();
@@ -245,6 +338,7 @@ fn watch() void {
     while (true) {
         _ = signal.?.wait(null);
         if (stopping.load(.acquire)) return;
+        Seen.logAll();
         switch (state.load(.acquire)) {
             .reporting => {
                 writeReport();
@@ -333,6 +427,34 @@ fn copy(buf: []u8, s: []const u8) usize {
 
 const tests = struct {
     const testing = std.testing;
+
+    test "faults the game might handle are noted, C++ throws aren't" {
+        if (state.load(.acquire) != .off) return error.SkipZigTest;
+        // Noting needs a watcher to wake, so a signal of our own stands in
+        signal = try sys.sync.Signal.init();
+        defer {
+            signal.?.deinit();
+            signal = null;
+        }
+        state.store(.idle, .release);
+        defer state.store(.off, .release);
+        const saved = testing.log_level;
+        testing.log_level = .err;
+        defer testing.log_level = saved;
+
+        var e: Exception = .{ .kind = .other, .code = 0xE06D7363, .cpu = std.mem.zeroes(@import("tuft_arch").CpuContext) };
+        try testing.expectEqual(.pass, Seen.record(&e));
+        try testing.expectEqual(.free, Seen.fill[0].load(.acquire));
+
+        var local: [64]usize = @splat(0);
+        e = .{ .kind = .access_violation, .code = 0xC0000005, .fault = .{ .access = .read, .address = 0x10 }, .cpu = std.mem.zeroes(@import("tuft_arch").CpuContext) };
+        if (comptime @import("tuft_arch").bits == 64) e.cpu.rsp = @intFromPtr(&local) else e.cpu.esp = @intFromPtr(&local);
+        try testing.expectEqual(.pass, Seen.record(&e));
+        try testing.expectEqual(.full, Seen.fill[0].load(.acquire));
+        try testing.expectEqual(std.Thread.getCurrentId(), Seen.items[0].thread);
+        Seen.logAll();
+        try testing.expectEqual(.free, Seen.fill[0].load(.acquire));
+    }
 
     noinline fn crashHere(done: *Atomic(bool)) void {
         // Nothing handles a stray int3, so it's a crash

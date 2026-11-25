@@ -117,7 +117,7 @@ fn writeStack(w: *std.Io.Writer, sp: usize) !void {
     if (found == 0) try w.writeAll("  (nothing that looks like code)\r\n");
 }
 
-fn inCode(address: usize) bool {
+pub fn inCode(address: usize) bool {
     const base = sys.module.containingBase(address) orelse return false;
     var it = sys.module.sections(base) catch return false;
     while (it.next()) |s| {
@@ -126,7 +126,7 @@ fn inCode(address: usize) bool {
     return false;
 }
 
-fn describe(address: usize, buf: []u8) []const u8 {
+pub fn describe(address: usize, buf: []u8) []const u8 {
     if (Symbols.local.describe(address, buf)) |name| return name;
     return std.fmt.bufPrint(buf, "0x{x}", .{address}) catch "?";
 }
