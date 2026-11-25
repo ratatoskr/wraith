@@ -382,7 +382,10 @@ fn objectClass(rt: *const Runtime, address: usize) E!*Class {
     };
     if (class_at == 0 or !mem.isReadable(class_at, class_bytes)) return error.Unreadable;
     // CoreCLR's runtime takes a MethodTable as it is, and garbage kills the game
-    if (rt.* == .coreclr and !likeMethodTable(class_at)) return error.Unreadable;
+    if (rt.* == .coreclr) {
+        const object = ManagedRuntime.findClass(rt, "System.Object") orelse return error.Failed;
+        if (!likeMethodTable(class_at, @intFromPtr(object))) return error.Unreadable;
+    }
     const image = rt.classImage(@ptrFromInt(class_at)) orelse return error.Unreadable;
     const list = rt.assemblies(gpa) catch return error.Failed;
     defer gpa.free(list);
@@ -393,20 +396,34 @@ fn objectClass(rt: *const Runtime, address: usize) E!*Class {
 }
 
 /// Whether `at` looks like an object's CoreCLR MethodTable. Its size is at +4 and its parent's at
-/// +16, on 64 and 32-bit, and an object's parents end at System.Object's, the only one with none,
-/// whose objects are three words.
-fn likeMethodTable(at: usize) bool {
+/// +16, on 64 and 32-bit, and every object's parents end at `object`, System.Object's own. Only
+/// checking the size there let garbage through now and then.
+fn likeMethodTable(at: usize, object: usize) bool {
     const word = @sizeOf(usize);
     var mt = at;
     for (0..64) |_| {
+        if (mt == object) return true;
         if (!mem.isReadable(mt, 16 + word)) return false;
         const size = mem.Memory.local.load(u32, mt + 4) catch return false;
         if (size < 2 * word or size > 1 << 24) return false;
-        const parent = mem.Memory.local.load(usize, mt + 16) catch return false;
-        if (parent == 0) return size == 3 * word;
-        mt = parent;
+        mt = mem.Memory.local.load(usize, mt + 16) catch return false;
+        if (mt == 0) return false;
     }
     return false;
+}
+
+test "a MethodTable's parents have to end at System.Object's own" {
+    const word = @sizeOf(usize);
+    // Like the real ones, a size at +4 and a parent at +16
+    const Mt = extern struct { flags: u32 = 0, size: u32, pad: [8]u8 = @splat(0), parent: usize, rest: [8]usize = @splat(0) };
+    const object: Mt = .{ .size = 3 * word, .parent = 0 };
+    const player: Mt = .{ .size = 8 * word, .parent = @intFromPtr(&object) };
+    try std.testing.expect(likeMethodTable(@intFromPtr(&player), @intFromPtr(&object)));
+    // Shaped right, with an object-sized root, but not the runtime's
+    // Vars, so they're apart from the consts above, which can share one address
+    var lookalike: Mt = .{ .size = 3 * word, .parent = 0 };
+    var fake: Mt = .{ .size = 8 * word, .parent = @intFromPtr(&lookalike) };
+    try std.testing.expect(!likeMethodTable(@intFromPtr(&fake), @intFromPtr(&object)));
 }
 
 fn classNameOf(rt: *const Runtime, a: Allocator, object: usize) E![]const u8 {
@@ -793,5 +810,10 @@ test "CoreCLR's C#, through the API" {
     const nowhere: [0x80]usize = @splat(std.math.maxInt(usize) - 0xfff);
     const fake: [2]usize = .{ @intFromPtr(&nowhere), 0 };
     try testing.expectError(error.Unreadable, m.classOf(@intFromPtr(&fake)));
+    // Nor one shaped like a MethodTable whose root is object-sized but isn't System.Object's
+    var lookalike: [8]usize = @splat(0);
+    std.mem.writeInt(u32, std.mem.asBytes(&lookalike)[4..8], 3 * @sizeOf(usize), .little);
+    const posing: [2]usize = .{ @intFromPtr(&lookalike), 0 };
+    try testing.expectError(error.Unreadable, m.classOf(@intFromPtr(&posing)));
     try testing.expectError(error.Unreadable, m.readString(code));
 }
