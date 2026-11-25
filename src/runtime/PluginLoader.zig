@@ -686,6 +686,69 @@ const tests = struct {
         try testing.expectEqual(3, offered[0].obj.as(Service).next());
     }
 
+    // Starts a CoreCLR here, like a .NET game would. Skipped without .NET 10.
+    test "script plugins call the C# their schemas declare" {
+        const host = @import("host/root.zig");
+        const Managed = @import("Managed.zig");
+        const tuft_managed = @import("tuft_managed");
+        const sys = @import("tuft_sys");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        var clr = testing.tmpDir(.{});
+        defer clr.cleanup();
+        const dir = try clr.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+        defer testing.allocator.free(dir);
+        _ = tuft_managed.CoreClr.open(std.heap.smp_allocator, testing.io, .{ .dir = dir, .start = true }) catch |err| switch (err) {
+            error.NoDotnet => return error.SkipZigTest,
+            else => return err,
+        };
+        const m = &Managed.global;
+        m.useCoreClr(testing.io, dir);
+        m.startOn(.coreclr, sys.module.findBase(tuft_managed.coreclr_modules[0]) orelse return error.NoCoreClr);
+        defer m.stop();
+        var waited: u32 = 0;
+        while (!m.running() and waited < 10_000) : (waited += 10) sys.thread.sleepMs(10);
+
+        const Out = extern struct { js_length: u32 = 0, js_parsed: i32 = 0, lua_length: u32 = 0, lua_parsed: i32 = 0 };
+        var out: Out = .{};
+        var install: Install = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const io = testing.io;
+        try install.addScript("cs_js", "js");
+        try install.tmp.dir.createDirPath(io, "plugins/cs_js/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cs_js/schemas/cs.sal", .data =
+            \\[Managed("System.String")]
+            \\struct CsString { [Managed("Concat")] static string concat(string a, string b); }
+            \\[Managed("System.Int32:Parse")] i32 parse(string s);
+            \\struct Out { u32 js_length; i32 js_parsed; u32 lua_length; i32 lua_parsed; }
+        });
+        const js = try std.fmt.allocPrint(testing.allocator,
+            \\import {{ CsString, parse, Out }} from "schema";
+            \\const out = Out.at({d});
+            \\out.js_length = CsString.concat("Velvet ", "Crowe").length;
+            \\out.js_parsed = parse("42");
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(js);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cs_js/main.js", .data = js });
+        // Its schemas come from the one it depends on
+        try install.tmp.dir.createDirPath(io, "plugins/cs_lua");
+        try install.pluginManifest("cs_lua", "\"provider\": \"lua\", \"depends\": [\"cs_js\"]");
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local game = require("schema")
+            \\local out = game.Out.at({d})
+            \\out.lua_length = #game.CsString.concat("Velvet ", "Crowe!")
+            \\out.lua_parsed = game.parse("-7")
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cs_lua/main.lua", .data = lua });
+
+        try install.loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("cs_js").?.state);
+        try testing.expectEqual(.loaded, install.info("cs_lua").?.state);
+        try testing.expectEqual(Out{ .js_length = 12, .js_parsed = 42, .lua_length = 13, .lua_parsed = -7 }, out);
+    }
+
     test "script sessions get every loaded plugin's services, on the thread they ask for" {
         const options = @import("test_options");
         const host = @import("host/root.zig");

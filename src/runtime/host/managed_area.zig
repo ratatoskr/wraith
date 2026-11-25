@@ -12,6 +12,7 @@ const Owner = @import("tuft_event").Owner;
 const RwLock = @import("tuft_sys").sync.RwLock;
 const OnGone = @import("Owned.zig").OnGone;
 const scratch = @import("scratch.zig");
+const values = @import("managed_values.zig");
 const wraith = @import("wraith.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
@@ -330,24 +331,13 @@ fn icallOf(rt: *const Runtime, class_name: []const u8, method_name: []const u8) 
     return (rt.icall(gpa, class_name, method_name) catch return error.Failed) orelse error.NotFound;
 }
 
-/// What a schema's `[Managed]` or `[Icall]` member is in the game's C#.
-pub const Member = union(enum) {
-    /// The one with this many parameters, else the first by its name
-    method: ?u32,
-    static,
-    icall,
-};
+/// What a schema's `[Managed]` static or `[Icall]` is in the game's C#. Methods are called through
+/// `managed_calls` instead.
+pub const Member = enum { static, icall };
 
-/// Where a schema's `[Managed]` or `[Icall]` member is, through the attached thread.
+/// Where a schema's `[Managed]` static or `[Icall]` is, through the attached thread.
 pub fn memberAddress(class_name: []const u8, name: []const u8, member: Member) sal.Plain(Managed, "staticAddress") {
     return switch (member) {
-        .method => |params| {
-            if (params) |n| if (run(codeOf, .{ class_name, name, @as(i32, @intCast(n)) })) |at| return at else |err| switch (err) {
-                error.NotFound => {},
-                else => return err,
-            };
-            return run(codeOf, .{ class_name, name, -1 });
-        },
         .static => run(staticOf, .{ class_name, name }),
         .icall => run(icallOf, .{ class_name, name }),
     };
@@ -364,146 +354,16 @@ fn callOn(_: *const Runtime, function: usize) E!usize {
     return f();
 }
 
-const Kind = ManagedRuntime.ElementType;
-const Value = W.ManagedValue;
-
-/// What `invoke` got, worked out where it ran, so the error's message is said on the caller's thread.
-const Outcome = union(enum) {
-    value: Value,
-    /// Like `System.FormatException: Input string was not in a correct format.`
-    threw: []const u8,
-};
-
-/// Most arguments a call takes.
-const max_args = 16;
+const Value = values.Value;
+const Outcome = values.Outcome;
 
 fn invokeOn(rt: *const Runtime, a: Allocator, class_name: []const u8, method_name: []const u8, target: usize, args: []const Value) E!Outcome {
-    if (args.len > max_args) return error.Failed;
+    if (args.len > values.max_args) return error.Failed;
     const c = try classCalled(rt, class_name);
-    const m = pickMethod(rt, c, method_name, args) orelse return error.NotFound;
-    var slots: [max_args]u64 = undefined;
-    var pointers: [max_args]?*anyopaque = undefined;
-    for (args, 0..) |arg, i| pointers[i] = try argument(rt, a, rt.paramType(m, @intCast(i)) orelse return error.Failed, arg, &slots[i]);
-    var exception: ?*Object = null;
-    const result = rt.invoke(m, if (target == 0) null else @ptrFromInt(target), &pointers, &exception);
-    if (exception) |e| return .{ .threw = describe(rt, a, e) };
-    return .{ .value = try fromResult(rt, a, rt.returnType(m), result) };
-}
-
-/// The overload of `name` with as many parameters as `args`, where each fits, else the first with
-/// that many. Looks in parents too.
-fn pickMethod(rt: *const Runtime, class: *Class, name: []const u8, args: []const Value) ?*ManagedRuntime.Method {
-    var first: ?*ManagedRuntime.Method = null;
-    var here: ?*Class = class;
-    while (here) |c| : (here = rt.classParent(c)) {
-        var it = rt.methods(c);
-        while (it.next()) |m| {
-            if (!std.mem.eql(u8, rt.methodName(m), name) or rt.paramCount(m) != args.len) continue;
-            if (first == null) first = m;
-            const fits = for (args, 0..) |arg, i| {
-                const t = rt.paramType(m, @intCast(i)) orelse break false;
-                if (!fitsType(rt, t, arg.kind)) break false;
-            } else true;
-            if (fits) return m;
-        }
-    }
-    return first;
-}
-
-fn fitsType(rt: *const Runtime, t: *ManagedRuntime.Type, kind: W.ManagedValueKind) bool {
-    return switch (rt.typeKind(t)) {
-        .boolean => kind == .flag or kind == .integer,
-        .char, .i1, .u1, .i2, .u2, .i4, .u4, .i8, .u8, .i, .u => kind == .integer,
-        .r4, .r8 => kind == .number or kind == .integer,
-        .string => kind == .text or kind == .none,
-        .valuetype => if (rt.typeClass(t)) |c| (if (rt.isEnum(c)) kind == .integer else kind == .object) else false,
-        .byref, .ptr => kind == .object,
-        else => kind == .object or kind == .none,
-    };
-}
-
-/// What `invoke` takes for one argument: a pointer to its value for value types, the object itself
-/// for the rest.
-fn argument(rt: *const Runtime, a: Allocator, t: *ManagedRuntime.Type, arg: Value, slot: *u64) E!?*anyopaque {
-    const whole: i64 = switch (arg.kind) {
-        .integer => arg.integer,
-        .flag => @intFromBool(arg.flag),
-        .number => @intFromFloat(std.math.clamp(arg.number, -9.2e18, 9.2e18)),
-        else => 0,
-    };
-    const real: f64 = switch (arg.kind) {
-        .number => arg.number,
-        .integer => @floatFromInt(arg.integer),
-        else => 0,
-    };
-    // Little-endian, so a narrower value's in the slot's first bytes
-    slot.* = 0;
-    switch (rt.typeKind(t)) {
-        .boolean => slot.* = @intFromBool(whole != 0),
-        .char, .i1, .u1, .i2, .u2, .i4, .u4, .i8, .u8, .i, .u => slot.* = @bitCast(whole),
-        .r4 => slot.* = @as(u32, @bitCast(@as(f32, @floatCast(real)))),
-        .r8 => slot.* = @bitCast(real),
-        .string => {
-            if (arg.kind != .text) return if (arg.object == 0) null else @ptrFromInt(arg.object);
-            const text = a.dupeSentinel(u8, arg.text, 0) catch return error.Failed;
-            return @ptrCast(rt.newString(text) orelse return error.Failed);
-        },
-        .valuetype => {
-            const c = rt.typeClass(t) orelse return error.Failed;
-            if (!rt.isEnum(c)) return if (arg.object == 0) error.Failed else @ptrFromInt(arg.object);
-            slot.* = @bitCast(whole);
-        },
-        else => return if (arg.object == 0) null else @ptrFromInt(arg.object),
-    }
-    return @ptrCast(slot);
-}
-
-fn fromResult(rt: *const Runtime, a: Allocator, t: ?*ManagedRuntime.Type, result: ?*Object) E!Value {
-    const ret = t orelse return .{ .kind = .none };
-    var kind = rt.typeKind(ret);
-    if (kind == .void) return .{ .kind = .none };
-    const o = result orelse return .{ .kind = .none };
-    if (kind == .valuetype) {
-        const c = rt.typeClass(ret) orelse return error.Failed;
-        if (!rt.isEnum(c)) return .{ .kind = .object, .object = @intFromPtr(o) };
-        kind = rt.typeKind(rt.enumBase(c) orelse return error.Failed);
-    }
-    const at: [*]const u8 = switch (kind) {
-        .boolean, .char, .i1, .u1, .i2, .u2, .i4, .u4, .i8, .u8, .i, .u, .r4, .r8 => @ptrCast(rt.unbox(o) orelse return error.Failed),
-        .string => return .{ .kind = .text, .text = rt.readString(a, @ptrCast(o)) catch return error.Failed },
-        else => return .{ .kind = .object, .object = @intFromPtr(o) },
-    };
-    return primitive(kind, at).?;
-}
-
-/// A number or flag of `kind` from its bytes at `at`, or null for other kinds.
-fn primitive(kind: Kind, at: [*]const u8) ?Value {
-    return switch (kind) {
-        .boolean => .{ .kind = .flag, .flag = at[0] != 0 },
-        .i1 => .{ .kind = .integer, .integer = std.mem.bytesToValue(i8, at[0..1]) },
-        .u1 => .{ .kind = .integer, .integer = at[0] },
-        .i2 => .{ .kind = .integer, .integer = std.mem.bytesToValue(i16, at[0..2]) },
-        .u2, .char => .{ .kind = .integer, .integer = std.mem.bytesToValue(u16, at[0..2]) },
-        .i4 => .{ .kind = .integer, .integer = std.mem.bytesToValue(i32, at[0..4]) },
-        .u4 => .{ .kind = .integer, .integer = std.mem.bytesToValue(u32, at[0..4]) },
-        .i8, .u8 => .{ .kind = .integer, .integer = std.mem.bytesToValue(i64, at[0..8]) },
-        .i, .u => .{ .kind = .integer, .integer = std.mem.bytesToValue(isize, at[0..@sizeOf(isize)]) },
-        .r4 => .{ .kind = .number, .number = std.mem.bytesToValue(f32, at[0..4]) },
-        .r8 => .{ .kind = .number, .number = std.mem.bytesToValue(f64, at[0..8]) },
-        else => null,
-    };
-}
-
-/// `Type: Message`, from the exception's own `Message`.
-fn describe(rt: *const Runtime, a: Allocator, e: *Object) []const u8 {
-    const c = rt.objectClass(e) orelse return "it threw";
-    const name = ManagedRuntime.fullName(rt, a, c) catch return "it threw";
-    const get = ManagedRuntime.findMethod(rt, c, "get_Message", 0) orelse return name;
-    var again: ?*Object = null;
-    const message = rt.invoke(get, e, null, &again) orelse return name;
-    if (again != null) return name;
-    const text = rt.readString(a, @ptrCast(message)) catch return name;
-    return std.fmt.allocPrint(a, "{s}: {s}", .{ name, text }) catch name;
+    var kinds: [values.max_args]W.ManagedValueKind = undefined;
+    for (args, kinds[0..args.len]) |arg, *k| k.* = arg.kind;
+    const m = values.pickMethod(rt, c, method_name, kinds[0..args.len]) orelse return error.NotFound;
+    return values.call(rt, a, m, target, args);
 }
 
 /// What the runtime's class struct reads at most, comfortably, before we trust it.
@@ -553,7 +413,7 @@ fn fieldOf(rt: *const Runtime, a: Allocator, object: usize, name: []const u8) E!
     var slot: u64 align(8) = 0;
     rt.fieldValue(@ptrFromInt(object), f, &slot);
     const at: [*]const u8 = @ptrCast(&slot);
-    if (primitive(kind, at)) |v| return v;
+    if (values.primitive(kind, at)) |v| return v;
     const pointer: usize = @truncate(slot);
     if (kind == .string) {
         if (pointer == 0) return .{ .kind = .text, .text = "" };
@@ -565,7 +425,7 @@ fn fieldOf(rt: *const Runtime, a: Allocator, object: usize, name: []const u8) E!
 fn setFieldOn(rt: *const Runtime, a: Allocator, object: usize, name: []const u8, value: Value) E!void {
     const f = try instanceField(rt, object, name);
     var slot: u64 = undefined;
-    const p = try argument(rt, a, rt.fieldType(f) orelse return error.Failed, value, &slot);
+    const p = try values.argument(rt, a, rt.fieldType(f) orelse return error.Failed, value, &slot);
     rt.setFieldValue(@ptrFromInt(object), f, p);
 }
 
@@ -644,14 +504,16 @@ test "a real game's C#, through the API" {
     try testing.expectError(error.NotFound, m.method("System.String", "NoSuchMethod", -1));
     try m.running().wait();
 
-    // Schemas name C# members, and they're found by name
+    // Schemas name C# members, and they're found by name. Methods are called through Wraith, which
+    // converts strings
+    const srt = @import("salamander_runtime");
     const schemas = try @import("schemas.zig").fromFiles(&.{.{ .name = "kai/cs.sal", .text =
         \\[Managed("System.String")]
         \\struct CsString {
         \\    [Managed] static usize Empty;
-        \\    [Managed("Concat")] static usize concat(usize a, usize b);
+        \\    [Managed("Concat")] static string concat(string a, string b);
         \\}
-        \\[Managed("System.String:Concat")] usize concatOf(usize a, usize b);
+        \\[Managed("System.String:Concat")] string concatOf(string a, string b);
         \\[Managed("UnityEngine.Transform")]
         \\struct UnityTransform {
         \\    [Icall("get_position_Injected")] void position(inout Vec3 at);
@@ -659,8 +521,11 @@ test "a real game's C#, through the API" {
     }});
     defer schemas.destroy();
     try testing.expectEqual(try m.staticAddress("System.String", "Empty"), try schemas.address("CsString.Empty"));
-    try testing.expectEqual(try m.method("System.String", "Concat", 2), try schemas.address("CsString.concat"));
-    try testing.expectEqual(try m.method("System.String", "Concat", 2), try schemas.address("concatOf"));
+    const Concat = *const fn (srt.String, srt.String) callconv(.c) srt.String;
+    const concat_of: Concat = @ptrFromInt(try schemas.address("CsString.concat"));
+    try testing.expectEqualStrings("Velvet Crowe", concat_of(.init("Velvet "), .init("Crowe")).get());
+    const top: Concat = @ptrFromInt(try schemas.address("concatOf"));
+    try testing.expectEqualStrings("ab", top(.init("a"), .init("b")).get());
     // An engine call, registered the way Unity does as it starts
     const Fake = struct {
         fn position(_: ?*anyopaque, out: *[3]f32) callconv(.c) void {
@@ -839,6 +704,67 @@ test "CoreCLR's C#, through the API" {
     try testing.expect((try m.invoke("System.String", "IsNullOrEmpty", 0, &.{.{ .kind = .text, .text = "" }})).flag);
     try testing.expectEqual(3.0, (try m.invoke("System.Math", "Sqrt", 0, &.{.{ .kind = .integer, .integer = 9 }})).number);
     try testing.expectError(error.Threw, m.invoke("System.Int32", "Parse", 0, &.{.{ .kind = .text, .text = "nope" }}));
+
+    // Schemas' [Managed] methods, called like any other declared function, with strings and objects
+    // converted, and overloads told apart by what they take
+    const srt = @import("salamander_runtime");
+    const schemas = try @import("schemas.zig").fromFiles(&.{.{ .name = "ffxiv/cs.sal", .text =
+        \\[Managed("System.String")]
+        \\struct CsString {
+        \\    [Managed("Concat")] static string concat(string a, string b);
+        \\    [Managed("Concat")] static string concat3(string a, string b, string c);
+        \\    [Managed("get_Length")] i32 length();
+        \\}
+        \\[Managed("System.Int32:Parse")] i32 parse(string s);
+        \\[Managed("System.Math:Max")] i64 maxLong(i64 a, i64 b);
+        \\[Managed("System.Math:Max")] f64 maxDouble(f64 a, f64 b);
+        \\[Managed("System.Math:Max")] usize maxWord(usize a, usize b);
+    }});
+    defer schemas.destroy();
+    const Concat = *const fn (srt.String, srt.String) callconv(.c) srt.String;
+    const concat_of: Concat = @ptrFromInt(try schemas.address("CsString.concat"));
+    try testing.expectEqualStrings("Velvet Crowe", concat_of(.init("Velvet "), .init("Crowe")).get());
+    const concat3: *const fn (srt.String, srt.String, srt.String) callconv(.c) srt.String = @ptrFromInt(try schemas.address("CsString.concat3"));
+    try testing.expectEqualStrings("abc", concat3(.init("a"), .init("b"), .init("c")).get());
+    const kept = try m.hold(made);
+    defer m.release(kept);
+    const length: *const fn (usize) callconv(.c) i32 = @ptrFromInt(try schemas.address("CsString.length"));
+    try testing.expectEqual(8, length(try m.heldAt(kept)));
+    const parse: *const fn (srt.String) callconv(.c) i32 = @ptrFromInt(try schemas.address("parse"));
+    try testing.expectEqual(42, parse(.init("42")));
+    // What throws gives zero, and says so in the log
+    {
+        const saved = @import("wraith_core").log.mute(&.{.runtime});
+        defer @import("wraith_core").log.setFilter(saved);
+        try testing.expectEqual(0, parse(.init("nope")));
+    }
+    const max_long: *const fn (i64, i64) callconv(.c) i64 = @ptrFromInt(try schemas.address("maxLong"));
+    try testing.expectEqual(1 << 40, max_long(1 << 40, -3));
+    const max_double: *const fn (f64, f64) callconv(.c) f64 = @ptrFromInt(try schemas.address("maxDouble"));
+    try testing.expectEqual(2.5, max_double(2.5, -1));
+    // nint and nuint both take an address, so it can't say which
+    try testing.expectError(error.NotFound, schemas.address("maxWord"));
+    // The same one, declared again, is the same function
+    try testing.expectEqual(@intFromPtr(concat_of), try schemas.address("CsString.concat"));
+
+    // From a fiber, like a plugin's task, a call goes through Wraith's thread, since one from there
+    // has CoreCLR end the thread once the fiber's deleted
+    const InFiber = struct {
+        fiber: sys.fiber.Fiber = undefined,
+        parse: *const fn (srt.String) callconv(.c) i32,
+        got: i32 = 0,
+
+        fn run(f: *sys.fiber.Fiber) void {
+            const self: *@This() = @alignCast(@fieldParentPtr("fiber", f));
+            self.got = self.parse(.init("7"));
+        }
+    };
+    var in_fiber: InFiber = .{ .parse = parse };
+    try in_fiber.fiber.init(InFiber.run, .{});
+    in_fiber.fiber.resumeHere();
+    in_fiber.fiber.deinit();
+    try testing.expectEqual(7, in_fiber.got);
+    try testing.expectEqual(9, parse(.init("9")));
 
     // Garbage isn't an object, and doesn't crash
     var not_object: [4]usize = @splat(0);

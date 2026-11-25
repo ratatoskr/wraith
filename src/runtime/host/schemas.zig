@@ -15,6 +15,7 @@ const bind = @import("salamander_bind");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const Names = @import("../Names.zig");
 const managed_area = @import("managed_area.zig");
+const managed_calls = @import("managed_calls.zig");
 
 const SalSchema = salamander_schema.Schema;
 const sal = api.salamander;
@@ -121,7 +122,16 @@ pub const Schemas = struct {
         else if (s.findFunction(name)) |f| blk: {
             if (f.method.virtual) |_| break :blk try readSlot(try self.slot(name));
             if (managedOf(f.method.annotations, f.owner, f.method.name)) |m| {
-                break :blk try findManaged(m, if (m.icall) .icall else .{ .method = @intCast(f.method.signature.params.len) }, name);
+                if (m.icall) break :blk try findManaged(m, .icall, name);
+                // Called through Wraith, which converts what it's given and calls in where it can
+                const typed = self.typedOf(name) catch |err| return switch (err) {
+                    error.OutOfMemory => sal.host().explain(error.NotFound, "out of memory finding {s}", .{name}),
+                    error.InvalidSignature => error.NotFound,
+                };
+                break :blk managed_calls.entry(name, m.class, m.member, s, f, typed.function) catch |err| switch (err) {
+                    error.OutOfMemory => return sal.host().explain(error.NotFound, "out of memory finding {s}", .{name}),
+                    error.NotFound => return error.NotFound,
+                };
             }
             break :blk try locate(f.method.annotations, "Sig", name);
         } else if (s.findType(name)) |t|
@@ -543,7 +553,9 @@ test "[Managed] and [Icall] are checked as the schemas load" {
     try testing.expectEqualStrings("UnityEngine.Time", delta.class);
     try testing.expectEqualStrings("get_deltaTime", delta.member);
     try testing.expect(delta.icall);
-    // Not running here, which isn't kept, so it's found once the game's started its runtime
-    try testing.expectError(error.NotFound, good.address("Player.Update"));
-    try testing.expectEqual(0, good.found.count());
+    // Not running here. A method's function is there anyway, and finds the C# on its first call. An
+    // engine call's isn't, and not finding it isn't kept, so it's found once the game's started its runtime
+    try testing.expect(try good.address("Player.Update") != 0);
+    try testing.expectError(error.NotFound, good.address("deltaTime"));
+    try testing.expectEqual(1, good.found.count());
 }
