@@ -1220,8 +1220,6 @@ const tests = struct {
     }
 
     test "hooked code is found in the copies a lookup may use" {
-        const saved = core.log.mute(&.{.memory});
-        defer core.log.setFilter(saved);
         global = .init(testing.allocator);
         defer global.deinit();
         const previous = memory.scans.setRecorder(recordOwn);

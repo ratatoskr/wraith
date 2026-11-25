@@ -108,9 +108,6 @@ fn readDisk(self: *OriginalCode, io: std.Io) void {
 }
 
 test "scans read the copy" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
     global.take(std.testing.allocator, std.testing.io);
     defer global.release();
     const snapshot = &global.snapshot.?;

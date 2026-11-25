@@ -108,10 +108,6 @@ fn forward(record: *const memory.scans.Record) void {
 
 test "scans reach runtime" {
     const Fake = @import("testing.zig").Fake;
-    // tuft logs through `std.log`, and tests send that to the test runner
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
 
     var fake: Fake = .{};
     fake.attach();
