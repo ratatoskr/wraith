@@ -13,12 +13,7 @@ const Shell = @import("Shell.zig");
 
 const log = core.log.scoped(.wraith_ui);
 
-pub const Entry = struct {
-    folder: []const u8,
-    /// Its plugin's id. Null if its wraith.json can't be read.
-    id: ?[]const u8,
-    problem: ?anyerror = null,
-};
+pub const Entry = core.dev_plugins.Listed;
 
 group: std.Io.Group = .init,
 lock: std.Io.Mutex = .init,
@@ -34,6 +29,8 @@ const Op = union(enum) {
     load,
     add: []u8,
     remove: []u8,
+    on: []u8,
+    off: []u8,
 };
 
 /// Waits for a change in flight.
@@ -59,6 +56,12 @@ pub fn remove(self: *DevPlugins, shell: *Shell, folder: []const u8) void {
     self.start(shell, .{ .remove = copy });
 }
 
+/// Off keeps it listed so it can go back on.
+pub fn setOn(self: *DevPlugins, shell: *Shell, folder: []const u8, on: bool) void {
+    const copy = shell.allocator.dupe(u8, folder) catch return;
+    self.start(shell, if (on) .{ .on = copy } else .{ .off = copy });
+}
+
 pub fn isBusy(self: *const DevPlugins) bool {
     return self.busy.load(.acquire);
 }
@@ -76,7 +79,7 @@ fn start(self: *DevPlugins, shell: *Shell, op: Op) void {
 fn freeOp(shell: *Shell, op: Op) void {
     switch (op) {
         .load => {},
-        .add, .remove => |f| shell.allocator.free(f),
+        .add, .remove, .on, .off => |f| shell.allocator.free(f),
     }
 }
 
@@ -100,10 +103,14 @@ fn run(self: *DevPlugins, shell: *Shell, io: std.Io, op: Op) void {
             problem.print("Couldn't remove {s}: {t}", .{ folder, err });
             break :blk false;
         },
+        .on, .off => |folder| changed = core.dev_plugins.setOn(scratch.allocator(), io, loader.dev_file, folder, op == .on) catch |err| blk: {
+            problem.print("Couldn't switch {s} {s}: {t}", .{ folder, if (op == .on) "on" else "off", err });
+            break :blk false;
+        },
     }
 
     var arena: std.heap.ArenaAllocator = .init(shell.allocator);
-    const entries = list(arena.allocator(), io, loader.dev_file) catch |err| blk: {
+    const entries = core.dev_plugins.list(arena.allocator(), io, loader.dev_file) catch |err| blk: {
         log.warn("Couldn't read the dev plugins in {s}: {t}", .{ loader.dev_file, err });
         break :blk &.{};
     };
@@ -116,19 +123,6 @@ fn run(self: *DevPlugins, shell: *Shell, io: std.Io, op: Op) void {
     self.entries = entries;
     self.loaded = true;
     if (op != .load) self.problem = problem;
-}
-
-fn list(a: std.mem.Allocator, io: std.Io, path: []const u8) ![]const Entry {
-    const folders = try core.dev_plugins.load(a, io, path);
-    const out = try a.alloc(Entry, folders.len);
-    for (out, folders) |*e, folder| {
-        e.* = .{ .folder = folder, .id = null };
-        e.id = core.dev_plugins.nameOf(a, io, folder) catch |err| blk: {
-            e.problem = err;
-            break :blk null;
-        };
-    }
-    return out;
 }
 
 /// Holds the list for drawing. Render thread.

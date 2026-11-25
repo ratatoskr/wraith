@@ -1,7 +1,8 @@
 // The game's C# runtime, Mono or IL2CPP, which Unity games and some others run their code on, or
-// .NET's CoreCLR, like Final Fantasy XIV's with Dalamud. Classes go by their C# names, like
-// `Game.Player`, `Player` with no namespace, or `Game.Player/Stats` for one nested in another. The
-// first image with it wins. Any thread, but each call waits its turn on Wraith's one thread that's
+// .NET's CoreCLR. Classes go by their C# names, like `Game.Player`, `Player` with no namespace, or
+// `Game.Player/Stats` for one nested in another.
+//
+// The first image with it wins. Any thread, but each call waits its turn on Wraith's one thread that's
 // attached to the runtime, so look things up once rather than every frame. Classes, fields and
 // methods it finds don't move. Text and slices it gives are good till the thread's next call into
 // Wraith.

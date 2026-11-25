@@ -285,7 +285,6 @@ fn drawRow(self: *ModsWindow, shell: *Shell, row: Row) void {
     ui.sameLine();
     if (row.author().len > 0) ui.textDisabled("{s}  by {s}", .{ row.version(), row.author() }) else ui.textDisabled("{s}", .{row.version()});
     drawTags(row);
-    // Like Dalamud's cog, right on the row
     if (row.plugin) |p| if (p.state == .loaded and shell.pluginHasSettings(row.id, row.title())) {
         ui.sameLine();
         const clicked = ui.smallButton(icons.settings ++ "##settings");

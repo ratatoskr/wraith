@@ -1185,7 +1185,7 @@ const tests = struct {
             const v = shell.dev_plugins.view(io);
             defer v.end();
             try testing.expectEqual(1, v.entries().len);
-            try testing.expectEqualStrings("mine", v.entries()[0].id.?);
+            try testing.expectEqualStrings("mine", v.entries()[0].name.?);
         }
 
         try install.tmp.dir.createDirPath(io, "dev/other");
@@ -1201,6 +1201,18 @@ const tests = struct {
             try testing.expectEqual(2, v.entries().len);
         }
         try testing.expectEqual(2, install.loader.devCount());
+
+        // Off stays listed but doesn't load
+        shell.dev_plugins.setOn(shell, other, false);
+        try shell.dev_plugins.group.await(io);
+        try (try install.loader.rescan()).wait();
+        {
+            const v = shell.dev_plugins.view(io);
+            defer v.end();
+            try testing.expectEqual(2, v.entries().len);
+            try testing.expect(!v.entries()[1].on);
+        }
+        try testing.expectEqual(1, install.loader.devCount());
 
         shell.dev_plugins.remove(shell, other);
         try shell.dev_plugins.group.await(io);

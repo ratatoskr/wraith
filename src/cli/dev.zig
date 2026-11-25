@@ -14,8 +14,12 @@ pub const usage =
     \\                                       their devDepends name, which load from there too
     \\  dev add <folder>                     load the plugin in <folder>, a build's output with its
     \\                                       wraith.json (zig-out\plugins\kai, dist)
+    \\  dev off <folder>                     stop loading it for now, but keep it listed
+    \\  dev on <folder>                      load it again
     \\  dev rm <folder>                      stop loading it from there
 ;
+
+const Sub = enum { list, add, off, on, rm };
 
 pub fn run(ctx: ops.Context, args: anytype) !u8 {
     var arena_state: std.heap.ArenaAllocator = .init(ctx.allocator);
@@ -24,33 +28,45 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     const io = ctx.io;
     const path = try core.dev_plugins.pathAlloc(arena, try ops.locations(arena));
 
-    const sub = args.next() orelse "list";
-    if (std.mem.eql(u8, sub, "list")) {
-        const folders = core.dev_plugins.load(arena, io, path) catch return 1;
-        if (folders.len == 0) log.printLn("No dev plugins. Add one with: wraith dev add <folder>", .{});
-        for (folders) |f| {
-            if (core.dev_plugins.nameOf(arena, io, f)) |name| {
-                log.printLn("{s}  {s}", .{ name, f });
-            } else |err| log.printLn("?  {s}  ({s})", .{ f, problem(err) });
+    const sub = std.meta.stringToEnum(Sub, args.next() orelse "list") orelse return usageError();
+    if (sub == .list) {
+        const listed = core.dev_plugins.list(arena, io, path) catch return 1;
+        if (listed.len == 0) log.printLn("No dev plugins. Add one with: wraith dev add <folder>", .{});
+        for (listed) |l| {
+            const off = if (l.on) "" else "  (off)";
+            if (l.name) |name| {
+                log.printLn("{s}  {s}{s}", .{ name, l.folder, off });
+            } else log.printLn("?  {s}  ({s}){s}", .{ l.folder, core.dev_plugins.describe(l.problem.?), off });
         }
+        const folders = core.dev_plugins.load(arena, io, path) catch &.{};
         const followed = core.dev_plugins.followed(arena, io, folders) catch &.{};
         for (followed) |f| log.printLn("{s}  {s}  (devDepends of {s})", .{ f.name, f.dir, f.by });
         return 0;
     }
 
-    const is_add = std.mem.eql(u8, sub, "add");
-    if (!is_add and !std.mem.eql(u8, sub, "rm")) return usageError();
     const given = args.next() orelse return usageError();
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", arena);
     const folder = try std.fs.path.resolve(arena, &.{ cwd, given });
 
-    if (!is_add) {
-        if (!(core.dev_plugins.remove(arena, io, path, folder) catch return 1)) {
-            log.err("{s} isn't a dev plugin (see wraith dev list)", .{folder});
-            return 1;
-        }
-        log.printLn("Removed {s}", .{folder});
-        return 0;
+    switch (sub) {
+        .list => unreachable,
+        .rm => {
+            if (!(core.dev_plugins.remove(arena, io, path, folder) catch return 1)) {
+                log.err("{s} isn't a dev plugin (see wraith dev list)", .{folder});
+                return 1;
+            }
+            log.printLn("Removed {s}", .{folder});
+            return 0;
+        },
+        .on, .off => {
+            if (!(core.dev_plugins.setOn(arena, io, path, folder, sub == .on) catch return 1)) {
+                log.err("{s} isn't a dev plugin that's {s} (see wraith dev list)", .{ folder, if (sub == .on) "off" else "on" });
+                return 1;
+            }
+            log.printLn("{s} is {t}. Rescan in a running game's Plugins window to catch up", .{ folder, sub });
+            return 0;
+        },
+        .add => {},
     }
 
     // Fine before it's built, as long as it's a folder
@@ -60,7 +76,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
             return 1;
         },
         else => blk: {
-            log.warn("{s}: {s}. It's added, and loads once it has one", .{ folder, problem(err) });
+            log.warn("{s}: {s}. It's added, and loads once it has one", .{ folder, core.dev_plugins.describe(err) });
             break :blk null;
         },
     };
@@ -70,16 +86,6 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     }
     log.printLn("Added {s}{s}{s}. Rescan in a running game's Plugins window to load it", .{ folder, if (name != null) " as " else "", name orelse "" });
     return 0;
-}
-
-fn problem(err: anyerror) []const u8 {
-    return switch (err) {
-        error.NoManifest => "no wraith.json in it",
-        error.BadManifest => "its wraith.json isn't right",
-        error.BadId => "its wraith.json's id should be lowercase letters, digits, _ or -",
-        error.FileNotFound => "it's not there",
-        else => @errorName(err),
-    };
 }
 
 fn usageError() u8 {

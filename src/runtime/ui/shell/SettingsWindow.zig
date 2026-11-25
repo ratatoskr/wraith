@@ -634,6 +634,8 @@ fn drawDevPlugins(shell: *Shell) void {
     }
     var remove_buf: [512]u8 = undefined;
     var remove: ?[]const u8 = null;
+    var switch_buf: [512]u8 = undefined;
+    var switched: ?struct { folder: []const u8, on: bool } = null;
     {
         const v = shell.dev_plugins.view(io);
         defer v.end();
@@ -651,19 +653,28 @@ fn drawDevPlugins(shell: *Shell) void {
                 remove = remove_buf[0..n];
             }
             ui.sameLine();
+            var on = e.on;
+            if (ui.checkbox("##on", &on)) {
+                const n = @min(e.folder.len, switch_buf.len);
+                @memcpy(switch_buf[0..n], e.folder[0..n]);
+                switched = .{ .folder = switch_buf[0..n], .on = on };
+            }
+            if (e.on) ui.tooltip("Loaded. Untick to skip it for now", .{}) else ui.tooltip("Skipped for now. Tick to load it again", .{});
+            ui.sameLine();
             ui.alignTextToFramePadding();
-            if (e.id) |id| {
-                ui.text("{s}", .{id});
+            if (e.name) |id| {
+                if (e.on) ui.text("{s}", .{id}) else ui.textDisabled("{s}", .{id});
                 ui.sameLine();
                 ui.textDisabled("{s}", .{e.folder});
             } else {
                 ui.textColored(.{ 1, 0.75, 0.3, 1 }, "{s}  {s}", .{ icons.triangle_alert, e.folder });
-                ui.tooltip("No usable wraith.json: {t}", .{e.problem orelse error.NoManifest});
+                ui.tooltip("No usable wraith.json: {s}", .{core.dev_plugins.describe(e.problem orelse error.NoManifest)});
             }
         }
         if (v.problem().len > 0) ui.textColored(.{ 1, 0.5, 0.5, 1 }, "{s}", .{v.problem()});
     }
     if (remove) |folder| shell.dev_plugins.remove(shell, folder);
+    if (switched) |s| shell.dev_plugins.setOn(shell, s.folder, s.on);
     {
         const off = ui.disabled(shell.dev_plugins.isBusy());
         defer off.end();

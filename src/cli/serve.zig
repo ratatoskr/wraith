@@ -20,7 +20,7 @@ const log = core.log.scoped(.wraith_cli);
 /// Bump when a message change would break an older launcher.
 pub const protocol = 3;
 
-pub const Method = enum { processes, anticheat, inspect, identify, games, game_add, game_remove, executables, mods, mod_install, mod_remove, mod_update, mod_essentials, install, uninstall, inject, launch, watch, play, cancel };
+pub const Method = enum { processes, anticheat, inspect, identify, games, game_add, game_remove, executables, mods, mod_install, mod_remove, mod_update, mod_essentials, install, uninstall, inject, launch, watch, play, dev_list, dev_add, dev_set, dev_remove, cancel };
 
 pub fn run(ctx: ops.Context) !void {
     var out_buf: [4096]u8 = undefined;
@@ -276,6 +276,7 @@ const Call = struct {
             },
             .mod_update => self.reply(.{ .updated = try mods.updateAll(ctx, self.arena.allocator()) }),
             .mod_essentials => self.reply(.{ .kept = try mods.keepEssentials(ctx, self.arena.allocator()) }),
+            .dev_list, .dev_add, .dev_set, .dev_remove => self.reply(try self.dev()),
             // Handled on receive
             .cancel => unreachable,
         }
@@ -283,6 +284,47 @@ const Call = struct {
 
     fn reply(self: *Call, result: anytype) void {
         self.server.send(.{ .id = self.id, .result = result });
+    }
+
+    const DevPlugin = struct { folder: []const u8, name: ?[]const u8, problem: ?[]const u8, on: bool };
+    const DevPlugins = struct { plugins: []const DevPlugin, followed: []const core.dev_plugins.Followed };
+
+    /// Makes the change, then lists them. Folders that are gone come off the lists.
+    fn dev(self: *Call) !DevPlugins {
+        const arena = self.arena.allocator();
+        const io = self.server.ctx.io;
+        const dp = core.dev_plugins;
+        const path = try dp.pathAlloc(arena, try ops.locations(arena));
+        switch (self.method) {
+            .dev_add => {
+                const p = try self.params(struct { folder: []const u8 });
+                // Fine before it's built, as long as it's a folder
+                _ = dp.nameOf(arena, io, p.folder) catch |err| switch (err) {
+                    error.FileNotFound, error.NotDir => return error.NotAFolder,
+                    else => {},
+                };
+                _ = try dp.add(arena, io, path, p.folder);
+            },
+            .dev_set => {
+                const p = try self.params(struct { folder: []const u8, on: bool });
+                _ = try dp.setOn(arena, io, path, p.folder, p.on);
+            },
+            .dev_remove => {
+                const p = try self.params(struct { folder: []const u8 });
+                _ = try dp.remove(arena, io, path, p.folder);
+            },
+            else => {},
+        }
+        _ = try dp.prune(arena, io, path);
+        const listed = try dp.list(arena, io, path);
+        const plugins = try arena.alloc(DevPlugin, listed.len);
+        for (plugins, listed) |*out, l| out.* = .{
+            .folder = l.folder,
+            .name = l.name,
+            .problem = if (l.problem) |err| dp.describe(err) else null,
+            .on = l.on,
+        };
+        return .{ .plugins = plugins, .followed = try dp.followed(arena, io, try dp.load(arena, io, path)) };
     }
 
     fn watchOptions(self: *Call) ops.WatchOptions {

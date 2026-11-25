@@ -1,5 +1,5 @@
-//! The game's C# runtime, Mono, IL2CPP or CoreCLR, for Unity games, .NET games and mod loaders like
-//! Dalamud. Calling in from a thread the runtime doesn't know can crash it, so one thread of ours
+//! The game's C# runtime, Mono, IL2CPP or CoreCLR, for Unity games, .NET games and mod loaders.
+//! Calling in from a thread the runtime doesn't know can crash it, so one thread of ours
 //! makes every call, attached while it does. Others hand it work with `call` and wait.
 
 const Managed = @This();

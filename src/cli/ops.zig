@@ -170,7 +170,7 @@ fn exitsWithin(pid: u32, timeout_ms: u32) bool {
 const retry_ms = 30_000;
 const retry_step_ms = 500;
 
-/// Retries while it starts, since things like Dalamud can get in the way.
+/// Retries while it starts.
 fn injectRetrying(ctx: Context, pid: u32, cancel: ?*const Atomic(bool)) !void {
     var waited: u32 = 0;
     var flags = started_with_game;

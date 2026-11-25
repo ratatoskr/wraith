@@ -1,4 +1,5 @@
-//! Plugins you're building, listed in `settings\dev_plugins.zon`.
+//! Plugins you're building, listed in `settings\dev_plugins.zon`. Switched off ones move to
+//! `dev_plugins_off.zon` beside it, so they can go back on. Older Wraiths just don't see those.
 
 const std = @import("std");
 
@@ -7,6 +8,7 @@ const manifest = @import("manifest.zig");
 const deps = @import("deps.zig");
 
 pub const file_name = "dev_plugins.zon";
+pub const off_file_name = "dev_plugins_off.zon";
 
 pub fn pathAlloc(allocator: std.mem.Allocator, locations: Locations) ![]u8 {
     return std.fs.path.join(allocator, &.{ locations.root, "settings", file_name });
@@ -38,18 +40,111 @@ pub fn save(gpa: std.mem.Allocator, io: std.Io, path: []const u8, folders: []con
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.written() });
 }
 
+/// The switched off list beside `path`.
+pub fn offPathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const dir = std.fs.path.dirname(path) orelse return allocator.dupe(u8, off_file_name);
+    return std.fs.path.join(allocator, &.{ dir, off_file_name });
+}
+
+/// The ones that are switched off.
+pub fn loadOff(arena: std.mem.Allocator, io: std.Io, path: []const u8) ![]const []const u8 {
+    return load(arena, io, try offPathAlloc(arena, path));
+}
+
+/// On, even if it was switched off. False if it already was.
 pub fn add(arena: std.mem.Allocator, io: std.Io, path: []const u8, folder: []const u8) !bool {
+    _ = try dropFrom(arena, io, try offPathAlloc(arena, path), folder);
+    return addTo(arena, io, path, folder);
+}
+
+/// Off both lists. False if it wasn't on either.
+pub fn remove(arena: std.mem.Allocator, io: std.Io, path: []const u8, folder: []const u8) !bool {
+    const was_off = try dropFrom(arena, io, try offPathAlloc(arena, path), folder);
+    return try dropFrom(arena, io, path, folder) or was_off;
+}
+
+/// Moves it between the lists. False if it's on neither, or already that way.
+pub fn setOn(arena: std.mem.Allocator, io: std.Io, path: []const u8, folder: []const u8, on: bool) !bool {
+    const off_path = try offPathAlloc(arena, path);
+    const from, const to = if (on) .{ off_path, path } else .{ path, off_path };
+    if (!try dropFrom(arena, io, from, folder)) return false;
+    _ = try addTo(arena, io, to, folder);
+    return true;
+}
+
+/// Takes folders that aren't there any more off both lists. True if any went.
+pub fn prune(arena: std.mem.Allocator, io: std.Io, path: []const u8) !bool {
+    var any = false;
+    for ([_][]const u8{ path, try offPathAlloc(arena, path) }) |p| {
+        const folders = try load(arena, io, p);
+        var kept: std.ArrayList([]const u8) = .empty;
+        for (folders) |f| if (isDir(io, f)) try kept.append(arena, f);
+        if (kept.items.len == folders.len) continue;
+        try save(arena, io, p, kept.items);
+        any = true;
+    }
+    return any;
+}
+
+fn isDir(io: std.Io, folder: []const u8) bool {
+    var dir = std.Io.Dir.openDirAbsolute(io, folder, .{}) catch return false;
+    dir.close(io);
+    return true;
+}
+
+fn addTo(arena: std.mem.Allocator, io: std.Io, path: []const u8, folder: []const u8) !bool {
     const folders = try load(arena, io, path);
     if (indexOf(folders, folder) != null) return false;
     try save(arena, io, path, try std.mem.concat(arena, []const u8, &.{ folders, &.{folder} }));
     return true;
 }
 
-pub fn remove(arena: std.mem.Allocator, io: std.Io, path: []const u8, folder: []const u8) !bool {
+fn dropFrom(arena: std.mem.Allocator, io: std.Io, path: []const u8, folder: []const u8) !bool {
     const folders = try load(arena, io, path);
     const i = indexOf(folders, folder) orelse return false;
     try save(arena, io, path, try std.mem.concat(arena, []const u8, &.{ folders[0..i], folders[i + 1 ..] }));
     return true;
+}
+
+/// One on either list, as the CLI, the launcher and Settings show it.
+pub const Listed = struct {
+    folder: []const u8,
+    /// Its plugin's id. Null if its wraith.json can't be read.
+    name: ?[]const u8,
+    /// Why there's no name.
+    problem: ?anyerror,
+    on: bool,
+};
+
+/// The on ones first, in order, then the off ones.
+pub fn list(arena: std.mem.Allocator, io: std.Io, path: []const u8) ![]const Listed {
+    const on = try load(arena, io, path);
+    const off = try loadOff(arena, io, path);
+    var out: std.ArrayList(Listed) = .empty;
+    for ([_][]const []const u8{ on, off }, [_]bool{ true, false }) |folders, is_on| {
+        for (folders) |folder| {
+            // Back on with an older Wraith's `dev add`, so it's on
+            if (!is_on and indexOf(on, folder) != null) continue;
+            var l: Listed = .{ .folder = folder, .name = null, .problem = null, .on = is_on };
+            l.name = nameOf(arena, io, folder) catch |err| blk: {
+                l.problem = err;
+                break :blk null;
+            };
+            try out.append(arena, l);
+        }
+    }
+    return out.items;
+}
+
+/// Why `nameOf` failed, for people.
+pub fn describe(err: anyerror) []const u8 {
+    return switch (err) {
+        error.NoManifest => "no wraith.json in it",
+        error.BadManifest => "its wraith.json isn't right",
+        error.BadId => "its wraith.json's id should be lowercase letters, digits, _ or -",
+        error.FileNotFound => "it's not there",
+        else => @errorName(err),
+    };
 }
 
 /// Windows paths, so case and a trailing separator don't matter.
@@ -89,8 +184,8 @@ pub fn followed(arena: std.mem.Allocator, io: std.Io, folders: []const []const u
     while (i < dirs.items.len) : (i += 1) {
         const by = names.items[i];
         const source = sourceOf(arena, io, dirs.items[i], by) orelse continue;
-        const list = deps.listed(arena, io, source) catch continue;
-        for (list.paths.map.keys(), list.paths.map.values()) |name, path| {
+        const named = deps.listed(arena, io, source) catch continue;
+        for (named.paths.map.keys(), named.paths.map.values()) |name, path| {
             if (isNamed(names.items, name)) continue;
             const folder = try deps.devFolder(arena, source, path);
             const dir = try builtIn(arena, io, folder, name) orelse continue;
@@ -223,6 +318,48 @@ const tests = struct {
         const left = try load(a, testing.io, path);
         try testing.expectEqual(1, left.len);
         try testing.expectEqualStrings("D:\\other", left[0]);
+    }
+
+    test "switched off, back on and gone" {
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const io = testing.io;
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.createDirPath(io, "kai");
+        try tmp.dir.createDirPath(io, "other");
+        try tmp.dir.writeFile(io, .{ .sub_path = "kai/" ++ manifest.file_name, .data = "{ \"id\": \"kai\" }" });
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const path = try std.fs.path.join(a, &.{ root, "settings", file_name });
+        const kai = try std.fs.path.join(a, &.{ root, "kai" });
+        const other = try std.fs.path.join(a, &.{ root, "other" });
+        const gone = try std.fs.path.join(a, &.{ root, "gone" });
+        for ([_][]const u8{ kai, other, gone }) |f| _ = try add(a, io, path, f);
+
+        // Off leaves the loaded list but stays listed
+        try testing.expect(try setOn(a, io, path, kai, false));
+        try testing.expect(!try setOn(a, io, path, kai, false));
+        try testing.expectEqual(2, (try load(a, io, path)).len);
+        const listed = try list(a, io, path);
+        try testing.expectEqual(3, listed.len);
+        try testing.expectEqualStrings(kai, listed[2].folder);
+        try testing.expectEqualStrings("kai", listed[2].name.?);
+        try testing.expect(!listed[2].on);
+        try testing.expectEqual(error.NoManifest, listed[0].problem.?);
+
+        // Adding it again turns it back on
+        try testing.expect(try add(a, io, path, kai));
+        try testing.expectEqual(0, (try loadOff(a, io, path)).len);
+
+        try testing.expect(try setOn(a, io, path, other, false));
+        try testing.expect(try prune(a, io, path));
+        try testing.expect(!try prune(a, io, path));
+        try testing.expectEqual(2, (try list(a, io, path)).len);
+
+        try testing.expect(try remove(a, io, path, other));
+        try testing.expect(!try remove(a, io, path, other));
+        try testing.expectEqual(1, (try list(a, io, path)).len);
     }
 
     test "folder plugin name" {
