@@ -1,9 +1,14 @@
-// The game's C# runtime, Mono or IL2CPP, which Unity games and some others run their code on.
-// Classes go by their C# names, like `Game.Player`, `Player` with no namespace, or
-// `Game.Player/Stats` for one nested in another. The first image with it wins. Any thread, but each
-// call waits its turn on Wraith's one thread that's attached to the runtime, so look things up once
-// rather than every frame. What they find doesn't move. Text and slices it gives are good till the
-// thread's next call into Wraith.
+// The game's C# runtime, Mono or IL2CPP, which Unity games and some others run their code on, or
+// .NET's CoreCLR, like Final Fantasy XIV's with Dalamud. Classes go by their C# names, like
+// `Game.Player`, `Player` with no namespace, or `Game.Player/Stats` for one nested in another. The
+// first image with it wins. Any thread, but each call waits its turn on Wraith's one thread that's
+// attached to the runtime, so look things up once rather than every frame. Classes, fields and
+// methods it finds don't move. Text and slices it gives are good till the thread's next call into
+// Wraith.
+//
+// Objects are their addresses. Mono's and IL2CPP's stay put, but CoreCLR's garbage collector moves
+// them, so there an object's address is only good till it next runs. `hold` one you keep, and get
+// where it is now from `heldAt` before each use.
 //
 // Address text takes `Class:Method` too, like `Game.Player:Update+0x3a`, for the method's code.
 
@@ -117,6 +122,8 @@ trait Managed {
     u32!ManagedError hold(usize object);
     // Lets go of a `hold`. Fine to call twice.
     void release(u32 handle);
+    // Where a `hold`'s object is now, which only changes under CoreCLR. Any thread, straight away.
+    usize!ManagedError heldAt(u32 handle);
     // The full name of the class of the object at `object`
     string!ManagedError classOf(usize object);
     // The `System.String` at `address`, as UTF-8

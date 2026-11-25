@@ -172,6 +172,17 @@ pub const Impl = struct {
         global().rt.freeHandle(handle);
     }
 
+    pub fn heldAt(loaded: *Loaded, handle: u32) sal.Plain(Managed, "heldAt") {
+        const g = global();
+        if (!g.running()) return error.NotRunning;
+        held_lock.lock();
+        defer held_lock.unlock();
+        // Only its own
+        const owner = held.get(handle) orelse return error.NotFound;
+        if (owner != &loaded.owner) return error.NotFound;
+        return @intFromPtr(g.rt.handleTarget(handle) orelse return error.NotFound);
+    }
+
     pub fn classOf(_: *Loaded, object: usize) sal.Plain(Managed, "classOf") {
         return run(classNameOf, .{ scratch.begin(), object });
     }
@@ -748,5 +759,104 @@ test "a real game's C#, through the API" {
     not_object[0] = @intFromPtr(&not_object);
     try testing.expectError(error.Unreadable, m.classOf(@intFromPtr(&not_object)));
     try testing.expectError(error.Unreadable, m.classOf(0x10));
+    try testing.expectError(error.Unreadable, m.readString(code));
+}
+
+// Starts a CoreCLR here, like a .NET game would, then joins it like the game's. Skipped without .NET 10.
+test "CoreCLR's C#, through the API" {
+    const testing = std.testing;
+    const sdk = @import("wraith_sdk");
+    const Names = @import("../Names.zig");
+    const addresses = @import("addresses.zig");
+    const tuft_managed = @import("tuft_managed");
+    const sys = @import("tuft_sys");
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(dir);
+    _ = tuft_managed.CoreClr.open(std.heap.smp_allocator, testing.io, .{ .dir = dir, .start = true }) catch |err| switch (err) {
+        error.NoDotnet => return error.SkipZigTest,
+        else => return err,
+    };
+    global().useCoreClr(testing.io, dir);
+    global().startOn(.coreclr, sys.module.findBase(tuft_managed.coreclr_modules[0]) orelse return error.NoCoreClr);
+    defer global().stop();
+    var waited: u32 = 0;
+    while (!global().running() and waited < 10_000) : (waited += 10) sys.thread.sleepMs(10);
+
+    Names.global = .init(testing.allocator);
+    defer Names.global.deinit();
+    var loaded: Loaded = undefined;
+    loaded.initForTest(testing.allocator, "ffxiv");
+    sdk.Owner.attach(loaded.root());
+    defer sdk.Owner.detach();
+    defer {
+        loaded.deinitForTest();
+        wraith.forget(&loaded);
+    }
+    const m = sdk.wraith.root().?.managed();
+    try m.running().wait();
+
+    try testing.expectEqual(W.ManagedKind.coreclr, m.kind());
+    try testing.expect(for (try m.images()) |i| {
+        if (std.mem.eql(u8, i, "System.Private.CoreLib.dll")) break true;
+    } else false);
+    try testing.expect((try m.classes("System.Private.CoreLib.dll")).len > 1000);
+
+    const string = try m.find("System.String");
+    try testing.expectEqualStrings("System.Object", string.parent);
+    try testing.expect(!string.value_type);
+    try testing.expect((try m.find("System.Environment/SpecialFolder")).value_type);
+    try testing.expectError(error.NotFound, m.find("No.Such.Class"));
+    const concat = for (try m.methods("System.String")) |one| {
+        if (std.mem.eql(u8, one.name, "Concat") and one.params.len == 2 and std.mem.eql(u8, one.params[0], "System.String")) break one;
+    } else return error.NoConcat;
+    try testing.expect(concat.is_static);
+    try testing.expectEqualStrings("System.String", concat.return_type);
+
+    // `Class:Method` in address text finds the same code
+    const code = try m.method("System.String", "IsNullOrEmpty", 1);
+    var problem: api.LocationProblem = .{};
+    try testing.expectEqual(code, try addresses.resolve(&loaded, "System.String:IsNullOrEmpty", &.{}, &problem));
+
+    // Statics, strings and System.Type
+    const object = try mem.Memory.local.load(usize, try m.staticAddress("System.String", "Empty"));
+    try testing.expectEqualStrings("System.String", try m.classOf(object));
+    try testing.expectEqualStrings("", try m.readString(object));
+    try testing.expect(std.mem.endsWith(u8, try m.classOf(try m.typeObject("System.String")), "Type"));
+    const made = try global().call(struct {
+        fn f(rt: *const Runtime) usize {
+            return @intFromPtr(rt.newString("Velvet ✦") orelse return 0);
+        }
+    }.f, .{});
+
+    // Held, and found again where the garbage collector's put it
+    const handle = try m.hold(made);
+    const now = try m.heldAt(handle);
+    try testing.expectEqualStrings("System.String", try m.classOf(now));
+    try testing.expectEqualStrings("Velvet ✦", try m.readString(now));
+    try testing.expectEqual(8, (try m.invoke("System.String", "get_Length", now, &.{})).integer);
+    m.release(handle);
+    try testing.expectError(error.NotFound, m.heldAt(handle));
+
+    // Fields of a live object, read and set by name
+    const version = try m.invoke("System.Version", "Parse", 0, &.{.{ .kind = .text, .text = "1.2.3.4" }});
+    try testing.expectEqual(1, (try m.getField(version.object, "_Major")).integer);
+    try m.setField(version.object, "_Major", .{ .kind = .integer, .integer = 7 });
+    try testing.expectEqual(7, (try m.invoke("System.Version", "get_Major", version.object, &.{})).integer);
+
+    // Calling C#, picking the overload that fits
+    try testing.expectEqual(42, (try m.invoke("System.Int32", "Parse", 0, &.{.{ .kind = .text, .text = "42" }})).integer);
+    const joined = try m.invoke("System.String", "Concat", 0, &.{ .{ .kind = .text, .text = "Velvet " }, .{ .kind = .text, .text = "Crowe" } });
+    try testing.expectEqualStrings("Velvet Crowe", joined.text);
+    try testing.expect((try m.invoke("System.String", "IsNullOrEmpty", 0, &.{.{ .kind = .text, .text = "" }})).flag);
+    try testing.expectEqual(3.0, (try m.invoke("System.Math", "Sqrt", 0, &.{.{ .kind = .integer, .integer = 9 }})).number);
+    try testing.expectError(error.Threw, m.invoke("System.Int32", "Parse", 0, &.{.{ .kind = .text, .text = "nope" }}));
+
+    // Garbage isn't an object, and doesn't crash
+    var not_object: [4]usize = @splat(0);
+    not_object[0] = @intFromPtr(&not_object);
+    try testing.expectError(error.Unreadable, m.classOf(@intFromPtr(&not_object)));
     try testing.expectError(error.Unreadable, m.readString(code));
 }
