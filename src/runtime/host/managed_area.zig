@@ -381,6 +381,8 @@ fn objectClass(rt: *const Runtime, address: usize) E!*Class {
         .mono => if (header != 0 and mem.isReadable(header, word)) mem.Memory.local.load(usize, header) catch return error.Unreadable else return error.Unreadable,
     };
     if (class_at == 0 or !mem.isReadable(class_at, class_bytes)) return error.Unreadable;
+    // CoreCLR's runtime takes a MethodTable as it is, and garbage kills the game
+    if (rt.* == .coreclr and !likeMethodTable(class_at)) return error.Unreadable;
     const image = rt.classImage(@ptrFromInt(class_at)) orelse return error.Unreadable;
     const list = rt.assemblies(gpa) catch return error.Failed;
     defer gpa.free(list);
@@ -388,6 +390,23 @@ fn objectClass(rt: *const Runtime, address: usize) E!*Class {
         if (rt.assemblyImage(asm_entry) == image) return rt.objectClass(@ptrFromInt(address)) orelse error.Unreadable;
     }
     return error.Unreadable;
+}
+
+/// Whether `at` looks like an object's CoreCLR MethodTable. Its size is at +4 and its parent's at
+/// +16, on 64 and 32-bit, and an object's parents end at System.Object's, the only one with none,
+/// whose objects are three words.
+fn likeMethodTable(at: usize) bool {
+    const word = @sizeOf(usize);
+    var mt = at;
+    for (0..64) |_| {
+        if (!mem.isReadable(mt, 16 + word)) return false;
+        const size = mem.Memory.local.load(u32, mt + 4) catch return false;
+        if (size < 2 * word or size > 1 << 24) return false;
+        const parent = mem.Memory.local.load(usize, mt + 16) catch return false;
+        if (parent == 0) return size == 3 * word;
+        mt = parent;
+    }
+    return false;
 }
 
 fn classNameOf(rt: *const Runtime, a: Allocator, object: usize) E![]const u8 {
@@ -770,5 +789,9 @@ test "CoreCLR's C#, through the API" {
     var not_object: [4]usize = @splat(0);
     not_object[0] = @intFromPtr(&not_object);
     try testing.expectError(error.Unreadable, m.classOf(@intFromPtr(&not_object)));
+    // Nor one whose class points nowhere, which CoreCLR itself would follow and crash on
+    const nowhere: [0x80]usize = @splat(std.math.maxInt(usize) - 0xfff);
+    const fake: [2]usize = .{ @intFromPtr(&nowhere), 0 };
+    try testing.expectError(error.Unreadable, m.classOf(@intFromPtr(&fake)));
     try testing.expectError(error.Unreadable, m.readString(code));
 }
