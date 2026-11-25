@@ -41,12 +41,12 @@ fn heldGone(owner: *Owner) void {
     const g = global();
     var it = held.iterator();
     while (it.next()) |kv| if (kv.value_ptr.* == owner) {
-        if (g.running()) g.rt.freeHandle(kv.key_ptr.*);
+        if (g.running()) g.call(Runtime.freeHandle, .{kv.key_ptr.*}) catch {};
         held.removeByPtr(kv.key_ptr);
     };
 }
 
-/// Runs `func` on the attached thread, which fails the same way as it not running.
+/// Runs `func` where the runtime can take it, which fails the same way as it not running.
 fn run(comptime func: anytype, args: anytype) @typeInfo(@TypeOf(func)).@"fn".return_type.? {
     return global().call(func, args) catch error.NotRunning;
 }
@@ -131,15 +131,7 @@ pub const Impl = struct {
     }
 
     pub fn invoke(_: *Loaded, class_name: []const u8, method_name: []const u8, target: usize, args: []const W.ManagedValue) sal.Plain(Managed, "invoke") {
-        const g = global();
-        if (!g.running()) return error.NotRunning;
-        const a = scratch.begin();
-        // Unity's own methods only work on its main thread, which the runtime knows
-        const outcome = if (g.rt.attachedHere())
-            invokeOn(&g.rt, a, class_name, method_name, target, args)
-        else
-            run(invokeOn, .{ a, class_name, method_name, target, args });
-        return switch (try outcome) {
+        return switch (try run(invokeOn, .{ scratch.begin(), class_name, method_name, target, args })) {
             .value => |v| v,
             .threw => |why| sal.host().explain(error.Threw, "{s}", .{why}),
         };
@@ -151,12 +143,12 @@ pub const Impl = struct {
         if (!g.running()) return error.NotRunning;
         const lease = held_cleanup.lease(&loaded.owner) orelse return error.Failed;
         defer lease.end();
-        const handle = g.rt.newHandle(@ptrFromInt(object), false);
+        const handle = g.call(Runtime.newHandle, .{ @as(*ManagedRuntime.Object, @ptrFromInt(object)), false }) catch 0;
         if (handle == 0) return error.Failed;
         held_lock.lock();
         defer held_lock.unlock();
         held.put(std.heap.smp_allocator, handle, &loaded.owner) catch {
-            g.rt.freeHandle(handle);
+            g.call(Runtime.freeHandle, .{handle}) catch {};
             return error.Failed;
         };
         return handle;
@@ -169,7 +161,7 @@ pub const Impl = struct {
         // Only its own
         if (owner != &loaded.owner) return;
         _ = held.remove(handle);
-        global().rt.freeHandle(handle);
+        global().call(Runtime.freeHandle, .{handle}) catch {};
     }
 
     pub fn heldAt(loaded: *Loaded, handle: u32) sal.Plain(Managed, "heldAt") {
@@ -180,7 +172,8 @@ pub const Impl = struct {
         // Only its own
         const owner = held.get(handle) orelse return error.NotFound;
         if (owner != &loaded.owner) return error.NotFound;
-        return @intFromPtr(g.rt.handleTarget(handle) orelse return error.NotFound);
+        const at = g.call(Runtime.handleTarget, .{handle}) catch null;
+        return @intFromPtr(at orelse return error.NotFound);
     }
 
     pub fn classOf(_: *Loaded, object: usize) sal.Plain(Managed, "classOf") {
@@ -192,18 +185,11 @@ pub const Impl = struct {
     }
 
     pub fn getField(_: *Loaded, object: usize, field: []const u8) sal.Plain(Managed, "getField") {
-        const g = global();
-        if (!g.running()) return error.NotRunning;
-        const a = scratch.begin();
-        return if (g.rt.attachedHere()) fieldOf(&g.rt, a, object, field) else run(fieldOf, .{ a, object, field });
+        return run(fieldOf, .{ scratch.begin(), object, field });
     }
 
     pub fn setField(_: *Loaded, object: usize, field: []const u8, value: W.ManagedValue) sal.Plain(Managed, "setField") {
-        const g = global();
-        if (!g.running()) return error.NotRunning;
-        const a = scratch.begin();
-        // A Unity object's own fields want its main thread, which the runtime knows
-        return if (g.rt.attachedHere()) setFieldOn(&g.rt, a, object, field, value) else run(setFieldOn, .{ a, object, field, value });
+        return run(setFieldOn, .{ scratch.begin(), object, field, value });
     }
 };
 

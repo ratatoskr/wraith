@@ -66,6 +66,8 @@ tail: ?*Job = null,
 attaches: bool = true,
 /// `Class:Method` names to their code, which stays put once compiled. Under `lock`.
 methods: std.StringHashMapUnmanaged(usize) = .empty,
+/// The runtime's `changes` when `methods` was last known good.
+methods_seen: Atomic(u32) = .init(0),
 /// For joining CoreCLR, which writes a small config file to `clr_dir` first.
 io: ?std.Io = null,
 clr_dir: ?[]const u8 = null,
@@ -186,7 +188,8 @@ pub fn kind(self: *const Managed) ?Kind {
 }
 
 /// Runs `func(rt, args...)` on the attached thread and waits for what it returns. Straight away if
-/// this is that thread.
+/// this thread can call in already, like it being that thread or Unity's main one, which some of
+/// Unity's own methods need.
 pub fn call(self: *Managed, comptime func: anytype, args: anytype) Error!ReturnOf(func) {
     const R = ReturnOf(func);
     const Ctx = struct {
@@ -200,7 +203,7 @@ pub fn call(self: *Managed, comptime func: anytype, args: anytype) Error!ReturnO
     };
     if (!self.running()) return error.NotRunning;
     var ctx: Ctx = .{ .args = args };
-    if (self.thread_id.load(.acquire) == std.Thread.getCurrentId()) {
+    if (self.thread_id.load(.acquire) == std.Thread.getCurrentId() or (self.attaches and self.rt.attachedHere())) {
         Ctx.run(&ctx, &self.rt);
         return ctx.result;
     }
@@ -253,12 +256,7 @@ fn tryStart(self: *Managed, loaded: *bool, started_at: *?u64) void {
         loaded.* = true;
     }
     if (!self.rt.started()) return;
-    const now = sys.thread.tickMs();
-    const since = started_at.* orelse blk: {
-        started_at.* = now;
-        break :blk now;
-    };
-    if (now - since < settle_ms) return;
+    if (sinceSeen(started_at) < settle_ms) return;
     // Only to see it works. Calls attach for as long as they take
     self.rt.detach(self.rt.attach() orelse return);
     self.state.store(.running, .release);
@@ -269,12 +267,8 @@ fn tryStart(self: *Managed, loaded: *bool, started_at: *?u64) void {
 /// helper into it. Its host can refuse while it's still starting the runtime, so this tries again
 /// each poll for a while.
 fn tryJoin(self: *Managed, started_at: *?u64) void {
-    const now = sys.thread.tickMs();
-    const since = started_at.* orelse blk: {
-        started_at.* = now;
-        break :blk now;
-    };
-    if (now - since < settle_ms) return;
+    const so_far = sinceSeen(started_at);
+    if (so_far < settle_ms) return;
     const io = self.io orelse return self.fail("Wraith can't join the game's CoreCLR without a folder for its config", .{});
     const dir = self.clr_dir orelse return self.fail("Wraith can't join the game's CoreCLR without a folder for its config", .{});
     var messages: std.Io.Writer.Allocating = .init(gpa);
@@ -286,15 +280,25 @@ fn tryJoin(self: *Managed, started_at: *?u64) void {
             error.NotHostedByFxr => self.fail("The game started its CoreCLR without hostfxr, so Wraith can't join it", .{}),
             error.InitFailed => if (status == clr.fxr.status.host_incompatible_config or status == clr.fxr.status.framework_missing)
                 self.fail("The game's .NET is older than 10, which Wraith needs to read it: {s}", .{messages.written()})
-            else if (now - since < join_timeout_ms) {} else self.fail("Wraith couldn't join the game's CoreCLR (hostfxr 0x{x}): {s}", .{ @as(u32, @bitCast(status)), messages.written() }),
+            else if (so_far < join_timeout_ms) {} else self.fail("Wraith couldn't join the game's CoreCLR (hostfxr 0x{x}): {s}", .{ @as(u32, @bitCast(status)), messages.written() }),
             // Its DLL's loaded, but it hasn't started a runtime yet
-            error.NotRunning => if (now - since < join_timeout_ms) {} else self.fail("The game loaded CoreCLR but never started it", .{}),
+            error.NotRunning => if (so_far < join_timeout_ms) {} else self.fail("The game loaded CoreCLR but never started it", .{}),
             else => self.fail("Wraith couldn't read the game's CoreCLR: {t}", .{err}),
         };
     };
     self.rt = .{ .coreclr = cc };
     self.state.store(.running, .release);
     log.info("The game's CoreCLR is running", .{});
+}
+
+/// How long since the runtime was first seen, which is now the first time.
+fn sinceSeen(started_at: *?u64) u64 {
+    const now = sys.thread.tickMs();
+    const first = started_at.* orelse blk: {
+        started_at.* = now;
+        break :blk now;
+    };
+    return now - first;
 }
 
 fn fail(self: *Managed, comptime message: []const u8, args: anytype) void {
@@ -451,14 +455,18 @@ fn methodCode(rt: *const Runtime, class_name: []const u8, method: []const u8) ?u
 pub fn methodAddress(self: *Managed, name: []const u8) ?usize {
     const parts = splitMethodName(name) orelse return null;
     if (!self.running()) return null;
+    self.forgetStale();
     {
         self.lock.lockShared();
         defer self.lock.unlockShared();
         if (self.methods.get(name)) |at| return at;
     }
+    const seen = self.rt.changes();
     const at = (self.call(methodCode, .{ parts.class, parts.method }) catch return null) orelse return null;
     self.lock.lock();
     defer self.lock.unlock();
+    // Something unloaded while it looked, so it may be gone already
+    if (self.rt.changes() != seen or self.methods_seen.load(.acquire) != seen) return at;
     const key = gpa.dupe(u8, name) catch return at;
     const entry = self.methods.getOrPut(gpa, key) catch {
         gpa.free(key);
@@ -473,9 +481,22 @@ pub fn methodAddress(self: *Managed, name: []const u8) ?usize {
 pub fn cachedMethodAddress(self: *Managed, name: []const u8) ?usize {
     _ = splitMethodName(name) orelse return null;
     if (!self.running()) return null;
+    self.forgetStale();
     self.lock.lockShared();
     defer self.lock.unlockShared();
     return self.methods.get(name);
+}
+
+/// Drops methods' code once the runtime says it could be gone, like a plugin a mod loader unloaded.
+fn forgetStale(self: *Managed) void {
+    const now = self.rt.changes();
+    if (self.methods_seen.load(.acquire) == now) return;
+    self.lock.lock();
+    defer self.lock.unlock();
+    var it = self.methods.iterator();
+    while (it.next()) |e| gpa.free(e.key_ptr.*);
+    self.methods.clearRetainingCapacity();
+    self.methods_seen.store(now, .release);
 }
 
 /// Why a `Class:Method` name wasn't found, for address problems. Null if it's not one.
