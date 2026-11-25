@@ -57,6 +57,7 @@ pub const Impl = struct {
         return switch (k) {
             .mono => .mono,
             .il2cpp => .il2cpp,
+            .coreclr => .coreclr,
         };
     }
 
@@ -517,9 +518,9 @@ fn objectClass(rt: *const Runtime, address: usize) E!*Class {
     const word = @sizeOf(usize);
     if (address == 0 or !mem.isReadable(address, 2 * word)) return error.Unreadable;
     const header = mem.Memory.local.load(usize, address) catch return error.Unreadable;
-    // IL2CPP's header is the class. Mono's is a vtable, whose first word is the class
+    // IL2CPP's and CoreCLR's header is the class. Mono's is a vtable, whose first word is the class
     const class_at = switch (rt.*) {
-        .il2cpp => header,
+        .il2cpp, .coreclr => header,
         .mono => if (header != 0 and mem.isReadable(header, word)) mem.Memory.local.load(usize, header) catch return error.Unreadable else return error.Unreadable,
     };
     if (class_at == 0 or !mem.isReadable(class_at, class_bytes)) return error.Unreadable;

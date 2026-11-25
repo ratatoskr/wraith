@@ -125,7 +125,11 @@ pub fn create(allocator: std.mem.Allocator, info: *const RuntimeInfo) !*Runtime 
     self.previous_recorder = memory.scans.setRecorder(Names.recordOwn);
     errdefer _ = memory.scans.setRecorder(self.previous_recorder);
     // Before plugins, so they find the game's C# as soon as it's running
-    Managed.global.start();
+    {
+        const clr_dir = try locations.path(allocator, "cache" ++ std.fs.path.sep_str ++ "coreclr");
+        defer allocator.free(clr_dir);
+        Managed.global.start(io, clr_dir);
+    }
     errdefer Managed.global.stop();
 
     const before_rendering = info.flagsOf() & RuntimeInfo.flag_before_rendering != 0;

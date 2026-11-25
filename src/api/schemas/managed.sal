@@ -18,7 +18,7 @@ error ManagedError {
     Threw,
 }
 
-enum ManagedKind : u8 { none, mono, il2cpp }
+enum ManagedKind : u8 { none, mono, il2cpp, coreclr }
 
 // Which of `ManagedValue`'s fields it is.
 enum ManagedValueKind : u8 { none, flag, integer, number, text, object }

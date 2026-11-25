@@ -1,6 +1,6 @@
-//! The game's C# runtime, Mono or IL2CPP, for Unity games and others that run C#. Calling in from a
-//! thread the runtime doesn't know can crash it, so one thread of ours makes every call, attached
-//! while it does. Others hand it work with `call` and wait.
+//! The game's C# runtime, Mono, IL2CPP or CoreCLR, for Unity games, .NET games and mod loaders like
+//! Dalamud. Calling in from a thread the runtime doesn't know can crash it, so one thread of ours
+//! makes every call, attached while it does. Others hand it work with `call` and wait.
 
 const Managed = @This();
 
@@ -43,6 +43,10 @@ pub const Error = error{NotRunning};
 /// still setting it up.
 const settle_ms = 1000;
 
+/// How long CoreCLR's host can keep refusing to be joined, while it's still starting, before we
+/// give up.
+const join_timeout_ms = 30_000;
+
 state: Atomic(State) = .init(.off),
 /// The runtime's DLL, once it's loaded. 0 till then.
 found: Atomic(usize) = .init(0),
@@ -62,14 +66,19 @@ tail: ?*Job = null,
 attaches: bool = true,
 /// `Class:Method` names to their code, which stays put once compiled. Under `lock`.
 methods: std.StringHashMapUnmanaged(usize) = .empty,
+/// For joining CoreCLR, which writes a small config file to `clr_dir` first.
+io: ?std.Io = null,
+clr_dir: ?[]const u8 = null,
 
 const Watched = struct { name: []const u8, kind: Kind };
 const watched = blk: {
     const il2cpp = tuft_managed.il2cpp_modules;
     const mono = tuft_managed.mono_modules;
-    var list: [il2cpp.len + mono.len]Watched = undefined;
+    const coreclr = tuft_managed.coreclr_modules;
+    var list: [il2cpp.len + mono.len + coreclr.len]Watched = undefined;
     for (il2cpp, 0..) |n, i| list[i] = .{ .name = n, .kind = .il2cpp };
     for (mono, 0..) |n, i| list[il2cpp.len + i] = .{ .name = n, .kind = .mono };
+    for (coreclr, 0..) |n, i| list[il2cpp.len + mono.len + i] = .{ .name = n, .kind = .coreclr };
     break :blk list;
 };
 
@@ -95,8 +104,10 @@ const Job = struct {
     next: ?*Job = null,
 };
 
-/// Watches for the runtime's DLL and starts the attached thread. Does nothing if it can't.
-pub fn start(self: *Managed) void {
+/// Watches for the runtime's DLL and starts the attached thread. Does nothing if it can't. `io` and
+/// `clr_dir`, a folder Wraith can write to, are for joining CoreCLR. The folder's copied.
+pub fn start(self: *Managed, io: std.Io, clr_dir: []const u8) void {
+    self.useCoreClr(io, clr_dir);
     if (!self.begin()) return;
     // After the thread, since a DLL that's already loaded fires straight away
     for (watched, &self.watch_ctx, &self.watches) |m, *ctx, *w| {
@@ -105,11 +116,19 @@ pub fn start(self: *Managed) void {
     }
 }
 
-/// Like `start`, for a runtime that's already loaded at `base`, without watching for others.
+/// Like `start`, for a runtime that's already loaded at `base`, without watching for others. Call
+/// `useCoreClr` first for CoreCLR.
 pub fn startOn(self: *Managed, k: Kind, base: usize) void {
     self.found_kind.store(@backingInt(k), .release);
     self.found.store(base, .release);
     _ = self.begin();
+}
+
+/// What joining CoreCLR needs. The folder's copied.
+pub fn useCoreClr(self: *Managed, io: std.Io, clr_dir: []const u8) void {
+    self.io = io;
+    if (self.clr_dir) |d| gpa.free(d);
+    self.clr_dir = gpa.dupe(u8, clr_dir) catch null;
 }
 
 fn begin(self: *Managed) bool {
@@ -150,6 +169,8 @@ pub fn stop(self: *Managed) void {
     self.methods.deinit(gpa);
     self.methods = .empty;
     self.lock.unlock();
+    if (self.clr_dir) |d| gpa.free(d);
+    self.clr_dir = null;
     self.found.store(0, .release);
     self.state.store(.off, .release);
 }
@@ -221,6 +242,7 @@ fn tryStart(self: *Managed, loaded: *bool, started_at: *?u64) void {
     const base = self.found.load(.acquire);
     if (base == 0) return;
     const k: Kind = @fromBackingInt(@intCast(self.found_kind.load(.acquire)));
+    if (k == .coreclr) return self.tryJoin(started_at);
     if (!loaded.*) {
         var missing: []const u8 = "";
         self.rt = Runtime.fromModule(k, base, &missing) catch {
@@ -241,6 +263,43 @@ fn tryStart(self: *Managed, loaded: *bool, started_at: *?u64) void {
     self.rt.detach(self.rt.attach() orelse return);
     self.state.store(.running, .release);
     log.info("The game's {s} is running", .{label(k)});
+}
+
+/// CoreCLR has no exports to read, so we join it through the game's own host and load tuft's
+/// helper into it. Its host can refuse while it's still starting the runtime, so this tries again
+/// each poll for a while.
+fn tryJoin(self: *Managed, started_at: *?u64) void {
+    const now = sys.thread.tickMs();
+    const since = started_at.* orelse blk: {
+        started_at.* = now;
+        break :blk now;
+    };
+    if (now - since < settle_ms) return;
+    const io = self.io orelse return self.fail("Wraith can't join the game's CoreCLR without a folder for its config", .{});
+    const dir = self.clr_dir orelse return self.fail("Wraith can't join the game's CoreCLR without a folder for its config", .{});
+    var messages: std.Io.Writer.Allocating = .init(gpa);
+    defer messages.deinit();
+    const cc = tuft_managed.CoreClr.open(gpa, io, .{ .dir = dir, .messages = &messages.writer }) catch |err| {
+        const clr = tuft_managed.coreclr.clr;
+        const status = clr.lastStatus();
+        return switch (err) {
+            error.NotHostedByFxr => self.fail("The game started its CoreCLR without hostfxr, so Wraith can't join it", .{}),
+            error.InitFailed => if (status == clr.fxr.status.host_incompatible_config or status == clr.fxr.status.framework_missing)
+                self.fail("The game's .NET is older than 10, which Wraith needs to read it: {s}", .{messages.written()})
+            else if (now - since < join_timeout_ms) {} else self.fail("Wraith couldn't join the game's CoreCLR (hostfxr 0x{x}): {s}", .{ @as(u32, @bitCast(status)), messages.written() }),
+            // Its DLL's loaded, but it hasn't started a runtime yet
+            error.NotRunning => if (now - since < join_timeout_ms) {} else self.fail("The game loaded CoreCLR but never started it", .{}),
+            else => self.fail("Wraith couldn't read the game's CoreCLR: {t}", .{err}),
+        };
+    };
+    self.rt = .{ .coreclr = cc };
+    self.state.store(.running, .release);
+    log.info("The game's CoreCLR is running", .{});
+}
+
+fn fail(self: *Managed, comptime message: []const u8, args: anytype) void {
+    log.warn(message, args);
+    self.state.store(.failed, .release);
 }
 
 /// Attached only while it has calls, since the game closing waits for every thread its runtime
@@ -267,6 +326,7 @@ pub fn label(k: Kind) []const u8 {
     return switch (k) {
         .il2cpp => "IL2CPP",
         .mono => "Mono",
+        .coreclr => "CoreCLR",
     };
 }
 
@@ -470,4 +530,31 @@ test "Class:Method names" {
     try testing.expectEqual(null, m.methodAddress("Player:Update"));
     try testing.expectEqualStrings("the game's C# runtime isn't running", m.whyMissing("Player:Update").?);
     try testing.expectEqual(null, m.whyMissing("kernel32.dll"));
+}
+
+test "joins a CoreCLR and finds its methods by name" {
+    // Started here like a .NET game would, then found the way the game's is
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(dir);
+    _ = tuft_managed.CoreClr.open(gpa, testing.io, .{ .dir = dir, .start = true }) catch |err| switch (err) {
+        error.NoDotnet => return error.SkipZigTest,
+        else => return err,
+    };
+    const base = sys.module.findBase(tuft_managed.coreclr_modules[0]) orelse return error.NoCoreClr;
+
+    var m: Managed = .{};
+    m.useCoreClr(testing.io, dir);
+    m.startOn(.coreclr, base);
+    defer m.stop();
+    var waited: u32 = 0;
+    while (!m.running() and waited < 10_000) : (waited += 10) sys.thread.sleepMs(10);
+    try testing.expect(m.running());
+    try testing.expectEqual(.coreclr, m.kind().?);
+    try testing.expectEqualStrings("CoreCLR", label(m.kind().?));
+
+    const at = m.methodAddress("System.String:IsNullOrEmpty") orelse return error.NoMethod;
+    try testing.expectEqual(at, m.cachedMethodAddress("System.String:IsNullOrEmpty").?);
+    try testing.expectEqual(null, m.methodAddress("System.String:NoSuchMethod"));
 }
