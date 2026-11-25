@@ -1,0 +1,15 @@
+{
+  "$schema": "https://hub.wraith.io/schema/v1/wraith.json",
+  "id": "example_cs_aot",
+  "kind": "plugin",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "provider": "cs",
+  "title": "Example (C#, NativeAOT)",
+  "summary": "Free shopping, Mira on demand and tailing without being seen, for Trails beyond the Horizon. Written in C#, compiled with NativeAOT.",
+  "arches": ["x64"],
+  "game": {
+    "exes": ["kai.exe"],
+    "ids": ["steam-3316940", "gog-1501307817", "epic-4636399b6c414feaa48112aa66abf19c"]
+  }
+}

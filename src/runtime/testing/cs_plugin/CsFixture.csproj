@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Built by build.zig, with the SDK's C# that `wraith sdk cs types` makes in $(WraithCs) -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>wraith_cs_fixture</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Plugin.cs" />
+    <!-- Its path is from where the build started -->
+    <Compile Include="$([MSBuild]::NormalizeDirectory($(MSBuildStartupDirectory), $(WraithCs)))*.cs" />
+  </ItemGroup>
+</Project>

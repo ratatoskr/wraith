@@ -14,6 +14,7 @@ const Loaded = @import("Loaded.zig");
 const Known = @import("Known.zig");
 const Op = @import("Jobs.zig").Op;
 const discovery = @import("discovery.zig");
+const dotnet = @import("dotnet.zig");
 const host = @import("../host/root.zig");
 const Manifest = @import("../Manifest.zig");
 const sal = api.salamander;
@@ -31,6 +32,29 @@ pub fn run(loader: *PluginLoader, op: Op, name: []const u8) !void {
         .unload => unloadNow(loader, name),
         .reload => reloadNow(loader, name),
         .rescan => discovery.scan(loader),
+        .wake => loadWaiting(loader),
+    };
+}
+
+/// Loads the plugins that were waiting for .NET, now that it's running.
+fn loadWaiting(loader: *PluginLoader) void {
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |n| loader.allocator.free(n);
+        names.deinit(loader.allocator);
+    }
+    {
+        loader.known.lock.lockShared();
+        defer loader.known.lock.unlockShared();
+        for (loader.known.items.items) |k| {
+            if (k.state != .waiting) continue;
+            const copy = loader.allocator.dupe(u8, k.name) catch continue;
+            names.append(loader.allocator, copy) catch loader.allocator.free(copy);
+        }
+    }
+    for (names.items) |name| _ = loadNow(loader, name) catch |err| switch (err) {
+        error.AlreadyLoaded, error.WaitingForDotnet => {},
+        else => log.err("Couldn't load plugin {s}: {t}", .{ name, err }),
     };
 }
 
@@ -62,7 +86,11 @@ pub fn loadNow(loader: *PluginLoader, name: []const u8) !*Loaded {
         }
         return reason;
     }
-    // First, since a kind can come from a plugin it depends on
+    if (dotnet.mustWait(known)) {
+        known.setState(&loader.known, .waiting, null);
+        log.info("Plugin {s} waits for the game's .NET to start", .{known.name});
+        return error.WaitingForDotnet;
+    }
     try loadDepends(loader, known);
     const runner = findRunner(loader, known.name, known.provider.?) catch |err| {
         known.setState(&loader.known, .failed, err);
@@ -84,29 +112,33 @@ pub fn loadNow(loader: *PluginLoader, name: []const u8) !*Loaded {
     return loaded;
 }
 
-/// The `PluginKind` provided as `wraith.kind.<name>`, by the runtime or a plugin.
+/// The `PluginKind` the runtime provides as `wraith.kind.<name>`. Only the runtime's, since the
+/// languages themselves are Salamander's.
 fn findRunner(loader: *PluginLoader, plugin: []const u8, name: []const u8) error{KindNotFound}!Loaded.Runner {
     var buf: [128]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "wraith.kind.{s}", .{name}) catch return error.KindNotFound;
     // Kinds are lowercase, and manifests may not be
     _ = std.ascii.lowerString(key, key);
-    const k = sal.host().get(host.wraith.PluginKind, key, 1) orelse {
-        log.err("Plugin {s} needs the {s} kind, which nothing provides", .{ plugin, name });
-        return error.KindNotFound;
-    };
-    return .{ .kind = k, .maker = makerOf(loader, k.table) };
+    const k = sal.host().get(host.wraith.PluginKind, key, 1) orelse return kindNotFound(plugin, name);
+    if (pluginMade(loader, k.table)) return kindNotFound(plugin, name);
+    return .{ .kind = k };
 }
 
-/// The loaded plugin whose owner guards `table`. Null for ones the runtime made.
-fn makerOf(loader: *PluginLoader, table: ?*const anyopaque) ?*Loaded {
-    const o = sal.headerOf(table orelse return null).owner orelse return null;
+fn kindNotFound(plugin: []const u8, name: []const u8) error{KindNotFound} {
+    log.err("Plugin {s} is for {s}, which Wraith doesn't run", .{ plugin, name });
+    return error.KindNotFound;
+}
+
+/// Whether a loaded plugin's owner guards `table`, rather than the runtime's.
+fn pluginMade(loader: *PluginLoader, table: ?*const anyopaque) bool {
+    const o = sal.headerOf(table orelse return false).owner orelse return false;
     loader.known.lock.lockShared();
     defer loader.known.lock.unlockShared();
     for (loader.known.items.items) |k| {
         const loaded = k.loaded orelse continue;
-        if (loaded.owner.salamanderMade() == o) return loaded;
+        if (loaded.owner.salamanderMade() == o) return true;
     }
-    return null;
+    return false;
 }
 
 pub const DependError = error{ MissingDependency, DependencyOff, DependencyFailed, DependencyTooOld, DependencyCycle };
@@ -193,7 +225,8 @@ fn freeNames(loader: *PluginLoader, names: [][]u8) void {
 }
 
 fn reloadNow(loader: *PluginLoader, name: []const u8) !void {
-    // What its kinds run and what depends on it go with it, so they come back after
+    try refusePinned(loader, name, "reloaded");
+    // What depends on it goes with it, so it comes back after
     const was_loaded = try loadedPlugins(loader);
     defer freeNames(loader, was_loaded);
     unloadNow(loader, name) catch |err| if (err != error.NotLoaded) return err;
@@ -212,13 +245,41 @@ fn unloadNow(loader: *PluginLoader, name: []const u8) !void {
         if (k.loaded == null) return error.NotLoaded;
         break :blk k;
     };
+    try refusePinned(loader, name, "turned off");
     unloadKnown(loader, known);
+}
+
+/// Fails if unloading `name` would unload a NativeAOT plugin, it or one that depends on it, since
+/// those stay till the game closes.
+fn refusePinned(loader: *PluginLoader, name: []const u8, what: []const u8) error{StaysLoaded}!void {
+    loader.known.lock.lockShared();
+    defer loader.known.lock.unlockShared();
+    const k = Known.find(&loader.known, name) orelse return;
+    const stuck = pinnedFrom(loader, k, 0) orelse return;
+    if (stuck == k) {
+        log.err("Plugin {s} is compiled with NativeAOT, so it can't be {s} till the game restarts", .{ name, what });
+    } else {
+        log.err("Plugin {s} can't be {s} till the game restarts, since {s} needs it, and that's compiled with NativeAOT", .{ name, what, stuck.name });
+    }
+    return error.StaysLoaded;
+}
+
+/// `known` or a loaded plugin that depends on it, if one's pinned. Needs the list's lock.
+fn pinnedFrom(loader: *PluginLoader, known: *Known, depth: usize) ?*Known {
+    const loaded = known.loaded orelse return null;
+    if (loaded.pinned()) return known;
+    // Dependency cycles can't load, but don't trust that
+    if (depth > 32) return null;
+    for (loader.known.items.items) |k| {
+        if (k == known or k.loaded == null or !k.dependsOn(known.name)) continue;
+        if (pinnedFrom(loader, k, depth + 1)) |p| return p;
+    }
+    return null;
 }
 
 pub fn unloadKnown(loader: *PluginLoader, known: *Known) void {
     known.setState(&loader.known, .unloading, null);
-    // What its kinds run goes first, and plugins go before what they need
-    while (loadedGuestOf(loader, known.loaded.?)) |guest| unloadKnown(loader, guest);
+    // Plugins go before what they need
     while (loadedDependentOf(loader, known)) |dependent| unloadKnown(loader, dependent);
     const loaded = blk: {
         loader.known.lock.lock();
@@ -228,16 +289,6 @@ pub fn unloadKnown(loader: *PluginLoader, known: *Known) void {
     };
     destroy(loader, loaded);
     known.setState(&loader.known, .unloaded, null);
-}
-
-fn loadedGuestOf(loader: *PluginLoader, maker: *Loaded) ?*Known {
-    loader.known.lock.lockShared();
-    defer loader.known.lock.unlockShared();
-    for (loader.known.items.items) |k| {
-        const loaded = k.loaded orelse continue;
-        if (loaded.maker() == maker) return k;
-    }
-    return null;
 }
 
 fn loadedDependentOf(loader: *PluginLoader, known: *const Known) ?*Known {

@@ -5,6 +5,7 @@ const std = @import("std");
 const core = @import("wraith_core");
 const api = @import("wraith_api");
 const salamander_schema = @import("salamander_schema");
+const salamander_cs = @import("salamander_cs");
 const types = @import("salamander_types");
 const build_info = @import("build_info");
 
@@ -30,17 +31,25 @@ pub const usage =
     \\                                       wraith.lua, salamander.lua, schema.lua, traits.lua,
     \\                                       one per dependency, and globals.lua with --globals.
     \\                                       Writes .luarc.json pointing there if there isn't one
+    \\  sdk cs types [--out <folder>] [--pointer-size 4|8] [--namespace NS] [<file.sal | folder> ...]
+    \\                                       C# for a C# plugin, for its .csproj to compile, in
+    \\                                       <folder> (default .wraith/cs): Wraith's API in
+    \\                                       Ratatoskr.Wraith, the SDK's WraithPlugin, Salamander's
+    \\                                       runtime, and Schema.cs for its schemas and those of
+    \\                                       plugins it depends on, in NS (default its id in
+    \\                                       PascalCase)
     \\  sdk deps [--json] [--offline]       where the plugins wraith.json here depends on are: a
     \\                                       dev plugin, a folder by its name next to this one,
     \\                                       installed, or downloaded from the hub into the cache
     \\                                       (not with --offline)
-    \\  sdk js info, sdk lua info            this wraith, as JSON, for a plugin's build or editor:
+    \\  sdk js info, sdk lua info, sdk cs info
+    \\                                       this wraith, as JSON, for a plugin's build or editor:
     \\                                       its version, folder (dir), mods_dir (where
     \\                                       installed mods go), and the apiVersion range it loads
     \\                                       (api_version, min_api_version)
 ;
 
-const Language = enum { js, lua };
+const Language = enum { js, lua, cs };
 
 pub fn run(ctx: ops.Context, args: anytype) !u8 {
     var arena_state: std.heap.ArenaAllocator = .init(ctx.allocator);
@@ -61,6 +70,8 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
             options.out = args.next() orelse return usageError();
         } else if (std.mem.eql(u8, arg, "--globals")) {
             options.globals = true;
+        } else if (std.mem.eql(u8, arg, "--namespace")) {
+            options.namespace = args.next() orelse return usageError();
         } else if (std.mem.eql(u8, arg, "--offline")) {
             options.offline = true;
         } else if (std.mem.eql(u8, arg, "--pointer-size")) {
@@ -119,13 +130,17 @@ fn info(ctx: ops.Context, arena: std.mem.Allocator) !u8 {
 }
 
 const Options = struct {
-    out: []const u8 = ".wraith/types",
+    const default_out = ".wraith/types";
+
+    out: []const u8 = default_out,
     pointer_size: u8 = 8,
     globals: bool = false,
     /// Don't download dependencies from the hub.
     offline: bool = false,
     /// Plugins its manifest depends on, each a module of the [Service] traits in its schemas.
     depends: []const []const u8 = &.{},
+    /// C#'s for its schemas. Its id in PascalCase if empty.
+    namespace: []const u8 = "",
 };
 
 /// Wraith's own typings, then the `schema` module's from Wraith's schema with the plugin's, and a
@@ -151,6 +166,10 @@ fn writeTypes(ctx: ops.Context, arena: std.mem.Allocator, language: Language, op
         try collectDependency(arena, io, f, &files);
     }
     options.depends = names;
+    if (language == .cs) {
+        if (std.mem.eql(u8, options.out, Options.default_out)) options.out = ".wraith/cs";
+        if (options.namespace.len == 0) options.namespace = try namespaceOf(arena, io);
+    }
     const made = generate(arena, language, options, files.items) catch |err| switch (err) {
         error.InvalidSchema => return 1,
         else => return err,
@@ -239,8 +258,65 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
                 try list.append(arena, .{ .name = "globals.lua", .text = w.written() });
             }
         },
+        .cs => {
+            try list.append(arena, .{ .name = "Salamander.cs", .text = salamander_cs.base_file });
+            try list.append(arena, .{ .name = "WraithPlugin.cs", .text = @embedFile("WraithPlugin.cs") });
+            var w: std.Io.Writer.Allocating = .init(arena);
+            try salamander_cs.writeCore(arena, &w.writer, options.pointer_size);
+            try list.append(arena, .{ .name = "SalamanderCore.cs", .text = w.written() });
+            w = .init(arena);
+            try salamander_cs.write(arena, wraith.schema, &w.writer, .{ .label = "wraith.sal", .namespace = cs_namespace, .class = "Api" }, &diag);
+            try list.append(arena, .{ .name = "Wraith.cs", .text = w.written() });
+            // Its own, with Wraith's files named like plugin builds name them, so they're used from Wraith.cs
+            const renamed = try std.mem.replaceOwned(u8, arena, api.wraith_sal, "\n" ++ salamander_schema.Schema.bundle_marker, "\n" ++ salamander_schema.Schema.bundle_marker ++ "wraith/");
+            const text = try std.mem.concat(arena, u8, &.{ salamander_schema.Schema.bundle_marker ++ "wraith/", renamed[salamander_schema.Schema.bundle_marker.len..], "\n", own });
+            var mine = salamander_schema.parse(arena, text, parse_options, &diag) catch |err| {
+                if (err == error.InvalidSchema) log.err("{s}", .{diag.message()});
+                return err;
+            };
+            defer mine.deinit();
+            w = .init(arena);
+            salamander_cs.write(arena, mine.schema, &w.writer, .{
+                .label = "its schemas",
+                .namespace = options.namespace,
+                .class = "Schema",
+                .source = mine.source,
+                .aliases = &.{.{ .prefix = "wraith/", .namespace = cs_namespace }},
+            }, &diag) catch |err| {
+                if (err == error.NameClash) log.err("{s}", .{diag.message()});
+                return if (err == error.NameClash) error.InvalidSchema else err;
+            };
+            try list.append(arena, .{ .name = "Schema.cs", .text = w.written() });
+        },
     }
     return list.items;
+}
+
+/// Where Wraith's API goes in C#. Not `Wraith`, since its root's called that.
+const cs_namespace = "Ratatoskr.Wraith";
+
+/// The plugin's id from its wraith.json in PascalCase, like `TrailsHorizon`, or `Plugin` without one.
+fn namespaceOf(arena: std.mem.Allocator, io: std.Io) ![]const u8 {
+    const text = std.Io.Dir.cwd().readFileAlloc(io, core.manifest.file_name, arena, .limited(1 << 20)) catch return "Plugin";
+    const m = std.json.parseFromSliceLeaky(struct { id: []const u8 = "" }, arena, text, .{ .ignore_unknown_fields = true }) catch return "Plugin";
+    return pascal(arena, m.id);
+}
+
+/// The C# namespace for a plugin's id, like `TrailsHorizon`.
+pub fn pascal(arena: std.mem.Allocator, id: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var up = true;
+    for (id) |c| {
+        if (!std.ascii.isAlphanumeric(c)) {
+            up = true;
+            continue;
+        }
+        try out.append(arena, if (up) std.ascii.toUpper(c) else c);
+        up = false;
+    }
+    if (out.items.len == 0) return "Plugin";
+    if (std.ascii.isDigit(out.items[0])) try out.insert(arena, 0, '_');
+    return out.items;
 }
 
 /// A [Service] trait in one of `plugin`'s files.
@@ -341,9 +417,14 @@ test "typings for Wraith's whole schema and a plugin's" {
         .{ .lua, "globals.lua", "---@type Frame\nframe = nil" },
         .{ .lua, "schema.lua", "---The one playing\n---@class schema.Player" },
         .{ .lua, "schema.lua", "function c:heal(amount) end" },
+        .{ .cs, "Wraith.cs", "namespace Ratatoskr.Wraith\n" },
+        .{ .cs, "WraithPlugin.cs", "public abstract class WraithPlugin" },
+        .{ .cs, "SalamanderCore.cs", "namespace Salamander.Raw\n" },
+        .{ .cs, "Schema.cs", "public static global::Kai.Player* Instance() => *(global::Kai.Player**)global::Salamander.Declared.Address(\"Player.instance\");" },
+        .{ .cs, "Schema.cs", "    public void Heal(uint amount)" },
     };
     for (std.enums.values(Language)) |language| {
-        const made = try generate(arena, language, .{ .globals = true }, &.{game});
+        const made = try generate(arena, language, .{ .globals = true, .namespace = "Kai" }, &.{game});
         for (want) |w| {
             if (w[0] != language) continue;
             const text = for (made) |m| {

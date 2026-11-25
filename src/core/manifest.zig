@@ -1,5 +1,5 @@
 //! A package's manifest, `wraith.json` at the top of its folder. The hub has its schema, at
-//! https://hub.wraith.io/schema/v1/wraith.json. Plugins, projects and providers all use it.
+//! https://hub.wraith.io/schema/v1/wraith.json. Plugins and projects both use it.
 
 const std = @import("std");
 
@@ -80,7 +80,17 @@ pub const GameEngine = struct {
     }
 };
 
-pub const Kind = enum { plugin, project, provider };
+pub const Kind = enum { plugin, project };
+
+/// What a `cs` plugin does about .NET when no CoreCLR is running yet.
+pub const ClrMode = enum {
+    /// Joins the game's CoreCLR, else starts the installed .NET.
+    load,
+    /// Never starts one. It starts once one's running, like a mod loader's that comes later.
+    wait,
+    /// Only runs where one's running already as it loads, else it isn't loaded.
+    provided,
+};
 
 /// The version of Wraith's API this Wraith has. It goes up when plugins and projects need
 /// updating for it, and packages say which they're made for with `apiVersion`.
@@ -125,6 +135,8 @@ pub const Manifest = struct {
     gameEngine: ?GameEngine = null,
     arches: ?[]const Arch = null,
     provider: ?[]const u8 = null,
+    /// For `cs` plugins, see `ClrMode`.
+    clrMode: ClrMode = .load,
     autoLoad: bool = true,
     library: bool = false,
     depends: []const []const u8 = &.{},
@@ -185,6 +197,7 @@ pub const Manifest = struct {
             } = null,
             arches: ?[]const Arch = null,
             provider: ?[]const u8 = null,
+            clrMode: ?ClrMode = null,
             autoLoad: ?bool = null,
             library: ?bool = null,
             depends: ?[]const []const u8 = null,
@@ -211,6 +224,7 @@ pub const Manifest = struct {
             .gameEngine = if (self.gameEngine) |e| .{ .id = e.id, .variants = list(e.variants) } else null,
             .arches = self.arches,
             .provider = text(self.provider),
+            .clrMode = if (self.clrMode == .load) null else self.clrMode,
             .autoLoad = if (self.autoLoad) null else false,
             .library = if (self.library) true else null,
             .depends = list(self.depends),

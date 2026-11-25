@@ -309,6 +309,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/runtime/testing/foreign.zig"), .target = target, .optimize = optimize }),
     }).getEmittedBin());
     test_options.addOptionPath("crashhandler", addCrashHandler(b, main).getEmittedBin());
+    addCsPlugin(b, main, test_options);
     main.runtime.addOptions("test_options", test_options);
     {
         const tests = b.addTest(.{ .name = "wraith_crashhandler_tests", .root_module = crashHandlerModule(b, main) });
@@ -372,6 +373,43 @@ const installed_arches = [_]struct { dir: []const u8, cpu: std.Target.Cpu.Arch }
     .{ .dir = "x64", .cpu = .x86_64 },
     .{ .dir = "x86", .cpu = .x86 },
 };
+
+/// The C# plugin the `cs` kind's tests load, `cs_plugin` in `options`, the DLL in its build's folder.
+/// Its SDK's made by `wraith sdk cs types`, then built with the dotnet SDK. Only with `-Dcs-tests`,
+/// since that needs the SDK and takes a while. Empty otherwise, and the tests are skipped.
+fn addCsPlugin(b: *std.Build, mods: Modules, options: *std.Build.Step.Options) void {
+    const wanted = b.option(bool, "cs-tests", "Build a C# plugin with the dotnet SDK for the cs kind's tests") orelse false;
+    const dotnet = (if (wanted) b.findProgram(.{ .names = &.{"dotnet"} }) else null) orelse {
+        if (wanted) std.debug.panic("-Dcs-tests needs the dotnet SDK on PATH", .{});
+        options.addOption([]const u8, "cs_plugin", "");
+        return;
+    };
+    const folder = "src/runtime/testing/cs_plugin";
+    const cli = b.addExecutable(.{ .name = "wraith-cs-sdk", .root_module = mods.cli });
+    const gen = b.addRunArtifact(cli);
+    gen.setCwd(b.path(folder));
+    gen.addArgs(&.{ "sdk", "cs", "types", "--out" });
+    const sdk_cs = gen.addOutputDirectoryArg("cs");
+    gen.addFileInput(b.path(folder ++ "/wraith.json"));
+    gen.addFileInput(b.path(folder ++ "/schemas/cs.sal"));
+    // It lists what it wrote
+    _ = gen.captureStdOut(.{});
+
+    const run = b.addSystemCommand(&.{ dotnet, "build" });
+    run.addFileArg(b.path(folder ++ "/CsFixture.csproj"));
+    run.addArgs(&.{ "--nologo", "-v", "quiet", "-clp:ErrorsOnly;NoSummary", "-c", "Release", "-o" });
+    const out = run.addOutputDirectoryArg("cs_plugin");
+    // Keeps obj out of the source tree
+    run.addArg("--artifacts-path");
+    _ = run.addOutputDirectoryArg("artifacts");
+    run.addPrefixedDirectoryArg("-p:WraithCs=", sdk_cs);
+    run.addFileInput(b.path(folder ++ "/Plugin.cs"));
+    run.setEnvironmentVariable("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
+    run.setEnvironmentVariable("DOTNET_NOLOGO", "1");
+    // dotnet writes its errors to stdout
+    run.stdio = .inherit;
+    options.addOptionPath("cs_plugin", out.path(b, "wraith_cs_fixture.dll"));
+}
 
 fn addCrashHandler(b: *std.Build, mods: Modules) *std.Build.Step.Compile {
     const arch = if (mods.target.result.cpu.arch == .x86) "x86" else "x64";
@@ -609,8 +647,11 @@ const Modules = struct {
             .{ .name = "wraith_api", .module = api },
             .{ .name = "salamander_schema", .module = salamander_dep.module("salamander_schema") },
             .{ .name = "salamander_types", .module = salamander_dep.module("salamander_types") },
+            .{ .name = "salamander_cs", .module = salamander_dep.module("salamander_cs") },
         }, true);
         cli.addOptions("build_info", build_info);
+        // The C# SDK's own code, which `sdk cs types` writes next to the generated API
+        cli.addAnonymousImport("WraithPlugin.cs", .{ .root_source_file = b.path("src/sdk/cs/WraithPlugin.cs") });
 
         return .{ .b = b, .target = target, .optimize = optimize, .core = core, .platform = platform, .ui = ui, .api = api, .api_zig = api_zig, .sdk = sdk, .runtime = runtime, .bootstrap = bootstrap, .proxies = proxies, .game = game, .registry = registry, .importer = importer, .cli = cli, .tuft = tuft };
     }

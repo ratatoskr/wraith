@@ -1,11 +1,11 @@
 # Wraith
-/.wraith/
+.wraith/
 /.tmp-**
 
 # Zig
-/.zig-cache/
-/zig-out/
-/zig-pkg/
+.zig-cache/
+zig-out/
+zig-pkg/
 
 # General
 *.temp

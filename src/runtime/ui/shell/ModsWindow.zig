@@ -307,11 +307,12 @@ fn drawTags(row: Row) void {
         tag(amber, std.fmt.bufPrint(&buf, "Over installed {s}", .{if (o.version.len > 0) o.version else "copy"}) catch "Over installed copy");
     }
     if (row.plugin) |p| switch (p.state) {
-        .loaded => tag(green, "On"),
+        .loaded => tag(green, if (p.pinned) "On till the game closes" else "On"),
         .loading => tag(amber, "Loading"),
         .unloading => tag(amber, "Unloading"),
         .failed => tag(red, "Failed"),
         .unsupported => tag(amber, if (p.last_error != null and p.last_error.? == error.OutdatedApi) "Outdated" else "Can't run here"),
+        .waiting => tag(amber, "Waiting for .NET"),
         .unloaded => tag(.{ 0.6, 0.6, 0.6, 1 }, "Off"),
     };
     if (row.listed) |l| {
@@ -363,7 +364,8 @@ fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
         }
     };
     if (row.plugin) |p| switch (p.state) {
-        .loaded => {
+        // NativeAOT C# can't be unloaded, so it can't be turned off or reloaded either
+        .loaded => if (!p.pinned) {
             if (ui.button(icons.rotate_ccw ++ "  Reload")) self.startOn(shell, .reload, id);
             ui.sameLine();
             if (ui.button(icons.power ++ "  Turn off")) self.startOn(shell, .unload, id);

@@ -15,6 +15,7 @@ const Known = @import("plugins/Known.zig");
 const Jobs = @import("plugins/Jobs.zig");
 const discovery = @import("plugins/discovery.zig");
 const lifecycle = @import("plugins/lifecycle.zig");
+const Managed = @import("Managed.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
@@ -86,13 +87,21 @@ pub fn init(allocator: std.mem.Allocator, io: std.Io, paths: Paths) PluginLoader
     };
     var buf: [260]u8 = undefined;
     if (memory.Module.main().name(&buf)) |exe| self.executable.set(exe);
-    // Built-in kinds, found through the registry like any plugin's
+    // Wraith's kinds, found through the registry. Only these run plugins
     @import("plugins/native.zig").provide();
     @import("plugins/scripts.zig").provide();
+    @import("plugins/dotnet.zig").provide();
     return self;
 }
 
+/// Queues loading the plugins waiting for .NET. On whatever thread found it, so it only queues.
+fn coreClrReady(ctx: *anyopaque) void {
+    const self: *PluginLoader = @ptrCast(@alignCast(ctx));
+    _ = self.job(.wake, "") catch {};
+}
+
 pub fn deinit(self: *PluginLoader) void {
+    Managed.global.listen(self, null);
     self.jobs.stop();
     self.op_lock.lock();
     defer self.op_lock.unlock();
@@ -115,6 +124,7 @@ pub fn deinit(self: *PluginLoader) void {
 
 /// Finds and loads plugins, before anything else uses the loader.
 pub fn start(self: *PluginLoader, skip: []const []const u8) !void {
+    Managed.global.listen(self, coreClrReady);
     self.op_lock.lock();
     defer self.op_lock.unlock();
     try discovery.scan(self);
@@ -144,7 +154,7 @@ pub fn start(self: *PluginLoader, skip: []const []const u8) !void {
             // Something that needed it loaded it already
             error.AlreadyLoaded => {},
             // Already logged by `loadNow`
-            error.UnsupportedGame, error.UnsupportedArch, error.NeedsNewerWraith, error.Revoked, error.OutdatedApi, error.KindNotFound => {},
+            error.UnsupportedGame, error.UnsupportedArch, error.NeedsNewerWraith, error.Revoked, error.OutdatedApi, error.KindNotFound, error.WaitingForDotnet => {},
             error.MissingDependency, error.DependencyOff, error.DependencyFailed, error.DependencyTooOld, error.DependencyCycle => {},
             else => log.err("Couldn't load plugin {s}: {t}", .{ name, err }),
         };
@@ -171,7 +181,7 @@ pub fn rescan(self: *PluginLoader) !Job {
     return self.job(.rescan, "");
 }
 
-/// Reloading a plugin reloads what its kinds run, and what depends on it, too.
+/// Reloading a plugin reloads what depends on it, too.
 pub fn job(self: *PluginLoader, op: Op, name: []const u8) !Job {
     return self.jobs.add(op, name);
 }
@@ -269,34 +279,19 @@ const tests = struct {
         try testing.expectEqual(1, sal.host().get(Counter, "fixture.counter", 1).?.next());
     }
 
-    test "plugins can run through a kind another plugin provides" {
+    test "only Wraith's own kinds run plugins, not ones plugins provide" {
         const options = @import("test_options");
-        const sal = @import("salamander_runtime");
-        const Stats = @import("wraith_test_fixture").FixtureKindStats;
         var install: Install = undefined;
         try install.init(.{ .plugins = &.{.{ "fixture", options.fixture_plugin }} });
         defer install.deinit();
         try install.addScript("guest", "fixture");
         try install.pluginManifest("guest", "\"provider\": \"fixture\", \"depends\": [\"fixture\"]");
-        const loader = &install.loader;
-        try loader.start(&.{});
+        const saved = @import("wraith_core").log.mute(&.{.plugin});
+        defer @import("wraith_core").log.setFilter(saved);
+        try install.loader.start(&.{});
 
-        try testing.expectEqual(.loaded, install.info("guest").?.state);
-        const stats = sal.host().get(Stats, "fixture.kind", 1).?;
-        try testing.expectEqual(1, stats.starts());
-        try testing.expect(stats.sawWraith());
-        // Scripts and the like have no module
-        try testing.expectEqual(0, install.info("guest").?.library);
-
-        try (try loader.unload("guest")).wait();
-        try testing.expectEqual(1, stats.stops());
-        try testing.expectEqual(1, stats.unloads());
-
-        // Its kind's maker can't go first, so unloading it takes the guest too
-        try (try loader.load("guest")).wait();
-        try testing.expectEqual(2, stats.starts());
-        try (try loader.unload("fixture")).wait();
-        try testing.expectEqual(.unloaded, install.info("guest").?.state);
+        try testing.expectEqual(.loaded, install.info("fixture").?.state);
+        try testing.expectEqual(.failed, install.info("guest").?.state);
     }
 
     test "script plugins run on Salamander, with Wraith's areas" {
@@ -689,7 +684,6 @@ const tests = struct {
     // Starts a CoreCLR here, like a .NET game would. Skipped without .NET 10.
     test "script plugins call the C# their schemas declare" {
         const host = @import("host/root.zig");
-        const Managed = @import("Managed.zig");
         const tuft_managed = @import("tuft_managed");
         const sys = @import("tuft_sys");
         host.wraith.setIo(testing.io);
@@ -747,6 +741,90 @@ const tests = struct {
         try testing.expectEqual(.loaded, install.info("cs_js").?.state);
         try testing.expectEqual(.loaded, install.info("cs_lua").?.state);
         try testing.expectEqual(Out{ .js_length = 12, .js_parsed = 42, .lua_length = 13, .lua_parsed = -7 }, out);
+    }
+
+    test "C# plugins built with NativeAOT load as native ones, and stay loaded" {
+        const options = @import("test_options");
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "fixture", options.fixture_plugin }} });
+        defer install.deinit();
+        try install.addScript("base", "lua");
+        try install.pluginManifest("fixture", "\"provider\": \"cs\", \"depends\": [\"base\"]");
+        const loader = &install.loader;
+        try loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("fixture").?.state);
+        try testing.expect(install.info("fixture").?.library != 0);
+        try testing.expect(install.info("fixture").?.pinned);
+
+        // Its runtime's threads never leave its DLL, so loading it again would only load another copy
+        try testing.expectError(error.StaysLoaded, (try loader.unload("fixture")).wait());
+        try testing.expectError(error.StaysLoaded, (try loader.reload("fixture")).wait());
+        try testing.expectError(error.StaysLoaded, (try loader.unload("base")).wait());
+        try testing.expectEqual(.loaded, install.info("fixture").?.state);
+        try testing.expectEqual(.loaded, install.info("base").?.state);
+    }
+
+    // Starts a CoreCLR, the installed .NET's, unless another test did. Only with -Dcs-tests, which builds its plugin.
+    test "C# plugins run by CoreCLR, in a context of their own each load" {
+        const options = @import("test_options");
+        if (options.cs_plugin.len == 0) return error.SkipZigTest;
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        var clr = testing.tmpDir(.{});
+        defer clr.cleanup();
+        const clr_dir = try clr.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+        defer testing.allocator.free(clr_dir);
+        Managed.global.useCoreClr(testing.io, clr_dir);
+        const Out = extern struct { first: u32 = 0, second: u32 = 0 };
+        var out: Out = .{};
+
+        var install: Install = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const io = testing.io;
+        try install.tmp.dir.createDirPath(io, "plugins/cs_fixture/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cs_fixture/schemas/cs.sal", .data = "[Service] trait CsService { u32 next(); }" });
+        try install.pluginManifest("cs_fixture", "\"provider\": \"cs\"");
+        var built = try std.Io.Dir.cwd().openDir(io, std.fs.path.dirname(options.cs_plugin).?, .{ .iterate = true });
+        defer built.close(io);
+        var files = built.iterate();
+        while (try files.next(io)) |f| {
+            if (f.kind != .file) continue;
+            const sub = try std.fmt.allocPrint(testing.allocator, "plugins/cs_fixture/{s}", .{f.name});
+            defer testing.allocator.free(sub);
+            try built.copyFile(f.name, install.tmp.dir, sub, io, .{});
+        }
+        try install.tmp.dir.createDirPath(io, "plugins/user/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/schemas/out.sal", .data = "struct Out { u32 first; u32 second; }" });
+        try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"cs_fixture\"]");
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local s = require("cs_fixture").CsService
+            \\local out = require("schema").Out.at({d})
+            \\out.first = s:next()
+            \\out.second = s:next()
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/main.lua", .data = lua });
+
+        const loader = &install.loader;
+        try loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("cs_fixture").?.state);
+        try testing.expectEqual(.loaded, install.info("user").?.state);
+        try testing.expectEqual(Out{ .first = 1, .second = 2 }, out);
+
+        // Its dependents reload with it, and its counter starts over
+        out = .{};
+        try (try loader.reload("cs_fixture")).wait();
+        try testing.expectEqual(.loaded, install.info("user").?.state);
+        try testing.expectEqual(Out{ .first = 1, .second = 2 }, out);
+
+        try (try loader.unload("user")).wait();
+        try (try loader.unload("cs_fixture")).wait();
+        try testing.expectEqual(.unloaded, install.info("cs_fixture").?.state);
     }
 
     test "script sessions get every loaded plugin's services, on the thread they ask for" {

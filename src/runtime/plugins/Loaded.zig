@@ -50,11 +50,9 @@ pub const Echo = struct {
     write: *const fn (ctx: *anyopaque, level: std.log.Level, text: []const u8) void,
 };
 
-/// The `PluginKind` from Salamander's registry that runs it, from `maker` or built in. The plugin that
-/// made it stays loaded while this is.
+/// The `PluginKind` the runtime provides that runs it.
 pub const Runner = struct {
     kind: sal.Object(host_api.wraith.PluginKind) = .{},
-    maker: ?*Loaded = null,
     plugin: sal.Object(host_api.wraith.Plugin) = .{},
 };
 
@@ -77,13 +75,14 @@ pub fn prefix(self: *const Loaded) []const u8 {
     return self.project orelse self.name;
 }
 
-/// The plugin that made its kind, which has to outlive it.
-pub fn maker(self: *const Loaded) ?*Loaded {
-    return self.runner.maker;
-}
-
 pub fn library(self: *const Loaded) usize {
     return self.runner.plugin.module();
+}
+
+/// A C# plugin compiled with NativeAOT. Its DLL has .NET's runtime in it, whose threads never
+/// leave, so it can't be unloaded, and loading it again would only load a second copy beside it.
+pub fn pinned(self: *const Loaded) bool {
+    return std.ascii.eqlIgnoreCase(self.manifest.providerName(), "cs") and self.library() != 0;
 }
 
 /// Its `Wraith`, like for running the SDK as it in tests.

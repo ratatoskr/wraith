@@ -27,52 +27,13 @@ const Count = struct {
 
 var count: Count = .{};
 
-/// A plugin kind, `wraith.kind.fixture`, for guests whose manifest names it.
+/// A plugin kind, `wraith.kind.fixture`, which the loader refuses, since only Wraith's own run plugins.
 const W = sdk.wraith.types;
 const PluginKind = W.PluginKind;
-const GuestPlugin = W.Plugin;
-const Stats = schema.FixtureKindStats;
 
 const Kind = struct {
-    n_starts: u32 = 0,
-    n_stops: u32 = 0,
-    n_unloads: u32 = 0,
-    saw_wraith: bool = false,
-
-    pub fn start(self: *Kind, guest: W.Guest) sdk.salamander.rt.Plain(PluginKind, "start") {
-        const rt = sdk.salamander.rt;
-        self.n_starts += 1;
-        self.saw_wraith = guest.wraith.settings().table != null;
-        return sdk.salamander.own(GuestPlugin.init(self, rt.implement(GuestPlugin, Running))) catch error.Failed;
-    }
-
-    pub fn starts(self: *Kind) u32 {
-        return self.n_starts;
-    }
-    pub fn stops(self: *Kind) u32 {
-        return self.n_stops;
-    }
-    pub fn unloads(self: *Kind) u32 {
-        return self.n_unloads;
-    }
-    pub fn sawWraith(self: *Kind) bool {
-        return self.saw_wraith;
-    }
-};
-
-/// One guest the kind's running.
-const Running = struct {
-    pub fn stop(k: *Kind) void {
-        k.n_stops += 1;
-    }
-    pub fn unload(k: *Kind) void {
-        k.n_unloads += 1;
-    }
-    pub fn module(_: *Kind) usize {
-        return 0;
-    }
-    pub fn service(_: *Kind, _: []const u8) sdk.salamander.rt.AnyObject {
-        return .{};
+    pub fn start(_: *Kind, _: W.Guest) sdk.salamander.rt.Plain(PluginKind, "start") {
+        return error.Failed;
     }
 };
 
@@ -94,7 +55,6 @@ pub const Plugin = struct {
         const rt = sdk.salamander.rt;
         try sdk.salamander.provide("fixture.counter", 1, Counter.init(&count, rt.implement(Counter, Count)));
         try sdk.salamander.provide("wraith.kind.fixture", 1, PluginKind.init(&kind, rt.implement(PluginKind, Kind)));
-        try sdk.salamander.provide("fixture.kind", 1, Stats.init(&kind, rt.implement(Stats, Kind)));
         try ctx.spawn(waitForever, .{ self, ctx.io });
     }
 

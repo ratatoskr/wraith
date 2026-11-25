@@ -236,6 +236,7 @@ pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
     try known.setDepends(loader.allocator, manifest.value.depends);
     known.about = .of(manifest);
     known.auto_load = manifest.value.autoLoad;
+    known.clr_mode = manifest.value.clrMode;
     if (known.provider) |old| loader.allocator.free(old);
     known.provider = provider;
     if (known.dir) |old| loader.allocator.free(old);

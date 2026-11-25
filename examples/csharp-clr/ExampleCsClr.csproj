@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Run by .NET, the game's or the installed one. Wraith finds it by this name -->
+    <AssemblyName>wraith_example_cs_clr</AssemblyName>
+    <!-- Its dependencies go beside it, where Wraith looks for them -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <PublishDir>dist/</PublishDir>
+    <DefaultItemExcludes>$(DefaultItemExcludes);dist/**</DefaultItemExcludes>
+    <!-- The WRAITH environment variable can point at a wraith.exe -->
+    <Wraith Condition="'$(Wraith)' == ''">wraith</Wraith>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="wraith.json;schemas/*.sal" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Wraith's API and the schemas as C#, in .wraith/cs, made again when they change -->
+  <Target Name="WraithTypes" BeforeTargets="BeforeBuild" Inputs="wraith.json;@(None)" Outputs=".wraith/cs/Schema.cs">
+    <Exec Command="&quot;$(Wraith)&quot; sdk cs types" />
+  </Target>
+  <Target Name="WraithSources" AfterTargets="WraithTypes" BeforeTargets="BeforeBuild">
+    <ItemGroup>
+      <Compile Include=".wraith/cs/*.cs" />
+    </ItemGroup>
+  </Target>
+</Project>

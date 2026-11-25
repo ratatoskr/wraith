@@ -139,6 +139,11 @@
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,31}$"
     },
+    "clrMode": {
+      "description": "C# plugins run by the cs provider only. What to do when no .NET is running yet: load joins the game's, else starts the installed .NET 10. wait starts the plugin once one's running, like a mod loader's. provided only loads it where one's running already.",
+      "enum": ["load", "wait", "provided"],
+      "default": "load"
+    },
     "autoLoad": {
       "description": "Plugins only. False waits for someone to load it.",
       "type": "boolean"
@@ -174,6 +179,7 @@
     "properties": {
       "arches": { "description": "Projects can't set this.", "not": {} },
       "provider": { "description": "Projects can't set this.", "not": {} },
+      "clrMode": { "description": "Projects can't set this.", "not": {} },
       "autoLoad": { "description": "Projects can't set this.", "not": {} },
       "library": { "description": "Projects can't set this.", "not": {} }
     }

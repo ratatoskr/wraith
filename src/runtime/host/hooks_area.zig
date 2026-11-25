@@ -123,6 +123,24 @@ fn native(loaded: *Loaded, target: usize, slot: bool, to: usize, options: W.Hook
     return .init(h, t.hook);
 }
 
+/// Generated fn values, like C#'s, leave the trait hash 0, so it's `call`'s signature that has to match.
+fn sameFn(have: *const sal.Info, want: *const sal.Info) bool {
+    if (have.methods.len != 1 or want.methods.len != 1) return false;
+    const a = have.methods.ptr orelse return false;
+    const b = want.methods.ptr orelse return false;
+    return a[0].sig == b[0].sig;
+}
+
+test "generated fn values match by their call's signature, not the trait hash" {
+    var call = [_]sal.MethodInfo{.{ .name = .init("call"), .sig = 0x1234 }};
+    var other = [_]sal.MethodInfo{.{ .name = .init("call"), .sig = 0x5678 }};
+    const bound: sal.Info = .{ .hash = 0xABCD, .name = .init("fn"), .methods = .{ .ptr = &call, .len = 1 } };
+    const generated: sal.Info = .{ .hash = 0, .name = .init("fn"), .methods = .{ .ptr = &call, .len = 1 } };
+    const wrong: sal.Info = .{ .hash = 0, .name = .init("fn"), .methods = .{ .ptr = &other, .len = 1 } };
+    try std.testing.expect(sameFn(&generated, &bound));
+    try std.testing.expect(!sameFn(&wrong, &bound));
+}
+
 fn nativeEnter() callconv(.c) W.HookCall {
     const call = host.hooks.enter(nobody);
     return .{ .hook = @intFromPtr(call.hook), .original = call.trampoline, .context = call.user_data, .entered = call.entered };
@@ -147,7 +165,7 @@ fn typed(loaded: *Loaded, target: usize, slot: bool, signature: []const u8, hand
         return hookError(err);
     };
     const table = handler.table orelse return sal.host().explain(error.WrongHandler, "there's no handler", .{});
-    if (sal.headerOf(table).info.hash != ty.trait.info.hash) {
+    if (!sameFn(sal.headerOf(table).info, ty.trait.info)) {
         sal.host().release(handler);
         return sal.host().explain(error.WrongHandler, "the handler isn't a fn value of `{s}`, like what salamander.fn makes with it", .{signature});
     }

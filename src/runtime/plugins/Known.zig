@@ -23,6 +23,8 @@ pub const State = enum {
     failed,
     /// For another game, arch or a newer Wraith.
     unsupported,
+    /// A C# plugin with `clrMode: wait`, till a CoreCLR's running.
+    waiting,
 };
 
 pub const Info = struct {
@@ -39,6 +41,8 @@ pub const Info = struct {
     config_dir: Text(260) = .{},
     game_config_dir: Text(260) = .{},
     library: usize = 0,
+    /// Compiled with NativeAOT, so it stays loaded till the game closes.
+    pinned: bool = false,
     start_ns: u64 = 0,
     /// What it couldn't load without, like `unity@1.2`, when that's why it failed.
     needs: Text(80) = .{},
@@ -74,6 +78,8 @@ provider: ?[]u8 = null,
 dir: ?[]u8 = null,
 loaded: ?*Loaded = null,
 auto_load: bool = true,
+/// What a `cs` plugin does without .NET running.
+clr_mode: core_manifest.ClrMode = .load,
 /// From its manifest, like `unity@1.2`.
 depends: [][]u8 = &.{},
 needs: Text(80) = .{},
@@ -92,6 +98,7 @@ pub fn infoOf(k: *Known, info: *Info) void {
     info.game_config_dir.set(loaded.game_config_dir);
     // Safe since what made its kind stays loaded while it is
     info.library = loaded.library();
+    info.pinned = loaded.pinned();
     info.start_ns = loaded.start_ns;
 }
 

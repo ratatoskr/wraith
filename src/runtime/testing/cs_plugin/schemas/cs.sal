@@ -1,0 +1,2 @@
+// What the C# test plugin offers
+[Service] trait CsService { u32 next(); }

@@ -71,6 +71,16 @@ methods_seen: Atomic(u32) = .init(0),
 /// For joining CoreCLR, which writes a small config file to `clr_dir` first.
 io: ?std.Io = null,
 clr_dir: ?[]const u8 = null,
+/// Wraith started the CoreCLR, for C# plugins, so it's not the game's to read.
+ours: Atomic(bool) = .init(false),
+/// Told once a CoreCLR's running. Under `lock`.
+listener: ?Listener = null,
+
+pub const Listener = struct {
+    ctx: *anyopaque,
+    /// On whatever thread found it, so it mustn't block.
+    ready: *const fn (ctx: *anyopaque) void,
+};
 
 const Watched = struct { name: []const u8, kind: Kind };
 const watched = blk: {
@@ -91,6 +101,7 @@ const Watch = struct {
     fn ready(ctx: ?*anyopaque, base: usize) void {
         const w: *Watch = @ptrCast(@alignCast(ctx.?));
         const self = w.managed;
+        if (w.kind == .coreclr and self.ours.load(.acquire)) return;
         if (self.found.cmpxchgStrong(0, base, .acq_rel, .acquire) != null) return;
         self.found_kind.store(@backingInt(w.kind), .release);
         if (self.wake) |s| s.set();
@@ -289,6 +300,25 @@ fn tryJoin(self: *Managed, started_at: *?u64) void {
     self.rt = .{ .coreclr = cc };
     self.state.store(.running, .release);
     log.info("The game's CoreCLR is running", .{});
+    self.tellCoreClr();
+}
+
+/// Sets who's told once a CoreCLR's running, or with null, stops telling `ctx`.
+pub fn listen(self: *Managed, ctx: *anyopaque, ready: ?*const fn (ctx: *anyopaque) void) void {
+    self.lock.lock();
+    defer self.lock.unlock();
+    if (ready) |r| {
+        self.listener = .{ .ctx = ctx, .ready = r };
+    } else if (self.listener) |l| {
+        if (l.ctx == ctx) self.listener = null;
+    }
+}
+
+/// Tells the listener a CoreCLR's running, the game's or Wraith's own.
+pub fn tellCoreClr(self: *Managed) void {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    if (self.listener) |l| l.ready(l.ctx);
 }
 
 /// How long since the runtime was first seen, which is now the first time.

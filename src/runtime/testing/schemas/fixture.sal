@@ -3,14 +3,6 @@ trait FixtureCounter {
     u32 next();
 }
 
-// What the fixture's plugin kind saw of the guests it ran
-trait FixtureKindStats {
-    u32 starts();
-    u32 stops();
-    u32 unloads();
-    bool sawWraith();
-}
-
 // Offered to plugins that depend on the fixture
 [Service] trait FixtureService {
     u32 next();

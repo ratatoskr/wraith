@@ -1,0 +1,12 @@
+const std = @import("std");
+const wraith = @import("wraith");
+
+pub fn build(b: *std.Build) void {
+    const plugin: wraith.Plugin = .init(b, .{
+        .name = "example_zig",
+        .root_source_file = b.path("src/root.zig"),
+        .target = b.standardTargetOptions(.{}),
+        .optimize = b.standardOptimizeOption(.{}),
+    });
+    plugin.install(b);
+}

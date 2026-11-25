@@ -1,4 +1,4 @@
-//! `wraith new`: starts a plugin in Zig, TypeScript, JavaScript or Lua, with what its language
+//! `wraith new`: starts a plugin in Zig, TypeScript, JavaScript, Lua or C#, with what its language
 //! needs and a wraith.json for the game it's for, found the way `identify` finds it.
 
 const std = @import("std");
@@ -9,23 +9,27 @@ const game_engine = @import("wraith_game").game_engine;
 const build_info = @import("build_info");
 
 const ops = @import("ops.zig");
+const sdk = @import("sdk.zig");
 
 const log = core.log.scoped(.wraith_cli);
 
 pub const usage =
-    \\  new [folder] [--language zig|ts|js|lua] [--game <game.exe | game id>]
+    \\  new [folder] [--language zig|ts|js|lua|cs] [--runtime aot|clr] [--game <game.exe | game id>]
     \\      [--engine [<engine>[:<variant>]]] [--id <id>] [--title <title>] [--summary <text>]
     \\      [--author <name>] [--library] [--dev | --no-dev] [--yes]
     \\                                       start a plugin in <folder>: its code, its build and a
     \\                                       wraith.json, with what the language needs (Zig: zig
-    \\                                       init and fetch, TS/JS: npm create, Lua: its types).
-    \\                                       --game: the game's exe, identified so its ID and exe
-    \\                                       name both go in, or a game ID (see games). --engine:
-    \\                                       every game made with it instead, like unity or
-    \\                                       unity:IL2CPP, or the --game's own with no name.
-    \\                                       Neither is any game. --library: one other plugins use.
-    \\                                       --dev: load it from where it builds while you work on
-    \\                                       it (dev add). Asks for what isn't given, unless --yes
+    \\                                       init and fetch, TS/JS: npm create, Lua and C#: its
+    \\                                       types). --runtime, for C#: aot compiles it with
+    \\                                       NativeAOT, so games need no .NET, clr has .NET run it,
+    \\                                       so it reloads. --game: the game's exe, identified so
+    \\                                       its ID and exe name both go in, or a game ID (see
+    \\                                       games). --engine: every game made with it instead,
+    \\                                       like unity or unity:IL2CPP, or the --game's own with
+    \\                                       no name. Neither is any game. --library: one other
+    \\                                       plugins use. --dev: load it from where it builds
+    \\                                       while you work on it (dev add). Asks for what isn't
+    \\                                       given, unless --yes
 ;
 
 pub const Language = enum {
@@ -33,6 +37,7 @@ pub const Language = enum {
     ts,
     js,
     lua,
+    cs,
 
     fn title(self: Language) []const u8 {
         return switch (self) {
@@ -40,13 +45,23 @@ pub const Language = enum {
             .ts => "TypeScript",
             .js => "JavaScript",
             .lua => "Lua",
+            .cs => "C#",
         };
     }
+};
+
+/// How a C# plugin runs.
+pub const Runtime = enum {
+    /// Compiled with NativeAOT into a native DLL
+    aot,
+    /// Run by .NET, the game's or the installed one
+    clr,
 };
 
 const Options = struct {
     folder: ?[]const u8 = null,
     language: ?Language = null,
+    runtime: ?Runtime = null,
     game: ?[]const u8 = null,
     /// Empty for the game's own.
     engine: ?[]const u8 = null,
@@ -97,12 +112,18 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     const author = options.author orelse try ask.line("Author", "");
     const language = options.language orelse language: {
         if (!interactive) {
-            log.err("Which language? Say with --language zig, ts, js or lua", .{});
+            log.err("Which language? Say with --language zig, ts, js, lua or cs", .{});
             return 1;
         }
         while (true) {
-            const answer = try ask.line("Language: zig, ts, js or lua", "zig");
+            const answer = try ask.line("Language: zig, ts, js, lua or cs", "zig");
             if (std.meta.stringToEnum(Language, answer)) |l| break :language l;
+        }
+    };
+    const runtime: Runtime = if (language != .cs) .aot else options.runtime orelse runtime: {
+        while (true) {
+            const answer = try ask.line("C# runs as aot (compiled, games need no .NET) or clr (.NET runs it, so it reloads)", "aot");
+            if (std.meta.stringToEnum(Runtime, answer)) |r| break :runtime r;
         }
     };
     const game = options.game orelse try ask.line("Game it's for: its exe, or an id from `wraith games` (empty: any game)", "");
@@ -123,18 +144,24 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
             .zig => null,
             .ts, .js => "js",
             .lua => "lua",
+            .cs => "cs",
         },
         .library = options.library,
-        // Only a native plugin is built per arch. Scripts run in either
-        .arches = if (language == .zig) if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null else null,
+        // Scripts run in either. Native plugins build per arch, and C#'s types are for one pointer size
+        .arches = switch (language) {
+            .zig => if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null,
+            .cs => try arena.dupe(core.arch.Arch, &.{target.arch orelse .x64}),
+            .ts, .js, .lua => null,
+        },
     };
-    if (manifest.arches != null) log.printLn("It's {s}, so it builds for {t} only. Take arches out of wraith.json to build both", .{ if (target.arch.? == .x64) "64-bit" else "32-bit", target.arch.? });
+    if (language == .zig and manifest.arches != null) log.printLn("It's {s}, so it builds for {t} only. Take arches out of wraith.json to build both", .{ if (target.arch.? == .x64) "64-bit" else "32-bit", target.arch.? });
 
     log.printLn("", .{});
     const built = switch (language) {
         .zig => try makeZig(ctx, arena, folder, manifest),
         .ts, .js => try makeJs(ctx, arena, cwd, folder, &manifest, language),
         .lua => try makeLua(ctx, arena, folder, manifest),
+        .cs => try makeCs(ctx, arena, folder, manifest, runtime),
     } orelse return 2;
 
     log.printLn("\nMade {s}, a {s} plugin, in {s}", .{ title, language.title(), folder });
@@ -151,6 +178,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
         .zig => log.printLn("  zig build", .{}),
         .ts, .js => log.printLn("  npm install\n  npm run dev", .{}),
         .lua => log.printLn("  (edit main.lua, then Reload it in the Mods window)", .{}),
+        .cs => log.printLn("  dotnet publish", .{}),
     }
     if (!dev) log.printLn("  wraith dev add {s}", .{relative(arena, cwd, built)});
     return 0;
@@ -188,6 +216,8 @@ fn parseArgs(args: anytype) !Options {
             }
         } else if (std.mem.eql(u8, arg, "--language") or std.mem.eql(u8, arg, "--lang")) {
             o.language = std.meta.stringToEnum(Language, args.next() orelse return error.Usage) orelse return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--runtime")) {
+            o.runtime = std.meta.stringToEnum(Runtime, args.next() orelse return error.Usage) orelse return error.Usage;
         } else if (std.mem.eql(u8, arg, "--game")) {
             o.game = args.next() orelse return error.Usage;
         } else if (std.mem.eql(u8, arg, "--id") or std.mem.eql(u8, arg, "--name")) {
@@ -449,6 +479,30 @@ fn makeLua(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manif
     return folder;
 }
 
+/// Its project, code and manifest, then its types. Where it publishes to, or null.
+fn makeCs(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manifest: Manifest, runtime: Runtime) !?[]const u8 {
+    if (toolVersion(ctx, arena, &.{ "dotnet", "--version" }) == null) {
+        log.err("dotnet isn't on your PATH. C# plugins need the .NET 10 SDK: https://dot.net", .{});
+        return null;
+    }
+    const arch = manifest.arches.?[0];
+    const ns = try sdk.pascal(arena, manifest.id);
+    const pointer_size: []const u8 = if (arch == .x86) "4" else "8";
+    const how = switch (runtime) {
+        .aot => try std.fmt.allocPrint(arena, cs_aot, .{ if (arch == .x86) "win-x86" else "win-x64", manifest.id, @tagName(arch) }),
+        .clr => try std.fmt.allocPrint(arena, cs_clr, .{manifest.id}),
+    };
+    try std.Io.Dir.cwd().createDirPath(ctx.io, folder);
+    try writeFile(ctx, folder, try std.fmt.allocPrint(arena, "{s}.csproj", .{ns}), try std.fmt.allocPrint(arena, cs_project, .{ how, pointer_size }));
+    try writeFile(ctx, folder, "Plugin.cs", try std.fmt.allocPrint(arena, cs_plugin, .{ ns, ns }));
+    try writeManifest(ctx, arena, folder, manifest);
+    try writeIgnore(ctx, folder, "bin/\nobj/\ndist/\n.wraith/\n");
+    // So an editor knows Wraith's API before the first build
+    const self = try std.process.executablePathAlloc(ctx.io, arena);
+    if (!runTool(ctx, &.{ self, "sdk", "cs", "types", "--pointer-size", pointer_size }, folder)) log.warn("No C# types yet. The first build makes them", .{});
+    return try std.fs.path.join(arena, &.{ folder, "dist" });
+}
+
 fn writeIgnore(ctx: ops.Context, folder: []const u8, text: []const u8) !void {
     var dir = try std.Io.Dir.cwd().openDir(ctx.io, folder, .{});
     defer dir.close(ctx.io);
@@ -508,6 +562,78 @@ const lua_main =
     \\
 ;
 
+/// How it's built, then the pointer size its types are for.
+const cs_project =
+    \\<Project Sdk="Microsoft.NET.Sdk">
+    \\  <PropertyGroup>
+    \\    <TargetFramework>net10.0</TargetFramework>
+    \\    <Nullable>enable</Nullable>
+    \\    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    \\{s}
+    \\    <PublishDir>dist/</PublishDir>
+    \\    <DefaultItemExcludes>$(DefaultItemExcludes);dist/**</DefaultItemExcludes>
+    \\    <!-- The WRAITH environment variable can point at a wraith.exe -->
+    \\    <Wraith Condition="'$(Wraith)' == ''">wraith</Wraith>
+    \\  </PropertyGroup>
+    \\
+    \\  <ItemGroup>
+    \\    <None Update="wraith.json;schemas/*.sal" CopyToPublishDirectory="PreserveNewest" />
+    \\  </ItemGroup>
+    \\
+    \\  <!-- Wraith's API and the schemas as C#, in .wraith/cs, made again when they change -->
+    \\  <Target Name="WraithTypes" BeforeTargets="BeforeBuild" Inputs="wraith.json;@(None)" Outputs=".wraith/cs/Schema.cs">
+    \\    <Exec Command="&quot;$(Wraith)&quot; sdk cs types --pointer-size {s}" />
+    \\  </Target>
+    \\  <Target Name="WraithSources" AfterTargets="WraithTypes" BeforeTargets="BeforeBuild">
+    \\    <ItemGroup>
+    \\      <Compile Include=".wraith/cs/*.cs" />
+    \\    </ItemGroup>
+    \\  </Target>
+    \\</Project>
+    \\
+;
+
+/// Its runtime, id and arch.
+const cs_aot =
+    \\    <!-- Compiled with NativeAOT into a native DLL, so the game needs no .NET -->
+    \\    <RuntimeIdentifier>{s}</RuntimeIdentifier>
+    \\    <PublishAot>true</PublishAot>
+    \\    <NativeLib>Shared</NativeLib>
+    \\    <AssemblyName>wraith_{s}_{s}</AssemblyName>
+;
+
+const cs_clr =
+    \\    <!-- Run by .NET, the game's or the installed one. Wraith finds it by this name -->
+    \\    <AssemblyName>wraith_{s}</AssemblyName>
+    \\    <!-- Its dependencies go beside it, where Wraith looks for them -->
+    \\    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+;
+
+const cs_plugin =
+    \\using Ratatoskr.Wraith;
+    \\
+    \\namespace {s}
+    \\{{
+    \\    sealed class Main : WraithPlugin
+    \\    {{
+    \\        public override void Start(Context context)
+    \\        {{
+    \\            context.Wraith.Log()?.Info("Hello!");
+    \\        }}
+    \\    }}
+    \\}}
+    \\
+    \\namespace Ratatoskr.Wraith
+    \\{{
+    \\    // The plugin Wraith starts
+    \\    static partial class Entry
+    \\    {{
+    \\        internal static partial WraithPlugin Create() => new global::{s}.Main();
+    \\    }}
+    \\}}
+    \\
+;
+
 const testing = std.testing;
 
 test "ids and titles from a folder's name" {
@@ -560,4 +686,8 @@ test "flags, with --engine's name optional" {
     try testing.expectEqualStrings("kai", b.folder.?);
     var bad: Args = .{ .items = &.{ "--language", "cobol" } };
     try testing.expectError(error.Usage, parseArgs(&bad));
+    var cs: Args = .{ .items = &.{ "--language", "cs", "--runtime", "clr" } };
+    try testing.expectEqual(.clr, (try parseArgs(&cs)).runtime.?);
+    var bad_runtime: Args = .{ .items = &.{ "--runtime", "mono" } };
+    try testing.expectError(error.Usage, parseArgs(&bad_runtime));
 }

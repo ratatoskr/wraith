@@ -26,29 +26,57 @@ const Instance = struct {
 
 const Kind = struct {
     pub fn start(_: *Kind, guest: host.wraith.Guest) sal.Plain(host.wraith.PluginKind, "start") {
-        const loaded = loadedOf(guest) orelse return error.Failed;
-        const instance = load(loaded) catch return error.Failed;
-        errdefer free(instance);
-        // It calls back through its own root, guarded by its own owner
-        const entry = instance.entry.?;
-        const services = allocator.alloc(api.wraith.raw.Service, guest.services.len) catch return error.Failed;
-        defer allocator.free(services);
-        for (guest.services, services) |s, *out| out.* = .{ .plugin = .init(s.plugin), .trait = .init(s.trait), .obj = s.obj };
-        if (!entry.start(sal.host(), .{
-            .wraith = host.wraith.root(loaded),
-            .owner = host.salamander.owner(loaded),
-            .render_queue = host.salamander.renderQueueOf(),
-            .services = .init(services),
-        })) {
-            entry.stop();
-            return error.Failed;
-        }
-        return sal.Object(host.wraith.Plugin).init(instance, running_table);
+        return startNative(guest);
     }
 };
 
+/// Loads its `wraith_<id>_<arch>.dll` and starts it.
+pub fn startNative(guest: host.wraith.Guest) sal.Plain(host.wraith.PluginKind, "start") {
+    const loaded = loadedOf(guest) orelse return error.Failed;
+    const instance = load(loaded) catch return error.Failed;
+    errdefer free(instance);
+    if (!startEntry(loaded, guest, instance.entry.?)) return error.Failed;
+    return sal.Object(host.wraith.Plugin).init(instance, running_table);
+}
+
+/// Starts a plugin from what its `wraith_plugin` gave. Stops it again if it fails.
+pub fn startEntry(loaded: *Loaded, guest: host.wraith.Guest, entry: *const api.NativeEntry) bool {
+    // It calls back through its own root, guarded by its own owner
+    const services = allocator.alloc(api.wraith.raw.Service, guest.services.len) catch return false;
+    defer allocator.free(services);
+    for (guest.services, services) |s, *out| out.* = .{ .plugin = .init(s.plugin), .trait = .init(s.trait), .obj = s.obj };
+    if (entry.start(sal.host(), .{
+        .wraith = host.wraith.root(loaded),
+        .owner = host.salamander.owner(loaded),
+        .render_queue = host.salamander.renderQueueOf(),
+        .services = .init(services),
+    })) return true;
+    entry.stop();
+    return false;
+}
+
+/// What `get` gives, if it's for this Wraith.
+pub fn entryOf(get: *const sdk.PluginEntry, file: []const u8) error{IncompatiblePlugin}!*const api.NativeEntry {
+    const entry = get();
+    if (entry.version != api.native_version) {
+        log.err("{s} was built for another Wraith (native version {d}, this is {d}): rebuild it", .{ file, entry.version, api.native_version });
+        return error.IncompatiblePlugin;
+    }
+    return entry;
+}
+
+/// Whether its folder has a native build of it, like a C# plugin compiled with NativeAOT.
+pub fn hasLibrary(loaded: *const Loaded, io: std.Io) bool {
+    const file = core.arch.native.dllNameAlloc(allocator, loaded.name) catch return false;
+    defer allocator.free(file);
+    const path = std.fs.path.join(allocator, &.{ loaded.copy_dir, file }) catch return false;
+    defer allocator.free(path);
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
 /// Built-in kinds can trust the guest's root to be the runtime's, made for its loaded record.
-fn loadedOf(guest: host.wraith.Guest) ?*Loaded {
+pub fn loadedOf(guest: host.wraith.Guest) ?*Loaded {
     if (guest.wraith.table == null) return null;
     const loaded: *Loaded = @ptrFromInt(guest.wraith.data);
     const t = loaded.wraith orelse return null;
@@ -79,12 +107,7 @@ fn load(loaded: *Loaded) !*Instance {
         return error.NotAPlugin;
     };
     const get: *const sdk.PluginEntry = @ptrFromInt(addr);
-    const entry = get();
-    if (entry.version != api.native_version) {
-        log.err("{s} was built for another Wraith (native version {d}, this is {d}): rebuild it", .{ file, entry.version, api.native_version });
-        return error.IncompatiblePlugin;
-    }
-    instance.entry = entry;
+    instance.entry = try entryOf(get, file);
     return instance;
 }
 

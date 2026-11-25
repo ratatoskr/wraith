@@ -12,7 +12,14 @@ const lifecycle = @import("lifecycle.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
-pub const Op = enum { load, unload, reload, rescan };
+pub const Op = enum {
+    load,
+    unload,
+    reload,
+    rescan,
+    /// Loads the plugins waiting for .NET
+    wake,
+};
 
 pub const Job = struct {
     loader: *PluginLoader,

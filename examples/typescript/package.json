@@ -1,0 +1,16 @@
+{
+  "name": "example_ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wraith-plugin build",
+    "dev": "wraith-plugin dev",
+    "pack": "wraith-plugin pack",
+    "types": "wraith-plugin types"
+  },
+  "devDependencies": {
+    "@ratatoskr.io/plugin-tools": "^0.0.11",
+    "typescript": "^7.0.2"
+  }
+}

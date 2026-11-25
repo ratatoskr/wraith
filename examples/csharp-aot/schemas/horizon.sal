@@ -1,0 +1,19 @@
+// The bits of Trails beyond the Horizon (kai.exe) the example needs. Each language's copy is the same.
+
+// Everything that goes in a save, found where the game reads it.
+[Instance("48 8B 0D ?? ?? ?? ?? 3D", Rip)]
+struct GameStateManager {
+    [Sig("E8 ?? ?? ?? ?? 41 8B 47 ?? 41 89 86", Rip)]
+    bool giveMira(u32 amount);
+
+    // Takes Mira away, like when buying something
+    [Sig("E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? F3 0F 10 36", Rip)]
+    u32 spendMira(u32 amount);
+}
+
+// While tailing someone, the jump past being seen, and where the gauge fills up
+[Sig("76 ?? 48 C7 87 ?? ?? ?? ?? ?? ?? ?? ?? 41 0F 28 F2")]
+static u8 tailing_seen;
+
+[Sig("F3 0F 5F FE 0F 28 B4 24 ?? ?? ?? ?? F3 0F 11 BF")]
+static u8 tailing_gauge;
