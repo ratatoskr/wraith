@@ -47,6 +47,7 @@ const green: ui.Color = .{ 0.45, 0.85, 0.45, 1 };
 const amber: ui.Color = .{ 1, 0.75, 0.3, 1 };
 const red: ui.Color = .{ 1, 0.5, 0.5, 1 };
 const blue: ui.Color = .{ 0.5, 0.75, 1, 1 };
+const mauve: ui.Color = .{ 0.8, 0.65, 0.97, 1 };
 
 /// A plugin the loader knows, a mod on the hub, or both.
 const Row = struct {
@@ -296,7 +297,7 @@ fn drawRow(self: *ModsWindow, shell: *Shell, row: Row) void {
 
 fn drawTags(row: Row) void {
     if (row.listed) |l| if (l.featured) tag(green, "Recommended");
-    if (row.isEssential()) tag(blue, "Engine support");
+    if (row.isEssential()) tag(mauve, "Essential");
     if (row.listed) |l| if (l.library) tag(blue, "Library");
     if (row.isProject()) tag(blue, "Project");
     if (row.dev) tag(blue, "Dev");
