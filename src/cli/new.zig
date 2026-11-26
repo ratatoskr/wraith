@@ -556,6 +556,8 @@ const zig_root =
 ;
 
 const lua_main =
+    \\local Wraith = require("wraith").Wraith
+    \\
     \\Wraith.log():info("Hello!")
     \\
 ;

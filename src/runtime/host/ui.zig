@@ -416,6 +416,7 @@ const tests = struct {
         const files = [_]struct { []const u8, []const u8, []const u8, []const u8 }{
             .{
                 "imgui_js", "js", "main.js",
+                \\import { Wraith } from "wraith";
                 \\const frame = Wraith.frame(), imgui = Wraith.imgui(), ui = Wraith.ui(), log = Wraith.log();
                 \\// Outside a frame it does nothing
                 \\if (imgui.Begin("Early", null, 0) !== false) throw new Error("drew outside a frame");
@@ -443,6 +444,7 @@ const tests = struct {
             },
             .{
                 "imgui_lua", "lua", "main.lua",
+                \\local Wraith = require("wraith").Wraith
                 \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), frame = Wraith.frame() }
                 \\local imgui = wraith.imgui
                 \\local on = { value = false }
@@ -514,6 +516,7 @@ const tests = struct {
         const files = [_]struct { []const u8, []const u8, []const u8, []const u8 }{
             .{
                 "window_js", "js", "main.js",
+                \\import { Wraith } from "wraith";
                 \\const imgui = Wraith.imgui(), ui = Wraith.ui();
                 \\let draws = 0;
                 \\const w = ui.addWindow({ title: "Stats", menu: "Stats", settings: true }, () => {
@@ -526,6 +529,7 @@ const tests = struct {
             },
             .{
                 "window_lua", "lua", "main.lua",
+                \\local Wraith = require("wraith").Wraith
                 \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), frame = Wraith.frame() }
                 \\local w = wraith.ui:addWindow({ title = "Panel" }, function()
                 \\    wraith.imgui:TextUnformatted("hi")

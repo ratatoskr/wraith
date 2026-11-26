@@ -11,14 +11,16 @@ namespace CsFixture
         public uint Next() => ++n;
     }
 
-    sealed class Fixture : WraithPlugin
+    sealed unsafe class Fixture : WraithPlugin
     {
         readonly Counter counter = new();
 
         public override void Start(Context context)
         {
             // Through its areas' Instance, like any plugin. It throws if there are none
-            _ = Hooks.Instance;
+            var hooks = Hooks.Instance;
+            // One more than it gives. The test plants it
+            hooks.Hook(CsFixture.Schema.Fns.Seven, (hook, x) => hook.Original()(x) + 1);
         }
 
         public override AnyObject Service(string trait) => trait == CsService.TraitName ? CsService.From(counter).Raw.AsObject() : default;

@@ -90,13 +90,15 @@ trait Hooks {
     Hook!HookError mid(usize target, MidOptions options, keep MidHandler handler);
     // Sends calls to the function at `target` to `handler` instead, a fn value of `signature`'s type,
     // like `[Thiscall] fn i32 (usize self, f32 amount)`. Scripts make one with `salamander.fn`, and
-    // the signature can use wraith.sal's types.
+    // the signature can use wraith.sal's types. For what the schemas declare, scripts' `hookAt` and
+    // the SDKs' do this typed.
     Hook!HookError detour(usize target, string signature, keep object handler, Hook.Options options);
     // The same for the function pointer at `slot`, like a vtable's, which gets swapped.
     Hook!HookError detourSlot(usize slot, string signature, keep object handler, Hook.Options options);
     // A function or method the plugin's schemas declare, like `Player.heal`, typed as declared. A
     // [Virtual(n)] one swaps its slot in the struct's [VirtualTable]. Scripts make the handler with
-    // `salamander.fn("Player.heal", f)`.
+    // `salamander.fn("Player.heal", f)`. Scripts' `hook` and the SDKs' do this typed, from the
+    // declared function itself.
     Hook!HookError named(string name, keep object handler, Hook.Options options);
     // The context of the hook whose handler's running on this thread, or 0.
     usize context();

@@ -17,3 +17,13 @@ static u8 tailing_seen;
 
 [Sig("F3 0F 5F FE 0F 28 B4 24 ?? ?? ?? ?? F3 0F 11 BF")]
 static u8 tailing_gauge;
+
+// Where the tailing gauge is stored once it's worked out, with the new value in xmm7 and the state in rdi
+[Sig("F3 0F 5F FE 0F 28 B4 24 ?? ?? ?? ?? F3 0F 11 BF", Offset(12))]
+static u8 tailing_gauge_store;
+
+// What's tailing someone
+struct TailingState {
+    // 0 to 1, and they see you once it's full
+    [Offset(0xD4)] f32 gauge;
+}

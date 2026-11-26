@@ -1,5 +1,5 @@
 //! The built-in `js` and `lua` kinds, on Salamander's hosts. A script plugin's folder has `main.js` or
-//! `main.lua`, and reaches Wraith's areas through the `Wraith` global, like `Wraith.settings()`.
+//! `main.lua`, and imports what it uses from the `wraith` module, like `Wraith.settings()`.
 //!
 //! Each runs its main file as it starts, then gets pumped once a frame on the render thread, which
 //! never waits for it, and neither does the game thread. A tick that finds the script busy skips
@@ -85,8 +85,8 @@ const Running = struct {
         return r;
     }
 
-    /// Every namespace at the top as a global, Wraith's areas like `Wraith.ui()`, and what each
-    /// plugin it depends on offers, like `Freecam.camera()`.
+    /// Every namespace at the top in the `wraith` module, Wraith's areas like `Wraith.ui()`, and
+    /// what each plugin it depends on offers, like `Freecam.camera()`.
     fn expose(r: *Running, guest: host.wraith.Guest) !void {
         var services: std.ArrayList(Exposed.Service) = .empty;
         defer services.deinit(allocator);
@@ -170,6 +170,7 @@ pub const Exposed = struct {
     types: ?*const engine.Module = null,
     /// What its schema options point into, kept till `deinit`, after the script's gone.
     arena: ?std.heap.ArenaAllocator = null,
+    language: hosts.Language = .js,
 
     /// A script whose memory and declared names go through Wraith. `self` has to stay put. After a
     /// native promise it carries on through `lanes`, which outlive it, on the thread the promise says.
@@ -177,6 +178,7 @@ pub const Exposed = struct {
     /// names it's given as text are looked for in namespace `home` first, like `Kai`.
     pub fn create(self: *Exposed, language: hosts.Language, gpa: std.mem.Allocator, resolver: hosts.Resolver, report: hosts.Report, lanes: ?*Lanes, schema: []const u8, home: []const u8) !hosts.Script {
         self.arena = .init(allocator);
+        self.language = language;
         const options = try host.schemas.scriptOptions(self.arena.?.allocator(), schema, home);
         return hosts.create(language, .{
             .gpa = gpa,
@@ -195,9 +197,10 @@ pub const Exposed = struct {
         self.arena = null;
     }
 
-    /// Each namespace at the top of its schemas as a global, like `Wraith` and `Kai`, with Wraith's
-    /// areas as `Wraith.ui()` and so on, and each of `services` like `Freecam.camera()`. With
-    /// `bare`, the areas are globals by their own names too, like in Workbench scripts and tweaks.
+    /// Each namespace at the top of its schemas in the `wraith` module, like `Wraith` and `Kai`,
+    /// with Wraith's areas as `Wraith.ui()` and so on, and each of `services` like
+    /// `Freecam.camera()`. Hooks get the typed `hook` and `hookAt`. With `bare`, like in Workbench
+    /// scripts and tweaks, the namespaces are globals and so are the areas by their own names.
     pub fn expose(self: *Exposed, script: hosts.Script, wraith: @FieldType(host.wraith.Guest, "wraith"), schema: []const u8, bare: bool, services: []const Service) !void {
         const types = try script.schema(if (schema.len > 0) schema else api.wraith_sal);
         self.types = types;
@@ -210,8 +213,15 @@ pub const Exposed = struct {
         defer roots.deinit(allocator);
         try roots.append(allocator, .{ .name = "", .schema = types, .trait = host.wraith.Wraith.salamander.name, .obj = .of(wraith) });
         for (services) |s| try roots.append(allocator, .{ .name = "", .schema = types, .trait = s.trait, .obj = s.obj });
-        try script.globals(roots.items);
+        try script.namespaces(module_name, roots.items, bare);
+        try script.extend(types, host.wraith.Hooks.salamander.name, switch (self.language) {
+            .js => @embedFile("hooks.js"),
+            .lua => @embedFile("hooks.lua"),
+        });
     }
+
+    /// What scripts import, like `import { Wraith } from "wraith"`.
+    pub const module_name = "wraith";
 
     /// A plugin's [Service] object, by its trait's full name.
     pub const Service = struct { trait: []const u8, obj: sal.AnyObject };

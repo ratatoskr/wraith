@@ -56,6 +56,43 @@ public sealed class Context
     }
 }
 
+/// <summary>Typed hooks on what the schemas declare, like the other languages have.</summary>
+public partial class Hooks
+{
+    /// <summary>
+    /// Hooks a function the schemas declare, like GameStateManager.Fns.SpendMira. The handler takes its
+    /// arguments, and the hook's details first if it wants them, like (hook, self, amount) => ...
+    /// </summary>
+    public Hook Hook<H, W>(DeclaredFunction<H, W> target, H handler, Hook.Options? options = null) where H : Delegate where W : Delegate =>
+        Named(target.Name, target.Lower(handler), options ?? new())!;
+
+    public Hook Hook<H, W>(DeclaredFunction<H, W> target, W handler, Hook.Options? options = null) where H : Delegate where W : Delegate
+    {
+        var cell = new HookCell { Context = options?.Context ?? 0 };
+        return Ready(Named(target.Name, target.Lower(handler, cell), Off(options))!, cell, options);
+    }
+
+    /// <summary>The same at an address of your own, typed like target.</summary>
+    public Hook HookAt<H, W>(nuint address, DeclaredFunction<H, W> target, H handler, Hook.Options? options = null) where H : Delegate where W : Delegate =>
+        Detour(address, target.Name, target.Lower(handler), options ?? new())!;
+
+    public Hook HookAt<H, W>(nuint address, DeclaredFunction<H, W> target, W handler, Hook.Options? options = null) where H : Delegate where W : Delegate
+    {
+        var cell = new HookCell { Context = options?.Context ?? 0 };
+        return Ready(Detour(address, target.Name, target.Lower(handler, cell), Off(options))!, cell, options);
+    }
+
+    // Made off, so nothing calls the handler before it knows the original
+    static Hook.Options Off(Hook.Options? options) => new() { Context = options?.Context ?? 0, Disabled = true };
+
+    static Hook Ready(Hook made, HookCell cell, Hook.Options? options)
+    {
+        cell.Original = made.Original();
+        if (options?.Disabled != true) made.Enable();
+        return made;
+    }
+}
+
 /// <summary>Where Wraith starts the plugin, the same for the cs kind and NativeAOT.</summary>
 public static unsafe partial class Entry
 {

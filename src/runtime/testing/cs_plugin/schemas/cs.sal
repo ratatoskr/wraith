@@ -1,2 +1,5 @@
 // What the C# test plugin offers
 [Service] trait CsService { u32 next(); }
+
+// Planted by the cs kind's test, x times 7
+[Sig("B8 07 F0 57 7E")] i32 seven(i32 x);

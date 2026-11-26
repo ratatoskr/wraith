@@ -318,8 +318,9 @@ const tests = struct {
         const files = [_]struct { []const u8, []const u8, []const u8, []const u8 }{
             .{
                 "hello_js", "js", "main.js",
-                \\const settings = Wraith.settings(), frame = Wraith.frame(), log = Wraith.log();
+                \\import { Wraith } from "wraith";
                 \\import { double } from "shared";
+                \\const settings = Wraith.settings(), frame = Wraith.frame(), log = Wraith.log();
                 \\const fov = settings.add({ id: "fov", kind: "number", min: 60, max: 120, has_default: true, default_value: { number: 90 } }, null);
                 \\let ticks = 0;
                 \\frame.onFrame(() => { ticks++; fov.set({ number: double(30) + ticks }); });
@@ -327,6 +328,7 @@ const tests = struct {
             },
             .{
                 "hello_lua", "lua", "main.lua",
+                \\local Wraith = require("wraith").Wraith
                 \\local settings = Wraith.settings()
                 \\local shared = require("shared")
                 \\settings:add({ id = "speed", kind = "toggle", has_default = true, default_value = { toggle = true } }, nil)
@@ -391,8 +393,9 @@ const tests = struct {
         try install.init(.{});
         defer install.deinit();
         const js = try std.fmt.allocPrint(testing.allocator,
-            \\const hooks = Wraith.hooks();
+            \\import {{ Wraith }} from "wraith";
             \\import {{ fn, native }} from "salamander";
+            \\const hooks = Wraith.hooks();
             \\const sig = "fn i32 (i32 a, i32 b)";
             \\let original;
             \\const h = hooks.detour({d}, sig, fn(sig, (a, b) => original(a, b) * 10 + hooks.context()), {{ context: 7 }});
@@ -400,7 +403,7 @@ const tests = struct {
         , .{@intFromPtr(&jsTarget)});
         defer testing.allocator.free(js);
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local sal = require("salamander")
+            \\local sal, Wraith = require("salamander"), require("wraith").Wraith
             \\local sig = "fn i32 (i32 a, i32 b)"
             \\local original
             \\local h = Wraith.hooks():detour({d}, sig, sal.fn(sig, function(a, b) return original(a, b) + 1 end), {{}})
@@ -524,13 +527,12 @@ const tests = struct {
             \\}
         });
         const js = try std.fmt.allocPrint(testing.allocator,
-            \\import {{ fn, native }} from "salamander";
+            \\import {{ native }} from "salamander";
+            \\import {{ Wraith, NamedJs }} from "wraith";
             \\const hooks = Wraith.hooks(), declared = Wraith.schema();
             \\const Manager = NamedJs.Manager;
-            \\let original;
-            \\const h = hooks.named("four", fn("four", (x) => original(x) + 1), {{}});
-            \\original = native("four", h.original());
-            \\if (native("five", declared.address("five"))(3) !== 15) throw new Error("five");
+            \\hooks.hook(NamedJs.four, (hook, x) => hook.original()(x) + 1);
+            \\if (native(NamedJs.five, declared.address("five"))(3) !== 15) throw new Error("five");
             \\const m = Manager.at({d});
             \\m.level = NamedJs.answer;
             \\m.bump();
@@ -542,11 +544,10 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/named_lua");
         try install.pluginManifest("named_lua", "\"provider\": \"lua\", \"depends\": [\"named_js\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local sal = require("salamander")
-            \\local game = NamedJs
-            \\local original
-            \\local h = Wraith.hooks():named("NamedJs.five", sal.fn("NamedJs.five", function(x) return original(x) * 2 end), {{}})
-            \\original = sal.native("NamedJs.five", h:original())
+            \\local wraith = require("wraith")
+            \\local game = wraith.NamedJs
+            \\-- The hook comes by its name, wherever it is
+            \\wraith.Wraith.hooks():hook(game.five, function(x, hook) return hook.original()(x) * 2 end)
             \\local m = game.Manager.at({d})
             \\m.level = game.answer
             \\m:bump()
@@ -606,6 +607,7 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/counter");
         try install.pluginManifest("counter", "\"provider\": \"lua\", \"depends\": [\"tally\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local Tally = require("wraith").Tally
             \\local tally = Tally.tally()
             \\local out = Tally.Out.at({d})
             \\tally:watch({{ saw = function(self, n) out.seen = n end }})
@@ -664,6 +666,7 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/user");
         try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"fixture\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local Fixture = require("wraith").Fixture
             \\local s = Fixture.fixtureService()
             \\s:next()
             \\Fixture.Out.at({d}).n = s:next()
@@ -731,6 +734,7 @@ const tests = struct {
         try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/hop_js/schemas/out.sal", .data = out_sal });
         const js = try std.fmt.allocPrint(testing.allocator,
             \\import {{ native }} from "salamander";
+            \\import {{ Wraith, HopJs }} from "wraith";
             \\const frame = Wraith.frame(), Out = HopJs.Out;
             \\const where = native("fn u32 ()", {d});
             \\const out = Out.at({d});
@@ -748,9 +752,10 @@ const tests = struct {
         try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/hop_lua/schemas/out.sal", .data = out_sal });
         try install.pluginManifest("hop_lua", "\"provider\": \"lua\"");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local frame = Wraith.frame()
+            \\local wraith = require("wraith")
+            \\local frame = wraith.Wraith.frame()
             \\local where = require("salamander").native("fn u32 ()", {d})
-            \\local out = HopLua.Out.at({d})
+            \\local out = wraith.HopLua.Out.at({d})
             \\task.spawn(function()
             \\    frame:toWorker():await(); out.worker = where()
             \\    frame:toGame():await(); out.game = where()
@@ -812,6 +817,7 @@ const tests = struct {
             \\struct Out { u32 js_length; i32 js_parsed; u32 lua_length; i32 lua_parsed; }
         });
         const js = try std.fmt.allocPrint(testing.allocator,
+            \\import {{ CsJs }} from "wraith";
             \\const {{ CsString, parse, Out }} = CsJs;
             \\const out = Out.at({d});
             \\out.js_length = CsString.concat("Velvet ", "Crowe").length;
@@ -823,7 +829,7 @@ const tests = struct {
         try install.tmp.dir.createDirPath(io, "plugins/cs_lua");
         try install.pluginManifest("cs_lua", "\"provider\": \"lua\", \"depends\": [\"cs_js\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local game = CsJs
+            \\local game = require("wraith").CsJs
             \\local out = game.Out.at({d})
             \\out.lua_length = #game.CsString.concat("Velvet ", "Crowe!")
             \\out.lua_parsed = game.parse("-7")
@@ -873,6 +879,9 @@ const tests = struct {
         const clr_dir = try clr.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
         defer testing.allocator.free(clr_dir);
         Managed.global.useCoreClr(testing.io, clr_dir);
+        try @import("tuft_hook").init(testing.allocator);
+        defer @import("tuft_hook").deinit();
+        const seven = Planted(7);
         const Out = extern struct { first: u32 = 0, second: u32 = 0 };
         var out: Out = .{};
 
@@ -881,7 +890,7 @@ const tests = struct {
         defer install.deinit();
         const io = testing.io;
         try install.tmp.dir.createDirPath(io, "plugins/cs_fixture/schemas");
-        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cs_fixture/schemas/cs.sal", .data = "[Service] trait CsService { u32 next(); }" });
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cs_fixture/schemas/cs.sal", .data = "[Service] trait CsService { u32 next(); }\n[Sig(\"B8 07 F0 57 7E\")] i32 seven(i32 x);" });
         try install.pluginManifest("cs_fixture", "\"provider\": \"cs\"");
         var built = try std.Io.Dir.cwd().openDir(io, std.fs.path.dirname(options.cs_plugin).?, .{ .iterate = true });
         defer built.close(io);
@@ -896,8 +905,9 @@ const tests = struct {
         try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/schemas/out.sal", .data = "struct Out { u32 first; u32 second; }" });
         try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"cs_fixture\"]");
         const lua = try std.fmt.allocPrint(testing.allocator,
-            \\local s = CsFixture.csService()
-            \\local out = User.Out.at({d})
+            \\local wraith = require("wraith")
+            \\local s = wraith.CsFixture.csService()
+            \\local out = wraith.User.Out.at({d})
             \\out.first = s:next()
             \\out.second = s:next()
         , .{@intFromPtr(&out)});
@@ -909,6 +919,8 @@ const tests = struct {
         try testing.expectEqual(.loaded, install.info("cs_fixture").?.state);
         try testing.expectEqual(.loaded, install.info("user").?.state);
         try testing.expectEqual(Out{ .first = 1, .second = 2 }, out);
+        // Its typed hook, with the original from what the handler's given
+        try testing.expectEqual(15, seven.call(2));
 
         // Its dependents reload with it, and its counter starts over
         out = .{};
@@ -919,6 +931,7 @@ const tests = struct {
         try (try loader.unload("user")).wait();
         try (try loader.unload("cs_fixture")).wait();
         try testing.expectEqual(.unloaded, install.info("cs_fixture").?.state);
+        try testing.expectEqual(14, seven.call(2));
     }
 
     test "script sessions get every loaded plugin's services, on the thread they ask for" {

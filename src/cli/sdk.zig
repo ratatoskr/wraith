@@ -19,15 +19,16 @@ pub const usage =
     \\                                       TypeScript typings for a JavaScript plugin (run from
     \\                                       its folder), in <folder> (default .wraith/types):
     \\                                       wraith.d.ts and salamander.d.ts. Each namespace at the
-    \\                                       top is a global, like Wraith.tweaks() and Wraith.Window,
-    \\                                       and its own schemas folder and any .sal given are in NS
+    \\                                       top is in the wraith module, like Wraith.tweaks() and
+    \\                                       Wraith.Window, and its own schemas folder and any .sal given are in NS
     \\                                       (default its id in PascalCase, like Kai). Each plugin
     \\                                       its wraith.json depends on is in its own, with its
     \\                                       [Service] traits like Freecam.camera(), found like
     \\                                       sdk deps does. --offline doesn't download them
     \\  sdk lua types [--out <folder>] [--pointer-size 4|8] [--namespace NS] [<file.sal | folder> ...]
     \\                                       LuaLS annotations for a Lua plugin, like sdk js types:
-    \\                                       wraith.lua and salamander.lua. Writes .luarc.json
+    \\                                       wraith.lua, wraith_hooks.lua and salamander.lua. Writes
+    \\                                       .luarc.json
     \\                                       pointing there if there isn't one
     \\  sdk cs types [--out <folder>] [--pointer-size 4|8] [--namespace NS] [<file.sal | folder> ...]
     \\                                       C# for a C# plugin, for its .csproj to compile, in
@@ -179,6 +180,79 @@ fn writeTypes(ctx: ops.Context, arena: std.mem.Allocator, language: Language, op
 
 const Made = struct { name: []const u8, text: []const u8 };
 
+/// What scripts import Wraith's and the plugins' namespaces from.
+const script_module = "wraith";
+
+/// The typed hooks every script's `Wraith.Hooks` gets, see runtime/plugins/hooks.js.
+const ts_hooks =
+    \\
+    \\declare module "wraith" {
+    \\  namespace Wraith {
+    \\    /** What a typed hook's handler gets for a parameter named `hook`. */
+    \\    interface TypedHook<F extends (...args: any[]) => any> {
+    \\      /** The function as it was, to call on. */
+    \\      original(): F;
+    \\      /** What its options said. */
+    \\      readonly context: number;
+    \\      enable(): void;
+    \\      disable(): void;
+    \\      destroy(): void;
+    \\    }
+    \\    interface Hooks {
+    \\      /**
+    \\       * Hooks a function the schemas declare, like `GameStateManager.spendMira`. The handler gets its
+    \\       * arguments, and a parameter named `hook` or `context` gets that instead, wherever it is. They're
+    \\       * typed after the arguments, like `(self, amount, hook) => hook.original()(self, 0)`.
+    \\       */
+    \\      hook<F extends (...args: any[]) => any>(target: F, handler: (...args: [...Parameters<F>, hook: TypedHook<F>, context: number]) => ReturnType<F>, options?: import("salamander").Given<Wraith.Hook.Options>): Wraith.Hook;
+    \\      /** The same at an address of your own, typed like `target`. */
+    \\      hookAt<F extends (...args: any[]) => any>(address: number | bigint, target: F, handler: (...args: [...Parameters<F>, hook: TypedHook<F>, context: number]) => ReturnType<F>, options?: import("salamander").Given<Wraith.Hook.Options>): Wraith.Hook;
+    \\    }
+    \\  }
+    \\}
+    \\
+;
+
+const lua_hooks =
+    \\---@meta
+    \\-- Made by Wraith. Don't change it, since it's made again.
+    \\
+    \\---What a typed hook's handler gets for a parameter named `hook`.
+    \\---@class Wraith.TypedHook
+    \\---@field context integer What its options said
+    \\local typed = {}
+    \\
+    \\---The function as it was, to call on.
+    \\---@return function
+    \\function typed.original() end
+    \\
+    \\function typed.enable() end
+    \\
+    \\function typed.disable() end
+    \\
+    \\function typed.destroy() end
+    \\
+    \\---@class Wraith.Hooks
+    \\local hooks = {}
+    \\
+    \\---Hooks a function the schemas declare, like `GameStateManager.spendMira`. The handler gets its
+    \\---arguments, and a parameter named `hook` or `context` gets that instead.
+    \\---@param target function
+    \\---@param handler function
+    \\---@param options? Wraith.Hook.Options
+    \\---@return Wraith.Hook
+    \\function hooks:hook(target, handler, options) end
+    \\
+    \\---The same at an address of your own, typed like `target`.
+    \\---@param address integer
+    \\---@param target function
+    \\---@param handler function
+    \\---@param options? Wraith.Hook.Options
+    \\---@return Wraith.Hook
+    \\function hooks:hookAt(address, target, handler, options) end
+    \\
+;
+
 /// How a plugin's schemas parse: its own files in its namespace, and each dependency's, named like
 /// `freecam/...`, in theirs. Every file uses Wraith's and its dependencies' without a `use`.
 fn parseOptions(arena: std.mem.Allocator, options: Options) !salamander_schema.Options {
@@ -226,7 +300,8 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
     switch (language) {
         .js => {
             var w: std.Io.Writer.Allocating = .init(arena);
-            try types.ts.globals(&w.writer, all.schema, all.source, services.items);
+            try types.ts.globals(&w.writer, all.schema, all.source, services.items, script_module);
+            try w.writer.writeAll(ts_hooks);
             try list.append(arena, .{ .name = "wraith.d.ts", .text = w.written() });
             w = .init(arena);
             try types.ts.builtins(&w.writer);
@@ -234,8 +309,11 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
         },
         .lua => {
             var w: std.Io.Writer.Allocating = .init(arena);
-            try types.luals.globals(&w.writer, all.schema, all.source, services.items);
+            try types.luals.globals(&w.writer, all.schema, all.source, services.items, script_module);
             try list.append(arena, .{ .name = "wraith.lua", .text = w.written() });
+            w = .init(arena);
+            try w.writer.writeAll(lua_hooks);
+            try list.append(arena, .{ .name = "wraith_hooks.lua", .text = w.written() });
             w = .init(arena);
             try types.luals.builtins(&w.writer);
             try list.append(arena, .{ .name = "salamander.lua", .text = w.written() });
@@ -381,11 +459,17 @@ test "typings for Wraith's whole schema and a plugin's" {
         \\}
     };
     const want = [_]struct { Language, []const u8, []const u8 }{
-        .{ .js, "wraith.d.ts", "declare namespace Wraith {" },
+        .{ .js, "wraith.d.ts", "declare module \"wraith\" {\nnamespace Wraith {" },
         .{ .js, "wraith.d.ts", "    frame(): Wraith.Frame;" },
         .{ .js, "wraith.d.ts", "Given<Wraith.Tweaks.Definition>" },
         .{ .js, "salamander.d.ts", "declare const salamander: typeof import(\"salamander\");" },
-        .{ .js, "wraith.d.ts", "declare namespace Kai {" },
+        .{ .js, "wraith.d.ts", "\nnamespace Kai {" },
+        .{ .js, "wraith.d.ts", "hook<F extends (...args: any[]) => any>(target: F, handler: (...args: [...Parameters<F>, hook: TypedHook<F>, context: number])" },
+        .{ .lua, "wraith.lua", "---@meta wraith\n" },
+        .{ .lua, "wraith.lua", "---@class wraith\n" },
+        .{ .lua, "wraith_hooks.lua", "function hooks:hook(target, handler, options) end" },
+        .{ .cs, "Schema.cs", "        public static readonly HealFn Heal = new();" },
+        .{ .cs, "WraithPlugin.cs", "public Hook Hook<H, W>(DeclaredFunction<H, W> target, W handler" },
         .{ .js, "wraith.d.ts", "The one playing" },
         .{ .lua, "wraith.lua", "---@class Wraith.Tweaks.Definition" },
         .{ .lua, "wraith.lua", "---@class Kai.Player" },
@@ -425,6 +509,7 @@ test "each dependency's in its namespace, with its [Service] traits as functions
         .{ .js, "wraith.d.ts", "tally(): Tally.Tally;" },
         .{ .js, "wraith.d.ts", "instance(): Tally.Tally" },
         .{ .lua, "wraith.lua", "function c.tally() end" },
+        .{ .lua, "wraith.lua", "---@field Tally Tally\n" },
         .{ .lua, "wraith.lua", "---@class Mod.Mine" },
         .{ .cs, "Schema.cs", "public static Tally Instance => global::Salamander.Singletons.Get<Tally>();" },
     };

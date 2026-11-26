@@ -120,6 +120,42 @@ var hook_table: ?*const anyopaque = null;
 
 const HookCall = W.Hook.Call;
 
+/// What `hook(In, name, ...)` gives, like `Hook(GameStateManager, .spendMira)`.
+pub fn Hook(comptime In: type, comptime name: @EnumLiteral()) type {
+    return FnHook(@field(In.Fns, @tagName(name)));
+}
+
+/// Hooks a function the schemas declare, like `hook(GameStateManager, .spendMira, cb, self)`. `In` is
+/// the struct or namespace it's in. A [Virtual(n)] one swaps its vtable slot. `callback` takes the
+/// function's arguments, after the hook and the context if it wants them. `createFn` and
+/// `createSlot` do the same at an address of your own.
+pub fn hook(comptime In: type, comptime name: @EnumLiteral(), comptime callback: anytype, context: anytype) !Hook(In, name) {
+    return hookWith(In, name, callback, context, .{});
+}
+
+pub fn hookWith(comptime In: type, comptime name: @EnumLiteral(), comptime callback: anytype, context: anytype, options: Options) !Hook(In, name) {
+    const n = @tagName(name);
+    const at = try @field(In.addresses, n)();
+    const slot = comptime @hasDecl(In, "slots") and @hasDecl(In.slots, n);
+    return hookTyped(In, name, slot, at, callback, context, options);
+}
+
+/// The same at an address of your own, typed like the declared one, like `createFn`.
+pub fn hookAt(comptime In: type, comptime name: @EnumLiteral(), target: anytype, comptime callback: anytype, context: anytype) !Hook(In, name) {
+    return hookAtWith(In, name, target, callback, context, .{});
+}
+
+pub fn hookAtWith(comptime In: type, comptime name: @EnumLiteral(), target: anytype, comptime callback: anytype, context: anytype, options: Options) !Hook(In, name) {
+    return hookTyped(In, name, false, try Address.from(target).unwrap(), callback, context, options);
+}
+
+fn hookTyped(comptime In: type, comptime name: @EnumLiteral(), slot: bool, at: usize, comptime callback: anytype, context: anytype, options: Options) !Hook(In, name) {
+    const T = @field(In.Fns, @tagName(name));
+    const Bridge = FnBridge(T, callback, @TypeOf(context));
+    const h = try native(slot, at, @intFromPtr(&Bridge.detour), meta.addressFromAny(context), options);
+    return .{ .object = h, .original_address = h.original() };
+}
+
 pub fn createFn(comptime T: type, target: anytype, comptime callback: anytype, context: anytype) !FnHook(T) {
     return createFnWith(T, target, callback, context, .{});
 }
@@ -131,8 +167,12 @@ pub fn createFnWith(comptime T: type, target: anytype, comptime callback: anytyp
 }
 
 pub fn createSlot(comptime T: type, slot: anytype, comptime callback: anytype, context: anytype) !FnHook(T) {
+    return createSlotWith(T, slot, callback, context, .{});
+}
+
+pub fn createSlotWith(comptime T: type, slot: anytype, comptime callback: anytype, context: anytype, options: Options) !FnHook(T) {
     const Bridge = FnBridge(T, callback, @TypeOf(context));
-    const h = try native(true, try Address.from(slot).unwrap(), @intFromPtr(&Bridge.detour), meta.addressFromAny(context), .{});
+    const h = try native(true, try Address.from(slot).unwrap(), @intFromPtr(&Bridge.detour), meta.addressFromAny(context), options);
     return .{ .object = h, .original_address = h.original() };
 }
 
