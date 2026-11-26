@@ -30,16 +30,14 @@ search: [128]u8 = @splat(0),
 /// The row that's open, by id.
 expanded: Text(64) = .{},
 /// The loader's plugins, copied each frame.
-plugins: [max_plugins]Info = undefined,
-plugins_len: usize = 0,
+plugins: std.ArrayList(Info) = .empty,
 mods_dir: Text(260) = .{},
-rows: [max_rows]Row = undefined,
+/// What `collect` gives, kept so it doesn't allocate every frame.
+rows: std.ArrayList(Row) = .empty,
 work: Work = .{},
 
 pub const Section = enum { installed, dev, browse, updates };
 
-pub const max_plugins = 64;
-const max_rows = 256;
 const sidebar_width = 170;
 const footer_height = 36;
 
@@ -127,6 +125,8 @@ pub fn deinit(self: *ModsWindow, io: ?std.Io) void {
     if (self.work.arena) |*a| a.deinit();
     if (self.work.folders_arena) |*a| a.deinit();
     self.work = .{};
+    self.plugins.deinit(self.shell.allocator);
+    self.rows.deinit(self.shell.allocator);
 }
 
 pub fn draw(self: *ModsWindow) void {
@@ -178,26 +178,26 @@ fn label(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]const u8 {
 /// The loader's plugins and where things are, for this frame.
 pub fn snapshot(self: *ModsWindow, shell: *Shell) void {
     const loader = shell.acquireLoader() orelse {
-        self.plugins_len = 0;
+        self.plugins.clearRetainingCapacity();
         return;
     };
     defer shell.releaseLoader();
-    self.plugins_len = loader.list(&self.plugins);
+    loader.listInto(shell.allocator, &self.plugins);
     self.mods_dir.set(loader.plugins_dir);
 }
 
 fn findPlugin(self: *ModsWindow, id: []const u8) ?*const Info {
-    for (self.plugins[0..self.plugins_len]) |*p| if (std.mem.eql(u8, p.name.get(), id)) return p;
+    for (self.plugins.items) |*p| if (std.mem.eql(u8, p.name.get(), id)) return p;
     return null;
 }
 
 /// Hold `work.lock`. Good till the next call.
 pub fn collect(self: *ModsWindow, section: Section, query: []const u8) []const Row {
-    var n: usize = 0;
+    self.rows.clearRetainingCapacity();
     const listing = self.work.listing;
     switch (section) {
         .installed, .updates, .dev => {
-            for (self.plugins[0..self.plugins_len]) |*p| {
+            for (self.plugins.items) |*p| {
                 var row: Row = .{
                     .id = p.name.get(),
                     .plugin = p,
@@ -207,9 +207,8 @@ pub fn collect(self: *ModsWindow, section: Section, query: []const u8) []const R
                 if (row.dev != (section == .dev)) continue;
                 row.folder = self.work.folder(row.id);
                 if (section == .updates and !row.hasUpdate()) continue;
-                if (n < max_rows and row.matches(query)) {
-                    self.rows[n] = row;
-                    n += 1;
+                if (row.matches(query)) {
+                    self.rows.append(self.shell.allocator, row) catch break;
                 }
             }
             // Projects, and anything installed the loader doesn't list
@@ -217,9 +216,8 @@ pub fn collect(self: *ModsWindow, section: Section, query: []const u8) []const R
                 if (m.installed == null or self.findPlugin(m.id) != null) continue;
                 const row: Row = .{ .id = m.id, .listed = m };
                 if (section == .updates and !row.hasUpdate()) continue;
-                if (n < max_rows and row.matches(query)) {
-                    self.rows[n] = row;
-                    n += 1;
+                if (row.matches(query)) {
+                    self.rows.append(self.shell.allocator, row) catch break;
                 }
             };
         },
@@ -227,13 +225,12 @@ pub fn collect(self: *ModsWindow, section: Section, query: []const u8) []const R
             // They come with the mods that need them
             if (m.library or m.installed != null or self.findPlugin(m.id) != null) continue;
             const row: Row = .{ .id = m.id, .listed = m };
-            if (n < max_rows and row.matches(query)) {
-                self.rows[n] = row;
-                n += 1;
+            if (row.matches(query)) {
+                self.rows.append(self.shell.allocator, row) catch break;
             }
         },
     }
-    const rows = self.rows[0..n];
+    const rows = self.rows.items;
     std.mem.sort(Row, rows, {}, struct {
         fn lessThan(_: void, a: Row, b: Row) bool {
             const fa = if (a.listed) |l| l.featured else false;

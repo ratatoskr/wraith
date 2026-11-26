@@ -97,7 +97,7 @@ pub const CameraImpl = struct {
         lock.lockShared();
         defer lock.unlockShared();
         const p = photo orelse return 0;
-        return p.camera.wantedCamera(loaded);
+        return p.cameras.wantedCamera(loaded);
     }
 
     pub fn cameras(loaded: *Loaded, add: ?W.ItemList.Add, rename: ?W.ItemList.Rename) api.salamander.Object(W.ItemList) {

@@ -19,7 +19,6 @@ const Settings = @import("../Settings.zig");
 const Photo = @import("Photo.zig");
 const Overlay = @import("../ui/Overlay.zig");
 const host_keys = @import("../host/keybinds.zig");
-const lists = @import("../host/lists.zig");
 const rig = @import("rig.zig");
 
 const W = api.wraith;
@@ -195,8 +194,6 @@ presses: std.EnumArray(Press, PressKey) = .init(.{
 }),
 /// Whether it's on, for any thread.
 on_flag: Atomic(bool) = .init(false),
-/// Photo mode's Follow selection. Off each time the game starts.
-follow: Atomic(bool) = .init(false),
 /// Everything it added to the registry, to take out again.
 added: [40]*Registry.Setting = undefined,
 added_len: usize = 0,
@@ -732,26 +729,6 @@ fn drawKeys(self: *Camera, mouse_look: MouseLook, pad: bool) void {
 }
 
 /// The game's cameras and the Follow selection toggle. Render thread.
-pub fn drawCameraPicker(self: *Camera) void {
-    const held = lists.cameras() orelse return;
-    defer held.end();
-    ui.separatorText("Game cameras");
-    held.record.draw(false);
-    var follow = self.follow.load(.acquire);
-    if (ui.checkbox("Follow selection", &follow)) self.follow.store(follow, .release);
-    ui.tooltip("Show the selected camera instead of the one the game picks. Off, the game decides.", .{});
-    ui.textDisabled("The free camera moves whichever's on screen.", .{});
-}
-
-/// The camera `loaded` should put on screen, or 0 for the game's own. Any thread.
-pub fn wantedCamera(self: *Camera, loaded: *const anyopaque) u64 {
-    if (!self.follow.load(.acquire)) return 0;
-    const held = lists.cameras() orelse return 0;
-    defer held.end();
-    if (@as(*const anyopaque, held.record.loaded) != loaded) return 0;
-    return held.record.firstSelected();
-}
-
 /// The keys, for Photo mode's camera panel.
 pub fn drawKeyList(self: *Camera) void {
     const options = self.readOptions();

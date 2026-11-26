@@ -194,6 +194,21 @@ pub fn list(self: *PluginLoader, out: []Info) usize {
     return @min(self.known.snapshotAs(Info, out, Known.infoOf), out.len);
 }
 
+/// Every plugin it knows into `out`, grown to fit. Out of memory keeps what fit.
+pub fn listInto(self: *PluginLoader, gpa: std.mem.Allocator, out: *std.ArrayList(Info)) void {
+    while (true) {
+        const total = self.known.snapshotAs(Info, out.allocatedSlice(), Known.infoOf);
+        if (total <= out.capacity) {
+            out.items.len = total;
+            return;
+        }
+        out.ensureTotalCapacity(gpa, total) catch {
+            out.items.len = out.capacity;
+            return;
+        };
+    }
+}
+
 pub fn count(self: *PluginLoader) usize {
     self.known.lock.lockShared();
     defer self.known.lock.unlockShared();

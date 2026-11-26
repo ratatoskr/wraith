@@ -5,7 +5,6 @@ const std = @import("std");
 const core = @import("wraith_core");
 const input = @import("wraith_platform").input;
 const Keybinds = @import("tuft_input").Keybinds;
-const Message = @import("tuft_text").Message;
 
 const Tweaks = @import("../Tweaks.zig");
 const Registry = @import("../settings/Registry.zig");
@@ -105,42 +104,42 @@ fn fieldKeyPressed(ctx: *anyopaque, phase: Keybinds.Phase) void {
     if (phase == .pressed) f.flip_requested.store(true, .release);
 }
 
+/// A key's press, with the names copied whole since they're used after the lock's let go.
 const Request = struct {
-    name: Message(64) = .{},
-    field: Message(64) = .{},
-
-    fn of(tweak: []const u8, field: []const u8) Request {
-        var r: Request = .{};
-        r.name.set(tweak);
-        r.field.set(field);
-        return r;
-    }
+    name: []const u8,
+    /// Empty to toggle the tweak itself
+    field: []const u8 = "",
 };
 
 /// Not under the lock. Does what keys asked for since the last tick.
 pub fn handlePresses(tw: *Tweaks) void {
-    var requests: [16]Request = undefined;
-    var count: usize = 0;
+    var arena: std.heap.ArenaAllocator = .init(tw.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var requests: std.ArrayList(Request) = .empty;
     {
         tw.lock.lock();
         defer tw.lock.unlock();
         for (tw.list.items) |t| {
-            if (t.toggle_requested.swap(false, .acq_rel) and count < requests.len) {
-                requests[count] = .of(t.name, "");
-                count += 1;
+            // Only taken once there's room, so a press out of memory waits for the next tick
+            if (t.toggle_requested.load(.acquire)) {
+                const name = a.dupe(u8, t.name) catch break;
+                requests.append(a, .{ .name = name }) catch break;
+                t.toggle_requested.store(false, .release);
             }
-            for (t.fields) |*f| if (f.flip_requested.swap(false, .acq_rel) and count < requests.len) {
-                requests[count] = .of(t.name, f.def.name);
-                count += 1;
+            for (t.fields) |*f| if (f.flip_requested.load(.acquire)) {
+                const name = a.dupe(u8, t.name) catch break;
+                const field = a.dupe(u8, f.def.name) catch break;
+                requests.append(a, .{ .name = name, .field = field }) catch break;
+                f.flip_requested.store(false, .release);
             };
         }
     }
-    for (requests[0..count]) |r| {
-        const name = r.name.message();
+    for (requests.items) |r| {
         if (r.field.len == 0) {
-            tw.toggle(name);
-            announce(tw, name);
-        } else flip(tw, name, r.field.message());
+            tw.toggle(r.name);
+            announce(tw, r.name);
+        } else flip(tw, r.name, r.field);
     }
 }
 

@@ -328,25 +328,34 @@ pub const Record = struct {
         if (self.keep) |k| if (settings.registryOf()) |r| r.set(k, .{ .text = text }) catch {};
     }
 
+    /// Which buttons the plugin asked for.
+    pub const Has = struct { add: bool, remove: bool, rename: bool };
+
+    /// A copy of what's listed and picked, so nothing's locked while calling into the plugin.
+    pub const Snapshot = struct { pick: Pick, items: []Item, picked: []bool, has: Has };
+
+    /// In `a`. Null once it's closed.
+    pub fn snapshot(self: *Record, a: std.mem.Allocator) ?Snapshot {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        if (self.closed) return null;
+        const items = a.alloc(Item, self.state.items.len) catch return null;
+        const picked = a.alloc(bool, items.len) catch return null;
+        for (self.state.items, items, picked) |it, *o, *p| {
+            o.* = .{ .id = it.id, .name = a.dupe(u8, it.name) catch return null, .detail = a.dupe(u8, it.detail) catch return null, .current = it.current };
+            p.* = self.state.isSelected(it.id);
+        }
+        const h = self.handlers;
+        return .{ .pick = self.state.pick, .items = items, .picked = picked, .has = .{ .add = h.add != null, .remove = h.remove != null, .rename = h.rename != null } };
+    }
+
     /// Render thread. With `titled`, its title goes over it. The plugin mustn't go while it's drawing.
     pub fn draw(self: *Record, titled: bool) void {
         var arena: std.heap.ArenaAllocator = .init(allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        // A copy, so nothing's locked while it calls into the plugin
-        const pick, const items, const picked, const has = blk: {
-            self.lock.lockShared();
-            defer self.lock.unlockShared();
-            if (self.closed) return;
-            const items = a.alloc(Item, self.state.items.len) catch return;
-            const picked = a.alloc(bool, items.len) catch return;
-            for (self.state.items, items, picked) |it, *o, *p| {
-                o.* = .{ .id = it.id, .name = a.dupe(u8, it.name) catch return, .detail = a.dupe(u8, it.detail) catch return, .current = it.current };
-                p.* = self.state.isSelected(it.id);
-            }
-            const h = self.handlers;
-            break :blk .{ self.state.pick, items, picked, .{ .add = h.add != null, .remove = h.remove != null, .rename = h.rename != null } };
-        };
+        const snap = self.snapshot(a) orelse return;
+        const pick, const items, const picked, const has = .{ snap.pick, snap.items, snap.picked, snap.has };
         const scope = ui.id(@as(*const Record, self));
         defer scope.end();
         if (titled) ui.text("{s}", .{self.title});
@@ -432,7 +441,8 @@ pub const Record = struct {
         if (it.detail.len > 0) ui.tooltip("{s}", .{it.detail});
     }
 
-    fn startRename(self: *Record, it: Item) void {
+    /// Opens the rename popup, which `drawRename` draws. Both under the same ImGui id.
+    pub fn startRename(self: *Record, it: Item) void {
         self.renaming = it.id;
         const n = @min(it.name.len, max_name);
         @memcpy(self.rename_buf[0..n], it.name[0..n]);
@@ -440,7 +450,7 @@ pub const Record = struct {
         ui.openPopup("##renaming");
     }
 
-    fn drawRename(self: *Record) void {
+    pub fn drawRename(self: *Record) void {
         const pop = ui.popup("##renaming") orelse return;
         defer pop.end();
         if (ui.isWindowAppearing()) ui.raw("ImGui_SetKeyboardFocusHere")();
@@ -455,7 +465,7 @@ pub const Record = struct {
     }
 
     /// Unlocked, since the plugin's likely to call `set`.
-    fn callAdd(self: *Record) void {
+    pub fn callAdd(self: *Record) void {
         const f = blk: {
             self.lock.lockShared();
             defer self.lock.unlockShared();
@@ -464,7 +474,7 @@ pub const Record = struct {
         f.invoke(.{});
     }
 
-    fn callRemove(self: *Record, id: u64) void {
+    pub fn callRemove(self: *Record, id: u64) void {
         const f = blk: {
             self.lock.lockShared();
             defer self.lock.unlockShared();

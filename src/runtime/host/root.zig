@@ -35,6 +35,7 @@ pub const memory = @import("memory.zig");
 pub const watches = @import("watches.zig");
 pub const sound = @import("sound.zig");
 pub const workbench_panels = @import("workbench_panels.zig");
+pub const slots = @import("slots.zig");
 pub const windows = @import("windows.zig");
 pub const Owned = @import("Owned.zig").Owned;
 pub const OnGone = @import("Owned.zig").OnGone;
@@ -66,6 +67,7 @@ test {
     _ = watches;
     _ = sound;
     _ = workbench_panels;
+    _ = slots;
     _ = windows;
     _ = @import("scans.zig");
     _ = @import("scratch.zig");

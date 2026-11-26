@@ -141,6 +141,7 @@ pub const Tables = struct {
     window: *const sal.Table(ui_area.Window),
     gizmo: *const sal.Table(ui_area.Gizmo),
     workbench_panel: *const sal.Table(ui_area.WorkbenchPanel),
+    contribution: *const sal.Table(ui_area.Contribution),
     draw_list: *const sal.Table(ui_area.DrawList),
     /// What its UI keeps between frames.
     ui: ui_area.State = .{},
@@ -222,6 +223,7 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .window = h.adopt(ui_area.Window, sal.implement(ui_area.Window, host.windows.Impl), o) catch return null,
         .gizmo = h.adopt(ui_area.Gizmo, sal.implement(ui_area.Gizmo, ui_area.GizmoImpl), o) catch return null,
         .workbench_panel = h.adopt(ui_area.WorkbenchPanel, sal.implement(ui_area.WorkbenchPanel, ui_area.WorkbenchPanelImpl), o) catch return null,
+        .contribution = h.adopt(ui_area.Contribution, sal.implement(ui_area.Contribution, ui_area.ContributionImpl), o) catch return null,
         .draw_list = h.adopt(ui_area.DrawList, ui_area.draw_list_table, o) catch return null,
         .hook = h.adopt(Hook, sal.implement(Hook, hooks_area.HookImpl), o) catch return null,
         .watches = h.adopt(Watches, sal.implement(Watches, hooks_area.WatchesImpl), o) catch return null,

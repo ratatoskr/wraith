@@ -18,7 +18,9 @@ const Photo = @import("Photo.zig");
 const Overlay = @import("../ui/Overlay.zig");
 const frame = @import("../host/frame.zig");
 const Gizmos = @import("../ui/Gizmos.zig");
-const Camera = @import("Camera.zig");
+const Scene = @import("Scene.zig");
+const slots = @import("../host/slots.zig");
+const Target = slots.Target;
 const icons = @import("../ui/icons.zig");
 const poses = @import("pose.zig");
 
@@ -30,7 +32,7 @@ const Vec3 = math.Vec3;
 const Show = enum { posed, everyone, nobody };
 const show_options = [_][]const u8{ "The one being posed", "Everyone", "No one" };
 
-pub const Press = enum { window, freeze, focus };
+pub const Press = enum { freeze, focus };
 
 pub const Tool = enum { rotate, move, scale };
 
@@ -52,9 +54,12 @@ const picked_colour = ui.rgba(255, 190, 60, 255);
 const hover_colour = ui.rgba(255, 255, 255, 255);
 const pick_radius = 10;
 
+/// For the store and what the window keeps between frames.
+const gpa = std.heap.smp_allocator;
+
 registry: *Registry,
 overlay: *Overlay,
-camera: *Camera,
+scene: *Scene,
 /// What the game's threads and the render thread share.
 lock: Atomic(u32) = .init(0),
 /// Whether to bother the game for skeletons
@@ -63,12 +68,9 @@ store: poses.Store = undefined,
 show: *Registry.Setting = undefined,
 thickness: *Registry.Setting = undefined,
 keys: std.EnumArray(Press, Key) = .init(.{
-    .window = .{ .which = .window },
     .freeze = .{ .which = .freeze },
     .focus = .{ .which = .focus },
 }),
-/// Photo mode's window is open, from any thread.
-open: Atomic(bool) = .init(false),
 /// Keys wait for the frame, since the store's the render thread's.
 want_freeze: Atomic(bool) = .init(false),
 want_focus: Atomic(bool) = .init(false),
@@ -79,8 +81,6 @@ want_focus: Atomic(bool) = .init(false),
 actor: ?u64 = null,
 bone: poses.Name = .{},
 has_bone: bool = false,
-/// Where to point the camera, once the lock's let go
-focus_at: ?Vec3 = null,
 /// Showing the cursor and keeping the keyboard and mouse from the game, like Wraith's own windows
 grabbed: bool = false,
 /// What the gizmo does, and whether it goes along the world's axes or the bone's
@@ -93,16 +93,19 @@ gizmo: *Gizmos.Gizmo = undefined,
 gizmo_shown: bool = false,
 /// Where the bone would be without its own edit, as the drag started
 drag_base: Mat4 = .identity,
-/// Narrows the actors, bones and shapes down by name
-search: [64:0]u8 = @splat(0),
 /// The Shapes tab's
 link_shapes: bool = true,
 changed_only: bool = false,
+/// Kept between frames so drawing doesn't allocate each time, as big as the biggest so far
+screen: std.ArrayList(?ui.Vec2) = .empty,
+rows: std.ArrayList(Row) = .empty,
+depths: std.ArrayList(u8) = .empty,
+shown_bones: std.ArrayList(u32) = .empty,
 
 /// Keep it where it is, since its keys point at it.
-pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, camera: *Camera) !void {
-    self.* = .{ .registry = registry, .overlay = overlay, .camera = camera };
-    self.store = try .init(std.heap.page_allocator);
+pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, scene: *Scene) !void {
+    self.* = .{ .registry = registry, .overlay = overlay, .scene = scene };
+    self.store = .init(gpa);
     self.gizmo = try Gizmos.create();
     errdefer Gizmos.destroy(self.gizmo);
     self.show = try registry.add(.{ .id = "wraith.posing.show", .name = "Draw skeletons of", .help = "While Photo mode's open.", .group = Settings.group, .section = Photo.section, .heading = "Posing", .kind = .{ .choice = .{ .default = show_options[0], .options = &show_options } } }, .{});
@@ -115,7 +118,6 @@ pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, camera: *Came
         const slot = self.keys.getPtr(p);
         slot.posing = self;
         const id, const name, const key: tuft_input.Key = switch (p) {
-            .window => .{ "wraith.posing.window", "Open or close Photo mode", .f7 },
             .freeze => .{ "wraith.posing.freeze", "Freeze or unfreeze the actor being posed", .f8 },
             .focus => .{ "wraith.posing.focus", "Orbit the camera round the picked bone", .keypad_decimal },
         };
@@ -123,6 +125,10 @@ pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, camera: *Came
         slot.setting = try registry.add(.{ .id = id, .name = name, .group = Settings.group, .section = Photo.section, .heading = "Posing keys", .kind = .{ .key = .{ .default = .one(.{ .key = key }), .consume = p != .focus } } }, .{ .key = .{ .ctx = slot, .call = Key.fired } });
         bound += 1;
     }
+    try scene.add(.{ .slot = .photo_scene, .id = "actors", .parent = "world", .kind = "actors", .title = "Actors", .icon = icons.users, .open = true, .order = 200, .children = .of(self, actorRows) }, .none);
+    try scene.add(.{ .slot = .photo_inspector, .id = "actors", .kind = "actors", .presentation = .@"inline", .order = 100 }, .{ .native = .of(self, drawActors) });
+    try scene.add(.{ .slot = .photo_inspector, .id = "actor", .kind = "actor", .presentation = .@"inline", .order = 100 }, .{ .native = .of(self, drawActor) });
+    try scene.add(.{ .slot = .photo_row, .id = "freeze", .kind = "actor", .order = 100 }, .{ .native = .of(self, actorIcons) });
 }
 
 /// Waits for keys in flight. Game plugins may still call in, so the store stays till the end.
@@ -133,6 +139,10 @@ pub fn deinit(self: *Posing) void {
     self.grab(false);
     self.wanted.store(false, .monotonic);
     Gizmos.destroy(self.gizmo);
+    self.screen.deinit(gpa);
+    self.rows.deinit(gpa);
+    self.depths.deinit(gpa);
+    self.shown_bones.deinit(gpa);
 }
 
 fn acquire(self: *Posing) void {
@@ -183,19 +193,10 @@ pub fn forget(self: *Posing, owner: usize) void {
 
 // Render thread from here
 
-pub fn isOpen(self: *const Posing) bool {
-    return self.open.load(.acquire);
-}
-
-pub fn setOpen(self: *Posing, on: bool) void {
-    self.open.store(on, .release);
-}
-
 fn pressed(self: *Posing, which: Press) void {
     switch (which) {
-        .window => self.setOpen(!self.isOpen()),
         .freeze => self.want_freeze.store(true, .release),
-        .focus => if (self.isOpen()) self.want_focus.store(true, .release),
+        .focus => self.want_focus.store(true, .release),
     }
 }
 
@@ -213,7 +214,7 @@ fn focusPicked(self: *Posing) void {
     defer self.release();
     const a = self.current(&self.store) orelse return;
     const b = self.currentBone(a) orelse return;
-    self.focus_at = a.position(b);
+    self.scene.focus(a.position(b));
 }
 
 fn grab(self: *Posing, on: bool) void {
@@ -230,23 +231,21 @@ fn setFrozen(a: *poses.Actor, on: bool) void {
     a.shape_base_count = 0;
 }
 
-/// Once a frame.
-pub fn tick(self: *Posing) void {
+/// Once a frame, with whether Photo mode's open.
+pub fn tick(self: *Posing, open: bool) void {
     if (self.want_freeze.swap(false, .acq_rel)) self.toggleFrozen();
-    if (self.want_focus.swap(false, .acq_rel)) self.focusPicked();
-    self.grab(self.isOpen());
-    self.draw();
-    const point = self.focus_at orelse return;
-    self.focus_at = null;
-    self.camera.focus(point);
+    // Focus only does anything while it's open
+    if (self.want_focus.swap(false, .acq_rel) and open) self.focusPicked();
+    self.grab(open);
+    self.draw(open);
 }
 
-fn draw(self: *Posing) void {
-    const open = self.isOpen();
+fn draw(self: *Posing, open: bool) void {
     const waited = core.timing.scope("posing lock");
     self.acquire();
     waited.end();
     defer self.release();
+    self.syncPicked();
     const store = &self.store;
     store.frame +%= 1;
     self.wanted.store(open or store.anyEdits() or store.anyFrozen(), .monotonic);
@@ -279,7 +278,9 @@ fn currentBone(self: *Posing, a: *const poses.Actor) ?u32 {
     return a.find(self.bone.get());
 }
 
+/// Picks `a` in the scene, and `bone` on it. Under the lock.
 pub fn select(self: *Posing, a: *const poses.Actor, bone: ?u32) void {
+    self.scene.select("actor", a.id);
     self.actor = a.id;
     if (bone) |b| {
         self.bone = a.names[b];
@@ -288,6 +289,16 @@ pub fn select(self: *Posing, a: *const poses.Actor, bone: ?u32) void {
     // In front again, even over a Scene panel's
     self.gizmo_shown = false;
 }
+
+/// Follows the scene's selection, so the game's threads see it. Under the lock.
+fn syncPicked(self: *Posing) void {
+    const picked = self.scene.selectedOf("actor");
+    if (picked == self.actor) return;
+    self.actor = picked;
+    self.has_bone = false;
+    self.gizmo_shown = false;
+}
+
 fn drawSkeletons(self: *Posing, store: *poses.Store) void {
     const show = choice(Show, self.registry.get(self.show).choice, &show_options);
     const vp = store.view_proj orelse return;
@@ -299,12 +310,13 @@ fn drawSkeletons(self: *Posing, store: *poses.Store) void {
     var hover: ?struct { actor: *poses.Actor, bone: u32, at: ui.Vec2 } = null;
     var hover_dist: f32 = pick_radius * pick_radius;
 
-    for (store.actors) |*a| {
+    for (store.actors.items) |a| {
         if (!store.isLive(a)) continue;
         const is_posed = posed == a;
         if (show == .nobody or (show == .posed and !is_posed)) continue;
         // Each bone once, since it's a parent to its children's lines too
-        var screen: [poses.max_bones]?ui.Vec2 = undefined;
+        self.screen.resize(gpa, a.count) catch continue;
+        const screen = self.screen.items;
         for (0..a.count) |i| {
             screen[i] = project(vp, a.position(i));
             const at = screen[i] orelse continue;
@@ -375,56 +387,77 @@ fn hideGizmo(self: *Posing) bool {
 
 // Photo mode's window, on the render thread. Each takes the lock itself.
 
-/// The search box over the actors, which narrows the bones and shapes too.
-pub fn drawSearch(self: *Posing) void {
-    ui.setNextItemWidth(ui.fill);
-    _ = ui.inputTextHint("##search", "Search actors, bones and shapes", &self.search);
+/// The toolbar's button that shows or hides the skeletons and gizmo.
+pub fn drawOverlayTool(self: *Posing) void {
+    const shown = self.overlay_on;
+    if (Photo.toolButton(if (shown) icons.eye ++ "##posing_overlay" else icons.eye_off ++ "##posing_overlay", shown, "{s} the skeletons and gizmo", .{if (shown) "Hide" else "Show"})) self.overlay_on = !shown;
 }
 
-/// A row for each actor in the scene list. True when one's clicked.
-pub fn drawActorRows(self: *Posing, selected: bool) bool {
-    self.acquire();
-    defer self.release();
-    const store = &self.store;
-    const text = self.searchText();
-    var buf: [80:0]u8 = undefined;
+/// An actor's row, copied out so rows draw unlocked, since their buttons lock.
+const Row = struct { id: u64, name: poses.Name, edited: bool };
+
+/// The actors under the Actors node.
+fn actorRows(self: *Posing, _: Target) void {
+    const scene = self.scene;
+    self.rows.clearRetainingCapacity();
     var live: usize = 0;
-    var shown: usize = 0;
-    var clicked = false;
-    for (store.actors) |*a| {
-        if (!store.isLive(a)) continue;
-        live += 1;
-        // The one being posed stays, so searching never hides it
-        if (self.actor != a.id and !matchesActor(a, text)) continue;
-        shown += 1;
-        const icon = if (a.frozen) icons.snowflake else icons.user;
-        const mark = if (store.hasEdits(a.id)) " *" else "";
-        const label = std.fmt.bufPrintSentinel(&buf, "{s}  {s}{s}##actor{d}", .{ icon, a.name.get(), mark, a.id }, 0) catch continue;
-        if (ui.selectable(label, selected and self.actor == a.id)) {
-            if (self.actor != a.id) self.select(a, null) else self.gizmo_shown = false;
-            clicked = true;
+    {
+        self.acquire();
+        defer self.release();
+        const store = &self.store;
+        const text = scene.searchText();
+        for (store.actors.items) |a| {
+            if (!store.isLive(a)) continue;
+            live += 1;
+            // The one being posed stays, so searching never hides it
+            if (self.actor != a.id and !matchesActor(a, text)) continue;
+            self.rows.append(gpa, .{ .id = a.id, .name = a.name, .edited = store.hasEdits(a.id) }) catch break;
+        }
+    }
+    const rows = self.rows.items;
+    const n = rows.len;
+    for (rows[0..n]) |*r| {
+        const again = scene.isSelected("actor", r.id);
+        if (scene.row("actor", r.id, icons.user, "{s}{s}", .{ r.name.get(), if (r.edited) " *" else "" }) and again) {
+            // In front again, even over another gizmo
+            self.acquire();
+            defer self.release();
+            self.gizmo_shown = false;
         }
     }
     if (live == 0) {
         ui.textDisabled("None yet", .{});
         ui.tooltip("Posing needs a plugin for this game, or its engine, that hands it skeletons.", .{});
-    } else if (shown == 0) ui.textDisabled("Nothing's called that", .{});
-    return clicked;
+    } else if (n == 0) ui.textDisabled("Nothing's called that", .{});
 }
 
-/// The posed actor's bones and shapes.
-pub fn drawActorPanel(self: *Posing) void {
+/// Freezing, on each actor's row.
+fn actorIcons(self: *Posing, key: Target) void {
     self.acquire();
     defer self.release();
+    const a = self.store.byId(key.id) orelse return Scene.skipIcon();
+    if (Scene.rowIcon(icons.snowflake ++ "##freeze", a.frozen, "{s} the actor", .{if (a.frozen) "Unfreeze" else "Freeze"})) setFrozen(a, !a.frozen);
+}
+
+/// What Actors itself shows: how to pick one.
+fn drawActors(self: *Posing, _: Target) void {
+    self.acquire();
+    defer self.release();
+    var live: usize = 0;
+    for (self.store.actors.items) |a| live += @intFromBool(self.store.isLive(a));
+    if (live == 0) return ui.textWrapped("Nothing to pose yet. Posing needs a plugin for this game, or its engine, that hands it skeletons.", .{});
+    ui.textDisabled("{d} in the scene. Pick one from the list, or click on a bone in the game.", .{live});
+}
+
+/// The picked actor's tools, bones and shapes.
+fn drawActor(self: *Posing, key: Target) void {
+    self.acquire();
+    defer self.release();
+    self.syncPicked();
     const store = &self.store;
-    const a = self.current(store) orelse {
-        var any = false;
-        for (store.actors) |*one| any = any or store.isLive(one);
-        if (any) {
-            ui.textDisabled("Pick an actor from the list, or click on a bone in the game.", .{});
-        } else ui.textWrapped("Nothing to pose yet. Posing needs a plugin for this game, or its engine, that hands it skeletons.", .{});
-        return;
-    };
+    const a = store.byId(key.id) orelse return ui.textDisabled("That actor's gone.", .{});
+    if (!store.isLive(a)) return ui.textDisabled("That actor's gone.", .{});
+    self.actorTools(store, a);
     var title: [64:0]u8 = undefined;
     ui.separatorText(std.fmt.bufPrintSentinel(&title, "{s}{s}", .{ a.name.get(), if (a.frozen) " (frozen)" else "" }, 0) catch "Actor");
 
@@ -442,19 +475,12 @@ pub fn drawActorPanel(self: *Posing) void {
     }
 }
 
-/// The toolbar's posing buttons: the skeletons and gizmo, freezing, focusing and resetting.
-pub fn drawTools(self: *Posing) void {
-    self.acquire();
-    defer self.release();
-    const store = &self.store;
-    const posed = self.current(store);
-    const shown = self.overlay_on;
-    if (Photo.toolButton(if (shown) icons.eye ++ "##posing_overlay" else icons.eye_off ++ "##posing_overlay", shown, "{s} the skeletons and gizmo", .{if (shown) "Hide" else "Show"})) self.overlay_on = !shown;
-    ui.sameLine();
-    const off = ui.disabled(posed == null);
-    defer off.end();
+/// The gizmo's tool, freezing, focusing and resetting, over the actor's bones.
+fn actorTools(self: *Posing, store: *poses.Store, a: *poses.Actor) void {
+    const tight = Photo.compact();
+    defer tight.end();
     {
-        const hidden = ui.disabled(!shown);
+        const hidden = ui.disabled(!self.overlay_on);
         defer hidden.end();
         inline for (.{ .{ Tool.rotate, icons.rotate_3d, "Rotate" }, .{ Tool.move, icons.move_3d, "Move" }, .{ Tool.scale, icons.scale_3d, "Scale" } }) |t| {
             if (Photo.toolButton(t[1] ++ "##posing_" ++ t[2], self.tool == t[0], t[2] ++ " with the gizmo", .{})) self.tool = t[0];
@@ -463,29 +489,21 @@ pub fn drawTools(self: *Posing) void {
         if (Photo.toolButton(icons.globe ++ "##posing_world", self.world_axes, "Line the gizmo up with the world, not the bone", .{})) self.world_axes = !self.world_axes;
     }
     Photo.gap();
-    const frozen = if (posed) |a| a.frozen else false;
-    if (Photo.toolButton(icons.snowflake ++ "##posing_freeze", frozen, "{s} the actor. {s}", .{ if (frozen) "Unfreeze" else "Freeze", self.keyName(.freeze) })) {
-        if (posed) |a| setFrozen(a, !a.frozen);
-    }
+    if (Photo.toolButton(icons.snowflake ++ "##posing_freeze", a.frozen, "{s} the actor. {s}", .{ if (a.frozen) "Unfreeze" else "Freeze", self.keyName(.freeze) })) setFrozen(a, !a.frozen);
     ui.sameLine();
-    const bone = if (posed) |a| self.currentBone(a) else null;
+    const bone = self.currentBone(a);
     {
         const no_bone = ui.disabled(bone == null);
         defer no_bone.end();
         if (Photo.toolButton(icons.crosshair ++ "##posing_focus", false, "Orbit the camera round the picked bone. {s}", .{self.keyName(.focus)})) {
-            if (posed) |a| if (bone) |b| {
-                self.focus_at = a.position(b);
-            };
+            if (bone) |b| self.scene.focus(a.position(b));
         }
     }
     ui.sameLine();
-    const edited = if (posed) |a| store.hasEdits(a.id) else false;
     {
-        const nothing = ui.disabled(!edited);
+        const nothing = ui.disabled(!store.hasEdits(a.id));
         defer nothing.end();
-        if (Photo.toolButton(icons.rotate_ccw ++ "##posing_reset", false, "Put the actor back, bones and shapes", .{})) {
-            if (posed) |a| store.resetActor(a.id);
-        }
+        if (Photo.toolButton(icons.rotate_ccw ++ "##posing_reset", false, "Put the actor back, bones and shapes", .{})) store.resetActor(a.id);
     }
 }
 
@@ -581,9 +599,11 @@ fn shapesTab(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
 
 /// The bones as an indented tree, filtered while searching.
 fn boneList(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
-    var depth: [poses.max_bones]u8 = undefined;
+    self.depths.resize(gpa, a.count) catch return;
+    const depth = self.depths.items;
     // What's shown, which is every bone unless searching
-    var rows: [poses.max_bones]u16 = undefined;
+    self.shown_bones.resize(gpa, a.count) catch return;
+    const rows = self.shown_bones.items;
     var n: usize = 0;
     const picked = self.currentBone(a);
     const text = self.searchText();
@@ -612,7 +632,7 @@ fn boneList(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
 }
 
 fn searchText(self: *const Posing) []const u8 {
-    return std.mem.trim(u8, std.mem.sliceTo(&self.search, 0), " \t");
+    return self.scene.searchText();
 }
 
 /// By its name, or one of its bones' or shapes'.

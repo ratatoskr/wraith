@@ -109,26 +109,25 @@ pub fn deinit(self: *Hub, shell: *Shell) void {
 fn loadOrder(self: *Hub, shell: *Shell) void {
     if (self.order_loaded) return;
     self.order_loaded = true;
-    var ids: [128]u64 = undefined;
-    var n: usize = 0;
+    var ids: std.ArrayList(u64) = .empty;
+    defer ids.deinit(shell.allocator);
     var it = std.mem.tokenizeScalar(u8, shell.registry.get(shell.own.hub_order).text, ',');
     while (it.next()) |hex| {
-        if (n == ids.len) break;
-        ids[n] = std.fmt.parseInt(u64, hex, 16) catch continue;
-        n += 1;
+        const id = std.fmt.parseInt(u64, hex, 16) catch continue;
+        ids.append(shell.allocator, id) catch break;
     }
-    self.order.load(ids[0..n], &.{});
+    self.order.load(ids.items, &.{});
 }
 
 fn saveOrder(self: *Hub, shell: *Shell) void {
     if (!self.order.takeChanged()) return;
-    var buf: [128 * 17]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
+    var w: std.Io.Writer.Allocating = .init(shell.allocator);
+    defer w.deinit();
     for (self.order.orderIds(), 0..) |id, i| {
-        if (i > 0) w.writeByte(',') catch break;
-        w.print("{x}", .{id}) catch break;
+        if (i > 0) w.writer.writeByte(',') catch return;
+        w.writer.print("{x}", .{id}) catch return;
     }
-    shell.registry.set(shell.own.hub_order, .{ .text = w.buffered() }) catch {};
+    shell.registry.set(shell.own.hub_order, .{ .text = w.written() }) catch {};
 }
 
 fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
@@ -182,8 +181,9 @@ fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
             ui.tooltip("{s}", .{b.label});
         };
     }
-    var plugins: [max_plugins]Tile = undefined;
-    const plugin_count = self.pluginButtons(shell, &plugins);
+    var frame: std.heap.ArenaAllocator = .init(shell.allocator);
+    defer frame.deinit();
+    const plugins = self.pluginButtons(shell, frame.allocator());
     divider();
     if (tile("workbench", icons.square_terminal, shell.workbench.isOpen(), 0)) shell.toggleWorkbench();
     var key_buf: [64]u8 = undefined;
@@ -192,7 +192,7 @@ fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
     } else ui.tooltip("Workbench", .{});
     _ = self.reorder.drawMenu(null);
     if (self.reorder.take()) |move| {
-        if (!self.order.apply(Tile, &windows, Flat{}, move)) _ = self.order.apply(Tile, plugins[0..plugin_count], Flat{}, move);
+        if (!self.order.apply(Tile, &windows, Flat{}, move)) _ = self.order.apply(Tile, plugins, Flat{}, move);
         self.saveOrder(shell);
     }
 }
@@ -266,52 +266,42 @@ fn divider() void {
     ui.sameLine();
 }
 
-/// At most this many plugins on the bar.
-const max_plugins = 32;
-
 /// A button per plugin with menu items. One item and no settings opens straight away, else a list.
-/// `out` gets the tiles in draw order; returns how many.
-fn pluginButtons(self: *Hub, shell: *Shell, out: []Tile) usize {
-    // Asked first, since a plugin going away waits on `MenuItems`
-    var names: [max_plugins][64]u8 = undefined;
-    var name_lens: [max_plugins]usize = @splat(0);
-    var titles: [max_plugins][96]u8 = undefined;
-    var title_lens: [max_plugins]usize = @splat(0);
-    var has: [max_plugins]bool = @splat(false);
-    var n: usize = 0;
+/// The tiles in draw order, in `a`.
+fn pluginButtons(self: *Hub, shell: *Shell, a: std.mem.Allocator) []Tile {
+    // Asked first, since a plugin going away waits on `MenuItems`. Copied whole, so long names still match
+    const Plugin = struct { name: []const u8, title: []const u8, settings: bool = false };
+    var plugins: std.ArrayList(Plugin) = .empty;
     {
         const items = MenuItems.read();
         defer items.end();
         for (items.entries, 0..) |e, i| {
-            if (n == max_plugins or firstSeen(items.entries, i) != i) continue;
-            name_lens[n] = copyInto(&names[n], e.owner.name);
-            title_lens[n] = copyInto(&titles[n], if (e.item.menu.len > 0) e.item.menu else e.owner.name);
-            n += 1;
+            if (firstSeen(items.entries, i) != i) continue;
+            const name = a.dupe(u8, e.owner.name) catch break;
+            const title = a.dupe(u8, if (e.item.menu.len > 0) e.item.menu else e.owner.name) catch break;
+            plugins.append(a, .{ .name = name, .title = title }) catch break;
         }
     }
-    for (0..n) |i| has[i] = shell.pluginHasSettings(names[i][0..name_lens[i]], titles[i][0..title_lens[i]]);
+    for (plugins.items) |*p| p.settings = shell.pluginHasSettings(p.name, p.title);
 
     var settings_for: ?usize = null;
-    var drawn: usize = 0;
+    var tiles: std.ArrayList(Tile) = .empty;
     {
         const items = MenuItems.read();
         defer items.end();
         const all = items.entries;
-        var tiles: usize = 0;
         for (all, 0..) |e, i| {
-            if (tiles == out.len or firstSeen(all, i) != i) continue;
-            out[tiles] = .{ .id = tileId("plugin", e.owner.name), .index = i };
-            tiles += 1;
+            if (firstSeen(all, i) != i) continue;
+            tiles.append(a, .{ .id = tileId("plugin", e.owner.name), .index = i }) catch break;
         }
-        self.order.arrange(Tile, out[0..tiles], Flat{});
-        drawn = tiles;
-        for (out[0..tiles], 0..) |t, k| {
+        self.order.arrange(Tile, tiles.items, Flat{});
+        for (tiles.items, 0..) |t, k| {
             const i = t.index;
             const e = all[i];
-            const plugin = for (names[0..n], name_lens[0..n], 0..) |*name, len, at| {
-                if (std.mem.eql(u8, name[0..len], e.owner.name)) break at;
+            const plugin = for (plugins.items, 0..) |p, at| {
+                if (std.mem.eql(u8, p.name, e.owner.name)) break at;
             } else null;
-            const with_settings = if (plugin) |at| has[at] else false;
+            const with_settings = if (plugin) |at| plugins.items[at].settings else false;
             if (k == 0) divider() else ui.sameLine();
             const scope = ui.id(e.owner);
             defer scope.end();
@@ -338,8 +328,7 @@ fn pluginButtons(self: *Hub, shell: *Shell, out: []Tile) usize {
                 if (item.owner != e.owner) continue;
                 const item_scope = ui.id(item.item);
                 defer item_scope.end();
-                var item_buf: [128]u8 = undefined;
-                const item_label = std.fmt.bufPrintSentinel(&item_buf, "{s}", .{item.item.label}, 0) catch continue;
+                const item_label = a.dupeSentinel(u8, item.item.label, 0) catch continue;
                 _ = ui.menuItem(item_label, .{ .checked = item.item.open });
             }
             if (with_settings) {
@@ -349,15 +338,8 @@ fn pluginButtons(self: *Hub, shell: *Shell, out: []Tile) usize {
         }
     }
     // Outside `MenuItems`, since it calls into the plugin
-    if (settings_for) |at| shell.openPluginSettings(names[at][0..name_lens[at]], titles[at][0..title_lens[at]]);
-    return drawn;
-}
-
-/// As much of `from` as fits. How much that was.
-fn copyInto(to: []u8, from: []const u8) usize {
-    const len = @min(from.len, to.len);
-    @memcpy(to[0..len], from[0..len]);
-    return len;
+    if (settings_for) |at| shell.openPluginSettings(plugins.items[at].name, plugins.items[at].title);
+    return tiles.items;
 }
 
 /// Where the owner of `all[i]` first shows up.

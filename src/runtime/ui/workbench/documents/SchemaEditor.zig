@@ -496,14 +496,14 @@ pub fn findPluginSchemas(wb: *Workbench, out: *std.ArrayList(Found)) void {
     freeFound(gpa, out);
     const io = wb.io orelse return;
     const shell = wb.shell orelse return;
-    const infos = gpa.alloc(PluginLoader.Info, 256) catch return;
-    defer gpa.free(infos);
-    const n = blk: {
+    var infos: std.ArrayList(PluginLoader.Info) = .empty;
+    defer infos.deinit(gpa);
+    {
         const loader = shell.acquireLoader() orelse return;
         defer shell.releaseLoader();
-        break :blk loader.list(infos);
-    };
-    for (infos[0..n]) |*info| {
+        loader.listInto(gpa, &infos);
+    }
+    for (infos.items) |*info| {
         if (info.source_dir.get().len == 0) continue;
         var listing = io.concurrent(listSchemas, .{ io, gpa, info.name.get(), info.source_dir.get(), out }) catch continue;
         listing.await(io) catch continue;

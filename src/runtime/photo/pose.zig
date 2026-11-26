@@ -7,11 +7,6 @@ const Vec3 = math.Vec3;
 const Quat = math.Quat;
 const Mat4 = math.Mat4;
 
-pub const max_bones = 512;
-pub const max_actors = 32;
-pub const max_edits = 256;
-pub const max_shapes = 512;
-pub const max_shape_edits = 256;
 /// Render frames an actor stays listed after the game last posed it.
 pub const stale_frames = 120;
 
@@ -118,10 +113,10 @@ pub const Placed = struct {
 };
 
 /// Puts each edit on its bone and everything under it. `parents` must come before their children.
-pub fn apply(parents: []const i32, world: []Mat4, edits: []Placed) void {
+/// `inside` is room for a flag a bone.
+pub fn apply(parents: []const i32, world: []Mat4, edits: []Placed, inside: []bool) void {
     std.mem.sort(Placed, edits, {}, Placed.lessThan);
-    var inside: [max_bones]bool = undefined;
-    const n = @min(parents.len, world.len, max_bones);
+    const n = @min(parents.len, world.len, inside.len);
     for (edits) |e| {
         const b = e.bone;
         if (b >= n) continue;
@@ -145,23 +140,110 @@ pub const Actor = struct {
     /// `Store.frame` when the game last posed it
     seen: u64 = 0,
     count: u32 = 0,
-    names: [max_bones]Name = undefined,
-    parents: [max_bones]i32 = undefined,
+    /// Each as long as the most bones it's had, so posing doesn't allocate every frame
+    names: []Name = &.{},
+    parents: []i32 = &.{},
     /// As posed, in the bones' space
-    world: [max_bones]Mat4 = undefined,
+    world: []Mat4 = &.{},
     to_world: Mat4 = .identity,
     frozen: bool = false,
     /// What it's held at while frozen, from before the edits. 0 means take the next frame's
     base_count: u32 = 0,
-    base: [max_bones]Mat4 = undefined,
+    base: []Mat4 = &.{},
     shape_count: u32 = 0,
-    shape_names: [max_shapes]Name = undefined,
-    shape_meshes: [max_shapes]Name = undefined,
+    /// Each as long as the most shapes it's had, likewise
+    shape_names: []Name = &.{},
+    shape_meshes: []Name = &.{},
     /// As posed
-    weights: [max_shapes]f32 = undefined,
+    weights: []f32 = &.{},
     /// Like `base`, for the weights
     shape_base_count: u32 = 0,
-    shape_base: [max_shapes]f32 = undefined,
+    shape_base: []f32 = &.{},
+
+    /// Room for `n` bones, or what it had when out of memory. How many it has room for.
+    fn bones(a: *Actor, gpa: std.mem.Allocator, n: usize) usize {
+        if (n <= a.names.len) return n;
+        const names = gpa.alloc(Name, n) catch return a.names.len;
+        const parents = gpa.alloc(i32, n) catch {
+            gpa.free(names);
+            return a.names.len;
+        };
+        const world = gpa.alloc(Mat4, n) catch {
+            gpa.free(names);
+            gpa.free(parents);
+            return a.names.len;
+        };
+        const base = gpa.alloc(Mat4, n) catch {
+            gpa.free(names);
+            gpa.free(parents);
+            gpa.free(world);
+            return a.names.len;
+        };
+        // A frozen pose of the old size is taken again next frame anyway
+        a.freeBones(gpa);
+        a.names = names;
+        a.parents = parents;
+        a.world = world;
+        a.base = base;
+        a.base_count = 0;
+        return n;
+    }
+
+    /// Room for `n` shapes, likewise.
+    fn shapes(a: *Actor, gpa: std.mem.Allocator, n: usize) usize {
+        if (n <= a.shape_names.len) return n;
+        const names = gpa.alloc(Name, n) catch return a.shape_names.len;
+        const meshes = gpa.alloc(Name, n) catch {
+            gpa.free(names);
+            return a.shape_names.len;
+        };
+        const weights = gpa.alloc(f32, n) catch {
+            gpa.free(names);
+            gpa.free(meshes);
+            return a.shape_names.len;
+        };
+        const base = gpa.alloc(f32, n) catch {
+            gpa.free(names);
+            gpa.free(meshes);
+            gpa.free(weights);
+            return a.shape_names.len;
+        };
+        a.freeShapes(gpa);
+        a.shape_names = names;
+        a.shape_meshes = meshes;
+        a.weights = weights;
+        a.shape_base = base;
+        a.shape_base_count = 0;
+        return n;
+    }
+
+    fn freeBones(a: *Actor, gpa: std.mem.Allocator) void {
+        gpa.free(a.names);
+        gpa.free(a.parents);
+        gpa.free(a.world);
+        gpa.free(a.base);
+    }
+
+    fn freeShapes(a: *Actor, gpa: std.mem.Allocator) void {
+        gpa.free(a.shape_names);
+        gpa.free(a.shape_meshes);
+        gpa.free(a.weights);
+        gpa.free(a.shape_base);
+    }
+
+    /// Unused again, keeping its room for whoever's next.
+    fn clear(a: *Actor) void {
+        a.* = .{
+            .names = a.names,
+            .parents = a.parents,
+            .world = a.world,
+            .base = a.base,
+            .shape_names = a.shape_names,
+            .shape_meshes = a.shape_meshes,
+            .weights = a.weights,
+            .shape_base = a.shape_base,
+        };
+    }
 
     /// Where a bone is in the world.
     pub fn position(a: *const Actor, bone: usize) Vec3 {
@@ -176,11 +258,15 @@ pub const Actor = struct {
 
 /// Shared between the game's threads, which pose, and the render thread, which edits. Callers hold the lock.
 pub const Store = struct {
-    actors: []Actor,
-    edits: [max_edits]Edit = undefined,
-    edit_count: usize = 0,
-    shape_edits: [max_shape_edits]ShapeEdit = undefined,
-    shape_edit_count: usize = 0,
+    gpa: std.mem.Allocator,
+    /// Each stays where it is, since the window holds them while it draws. Unused ones are reused
+    actors: std.ArrayList(*Actor) = .empty,
+    edits: std.ArrayList(Edit) = .empty,
+    shape_edits: std.ArrayList(ShapeEdit) = .empty,
+    /// `pose`'s, kept so it doesn't allocate every frame
+    placed: std.ArrayList(Placed) = .empty,
+    inside: std.ArrayList(bool) = .empty,
+    scratch_parents: std.ArrayList(i32) = .empty,
     /// Counts render frames
     frame: u64 = 0,
     view: Mat4 = .identity,
@@ -193,23 +279,37 @@ pub const Store = struct {
         s.view_proj = view.mul(projection);
     }
 
-    pub fn init(gpa: std.mem.Allocator) !Store {
-        const actors = try gpa.alloc(Actor, max_actors);
-        for (actors) |*a| a.* = .{};
-        return .{ .actors = actors };
+    pub fn init(gpa: std.mem.Allocator) Store {
+        return .{ .gpa = gpa };
     }
 
-    pub fn deinit(s: *Store, gpa: std.mem.Allocator) void {
-        gpa.free(s.actors);
+    pub fn deinit(s: *Store) void {
+        for (s.actors.items) |a| {
+            a.freeBones(s.gpa);
+            a.freeShapes(s.gpa);
+            s.gpa.destroy(a);
+        }
+        s.actors.deinit(s.gpa);
+        s.edits.deinit(s.gpa);
+        s.shape_edits.deinit(s.gpa);
+        s.placed.deinit(s.gpa);
+        s.inside.deinit(s.gpa);
+        s.scratch_parents.deinit(s.gpa);
     }
 
     /// `bones` are anything with a `name` and a `parent`, and `matrices` one for each.
     pub fn pose(s: *Store, id: u64, name: []const u8, bones: anytype, matrices: []Mat4, to_world: Mat4) void {
-        const count: u32 = @intCast(@min(bones.len, matrices.len, max_bones));
-        const world = matrices[0..count];
+        const given: usize = @min(bones.len, matrices.len);
         const slot = s.slotFor(id);
+        // All of them, unless memory's run out
+        const count: u32 = @intCast(if (slot) |a| a.bones(s.gpa, given) else given);
+        const world = matrices[0..count];
         if (slot) |a| {
-            if (!a.used or a.id != id) a.* = .{ .used = true, .id = id };
+            if (!a.used or a.id != id) {
+                a.clear();
+                a.used = true;
+                a.id = id;
+            }
             a.name = .init(name);
             a.seen = s.frame;
             a.to_world = to_world;
@@ -227,29 +327,32 @@ pub const Store = struct {
             }
         }
 
-        var placed: [max_edits]Placed = undefined;
-        var n: usize = 0;
-        for (s.edits[0..s.edit_count]) |*e| {
+        s.placed.clearRetainingCapacity();
+        for (s.edits.items) |*e| {
             if (e.actor != id) continue;
             const bone = for (bones[0..count], 0..) |b, i| {
                 if (e.bone.eql(textOf(b.name))) break i;
             } else continue;
-            placed[n] = .{ .bone = @intCast(bone), .matrix = e.matrix() };
-            n += 1;
+            s.placed.append(s.gpa, .{ .bone = @intCast(bone), .matrix = e.matrix() }) catch break;
         }
-        if (n > 0) {
-            var parents: [max_bones]i32 = undefined;
-            for (bones[0..count], parents[0..count]) |b, *p| p.* = b.parent;
-            apply(parents[0..count], world, placed[0..n]);
+        if (s.placed.items.len > 0) placed: {
+            const parents = if (slot) |a| a.parents[0..count] else blk: {
+                s.scratch_parents.resize(s.gpa, count) catch break :placed;
+                for (bones[0..count], s.scratch_parents.items) |b, *p| p.* = b.parent;
+                break :blk s.scratch_parents.items;
+            };
+            s.inside.resize(s.gpa, count) catch break :placed;
+            apply(parents, world, s.placed.items, s.inside.items);
         }
         if (slot) |a| @memcpy(a.world[0..count], world);
     }
 
     /// `shapes` have a `name` and `mesh`, one weight each. Call after `pose` for the same actor.
     pub fn shape(s: *Store, id: u64, shapes: anytype, weights: []f32) void {
-        const count: u32 = @intCast(@min(shapes.len, weights.len, max_shapes));
-        const w = weights[0..count];
+        const given: usize = @min(shapes.len, weights.len);
         const slot = s.byId(id);
+        const count: u32 = @intCast(if (slot) |a| a.shapes(s.gpa, given) else given);
+        const w = weights[0..count];
         if (slot) |a| {
             if (a.shape_count != count) a.shape_base_count = 0;
             a.shape_count = count;
@@ -276,7 +379,7 @@ pub const Store = struct {
     /// What goes on a shape: its mesh's own edit, else one for every mesh.
     pub fn shapeEditFor(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) ?*ShapeEdit {
         var every: ?*ShapeEdit = null;
-        for (s.shape_edits[0..s.shape_edit_count]) |*e| {
+        for (s.shape_edits.items) |*e| {
             if (e.actor != actor or !e.fits(mesh, shape_name)) continue;
             if (e.mesh.len > 0) return e;
             every = e;
@@ -286,65 +389,64 @@ pub const Store = struct {
 
     /// Exactly this one, by mesh, empty for every mesh, and shape.
     pub fn findShapeEdit(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) ?*ShapeEdit {
-        for (s.shape_edits[0..s.shape_edit_count]) |*e| {
+        for (s.shape_edits.items) |*e| {
             if (e.actor == actor and e.mesh.eql(mesh) and e.shape.eql(shape_name)) return e;
         }
         return null;
     }
 
-    /// Made if it isn't there. Null when there are too many.
+    /// Made if it isn't there. Null when out of memory. Good till the next one's made.
     pub fn shapeEdit(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) ?*ShapeEdit {
         if (s.findShapeEdit(actor, mesh, shape_name)) |e| return e;
-        if (s.shape_edit_count == max_shape_edits) return null;
-        const e = &s.shape_edits[s.shape_edit_count];
+        const e = s.shape_edits.addOne(s.gpa) catch return null;
         e.* = .{ .actor = actor, .mesh = .init(mesh), .shape = .init(shape_name) };
-        s.shape_edit_count += 1;
         return e;
     }
 
     pub fn resetShape(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) void {
         const e = s.findShapeEdit(actor, mesh, shape_name) orelse return;
-        s.shape_edit_count -= 1;
-        e.* = s.shape_edits[s.shape_edit_count];
+        _ = s.shape_edits.swapRemove(e - s.shape_edits.items.ptr);
     }
 
     /// Every mesh's own edit of a shape by its key, so one for every mesh isn't hidden by them.
     pub fn resetShapeOnMeshes(s: *Store, actor: u64, key: []const u8) void {
         var i: usize = 0;
-        while (i < s.shape_edit_count) {
-            const e = &s.shape_edits[i];
+        while (i < s.shape_edits.items.len) {
+            const e = &s.shape_edits.items[i];
             if (e.actor == actor and e.mesh.len > 0 and std.mem.eql(u8, shapeKey(e.shape.get()), key)) {
-                s.shape_edit_count -= 1;
-                e.* = s.shape_edits[s.shape_edit_count];
+                _ = s.shape_edits.swapRemove(i);
             } else i += 1;
         }
     }
 
     pub fn resetShapes(s: *Store, actor: u64) void {
         var i: usize = 0;
-        while (i < s.shape_edit_count) {
-            if (s.shape_edits[i].actor == actor) {
-                s.shape_edit_count -= 1;
-                s.shape_edits[i] = s.shape_edits[s.shape_edit_count];
-            } else i += 1;
+        while (i < s.shape_edits.items.len) {
+            if (s.shape_edits.items[i].actor == actor) _ = s.shape_edits.swapRemove(i) else i += 1;
         }
     }
 
     pub fn hasShapeEdits(s: *const Store, actor: u64) bool {
-        for (s.shape_edits[0..s.shape_edit_count]) |e| if (e.actor == actor) return true;
+        for (s.shape_edits.items) |e| if (e.actor == actor) return true;
         return false;
     }
 
-    /// Its own slot, a free one, or the longest gone that has nothing to lose. Null when they're all in use.
+    /// Its own slot, a free one, the longest gone that has nothing to lose, or a new one. Null when
+    /// out of memory.
     fn slotFor(s: *Store, id: u64) ?*Actor {
-        for (s.actors) |*a| if (a.used and a.id == id) return a;
-        for (s.actors) |*a| if (!a.used) return a;
+        for (s.actors.items) |a| if (a.used and a.id == id) return a;
+        for (s.actors.items) |a| if (!a.used) return a;
         var oldest: ?*Actor = null;
-        for (s.actors) |*a| {
+        for (s.actors.items) |a| {
             if (a.frozen or s.hasEdits(a.id) or s.isLive(a)) continue;
             if (oldest == null or a.seen < oldest.?.seen) oldest = a;
         }
-        return oldest;
+        if (oldest) |a| return a;
+        s.actors.ensureUnusedCapacity(s.gpa, 1) catch return null;
+        const a = s.gpa.create(Actor) catch return null;
+        a.* = .{};
+        s.actors.appendAssumeCapacity(a);
+        return a;
     }
 
     pub fn isLive(s: *const Store, a: *const Actor) bool {
@@ -352,63 +454,57 @@ pub const Store = struct {
     }
 
     pub fn byId(s: *Store, id: u64) ?*Actor {
-        for (s.actors) |*a| if (a.used and a.id == id) return a;
+        for (s.actors.items) |a| if (a.used and a.id == id) return a;
         return null;
     }
 
     pub fn findEdit(s: *Store, actor: u64, bone: []const u8) ?*Edit {
-        for (s.edits[0..s.edit_count]) |*e| if (e.actor == actor and e.bone.eql(bone)) return e;
+        for (s.edits.items) |*e| if (e.actor == actor and e.bone.eql(bone)) return e;
         return null;
     }
 
-    /// The bone's edit, made if it hasn't one. Null when there are too many.
+    /// The bone's edit, made if it hasn't one. Null when out of memory. Good till the next one's made.
     pub fn edit(s: *Store, actor: u64, bone: []const u8) ?*Edit {
         if (s.findEdit(actor, bone)) |e| return e;
-        if (s.edit_count == max_edits) return null;
-        const e = &s.edits[s.edit_count];
+        const e = s.edits.addOne(s.gpa) catch return null;
         e.* = .{ .actor = actor, .bone = .init(bone) };
-        s.edit_count += 1;
         return e;
     }
 
     pub fn resetBone(s: *Store, actor: u64, bone: []const u8) void {
         const e = s.findEdit(actor, bone) orelse return;
-        s.edit_count -= 1;
-        e.* = s.edits[s.edit_count];
+        _ = s.edits.swapRemove(e - s.edits.items.ptr);
     }
 
     pub fn resetActor(s: *Store, actor: u64) void {
         var i: usize = 0;
-        while (i < s.edit_count) {
-            if (s.edits[i].actor == actor) {
-                s.edit_count -= 1;
-                s.edits[i] = s.edits[s.edit_count];
-            } else i += 1;
+        while (i < s.edits.items.len) {
+            if (s.edits.items[i].actor == actor) _ = s.edits.swapRemove(i) else i += 1;
         }
         s.resetShapes(actor);
     }
 
     /// Bones or shapes.
     pub fn hasEdits(s: *const Store, actor: u64) bool {
-        for (s.edits[0..s.edit_count]) |e| if (e.actor == actor) return true;
+        for (s.edits.items) |e| if (e.actor == actor) return true;
         return s.hasShapeEdits(actor);
     }
 
     pub fn anyEdits(s: *const Store) bool {
-        return s.edit_count > 0 or s.shape_edit_count > 0;
+        return s.edits.items.len > 0 or s.shape_edits.items.len > 0;
     }
 
     pub fn anyFrozen(s: *const Store) bool {
-        for (s.actors) |*a| if (a.used and a.frozen) return true;
+        for (s.actors.items) |a| if (a.used and a.frozen) return true;
         return false;
     }
 
     /// Everything `owner` handed over, edits and all, since the ids it gave mean nothing once it's gone.
     pub fn forgetOwner(s: *Store, owner: usize) void {
-        for (s.actors) |*a| {
+        for (s.actors.items) |a| {
             if (!a.used or a.owner != owner) continue;
             s.resetActor(a.id);
-            a.* = .{};
+            a.clear();
         }
     }
 };
@@ -431,7 +527,8 @@ test "turning a bone swings its children round it" {
     const parents = [_]i32{ -1, 0, 1 };
     var world = [_]Mat4{ at(0, 0, 0), at(1, 0, 0), at(2, 0, 0) };
     var edits = [_]Placed{.{ .bone = 1, .matrix = .transform(.zero, euler(.init(0, 0, 90)), .one) }};
-    apply(&parents, &world, &edits);
+    var inside: [parents.len]bool = undefined;
+    apply(&parents, &world, &edits, &inside);
     try testing.expect(world[0].getTranslation().approxEql(.init(0, 0, 0), 1e-5));
     try testing.expect(world[1].getTranslation().approxEql(.init(1, 0, 0), 1e-5));
     // 90 degrees round z takes x onto y
@@ -446,7 +543,8 @@ test "a parent's edit goes on before its child's" {
         .{ .bone = 1, .matrix = .transform(.zero, euler(.init(0, 0, 90)), .one) },
         .{ .bone = 0, .matrix = .transform(.zero, euler(.init(0, 0, 90)), .one) },
     };
-    apply(&parents, &world, &edits);
+    var inside: [parents.len]bool = undefined;
+    apply(&parents, &world, &edits, &inside);
     try testing.expect(world[1].getTranslation().approxEql(.init(0, 1, 0), 1e-5));
     try testing.expect(world[2].getTranslation().approxEql(.init(-1, 1, 0), 1e-5));
     // Not under the elbow, so only the shoulder's turn moves it
@@ -475,8 +573,8 @@ test "an edit's matrix comes back as the same edit" {
 }
 
 test "edits stick by name every frame, and freezing holds the pose from before them" {
-    var store: Store = try .init(testing.allocator);
-    defer store.deinit(testing.allocator);
+    var store: Store = .init(testing.allocator);
+    defer store.deinit();
     const bones = [_]TestBone{ .{ .name = "root", .parent = -1 }, .{ .name = "head", .parent = 0 } };
 
     store.edit(7, "head").?.position = .init(0, 2, 0);
@@ -503,8 +601,8 @@ test "edits stick by name every frame, and freezing holds the pose from before t
 }
 
 test "an owner going takes its actors' edits with it, and no one else's" {
-    var store: Store = try .init(testing.allocator);
-    defer store.deinit(testing.allocator);
+    var store: Store = .init(testing.allocator);
+    defer store.deinit();
     const bones = [_]TestBone{ .{ .name = "root", .parent = -1 }, .{ .name = "head", .parent = 0 } };
     var frame = [_]Mat4{ at(0, 0, 0), at(0, 1, 0) };
     store.pose(7, "Rean", &bones, &frame, .identity);
@@ -527,8 +625,8 @@ test "an owner going takes its actors' edits with it, and no one else's" {
 const TestShape = struct { name: []const u8, mesh: []const u8 };
 
 test "a shape edit for every mesh goes on each that has it, and a mesh's own wins" {
-    var store: Store = try .init(testing.allocator);
-    defer store.deinit(testing.allocator);
+    var store: Store = .init(testing.allocator);
+    defer store.deinit();
     const bones = [_]TestBone{.{ .name = "root", .parent = -1 }};
     var frame = [_]Mat4{at(0, 0, 0)};
     store.pose(7, "Rean", &bones, &frame, .identity);
@@ -567,8 +665,8 @@ test "a shape edit for every mesh goes on each that has it, and a mesh's own win
 }
 
 test "freezing holds the weights from before the edits" {
-    var store: Store = try .init(testing.allocator);
-    defer store.deinit(testing.allocator);
+    var store: Store = .init(testing.allocator);
+    defer store.deinit();
     const bones = [_]TestBone{.{ .name = "root", .parent = -1 }};
     var frame = [_]Mat4{at(0, 0, 0)};
     const shapes = [_]TestShape{ .{ .name = "blink", .mesh = "Face" }, .{ .name = "smile", .mesh = "Face" } };
@@ -582,6 +680,31 @@ test "freezing holds the weights from before the edits" {
     weights = .{ 1, 0 };
     store.shape(7, &shapes, &weights);
     try testing.expectEqualSlices(f32, &.{ 0.1, 0.9 }, &weights);
+}
+
+test "big skeletons, crowds and many edits all fit" {
+    var store: Store = .init(testing.allocator);
+    defer store.deinit();
+    // More of each than the old fixed lists held: 32 actors, 512 bones, 256 edits
+    const count = 2048;
+    var names: [count][8]u8 = undefined;
+    var bones: [count]TestBone = undefined;
+    for (&bones, &names, 0..) |*b, *n, i| b.* = .{ .name = std.fmt.bufPrint(n, "b{d}", .{i}) catch unreachable, .parent = @as(i32, @intCast(i)) - 1 };
+    const frame = try testing.allocator.alloc(Mat4, count);
+    defer testing.allocator.free(frame);
+    for (0..100) |actor| {
+        @memset(frame, at(0, 1, 0));
+        store.pose(actor, "extra", &bones, frame, .identity);
+    }
+    try testing.expectEqual(100, store.actors.items.len);
+    try testing.expectEqual(count, store.byId(99).?.count);
+    for (0..1000) |i| store.edit(i % 100, bones[i].name).?.scale = .init(1, 1, 1);
+    try testing.expectEqual(1000, store.edits.items.len);
+    // The last bone, past where a fixed skeleton stopped, still takes an edit
+    store.edit(5, bones[count - 1].name).?.position = .init(0, 0, 1);
+    @memset(frame, at(0, 0, 0));
+    store.pose(5, "extra", &bones, frame, .identity);
+    try testing.expect(frame[count - 1].getTranslation().z > 0.5);
 }
 
 test "a shape's key is what's after its last dot" {

@@ -67,6 +67,7 @@ const GameSpeed = @import("../GameSpeed.zig");
 const GameInfo = @import("../../GameInfo.zig");
 const Managed = @import("../../Managed.zig");
 const plugin_panels = @import("../../host/workbench_panels.zig");
+const slots = @import("../../host/slots.zig");
 
 const AppWindow = tuft_imgui.AppWindow;
 const log = core.log.scoped(.wraith_ui);
@@ -497,7 +498,10 @@ pub fn tick(self: *Workbench) void {
     }
     const app = self.app orelse return self.holdGameInput(false);
     // A closed Workbench draws nothing, so its plugins' panels would still say they're open
-    if (!app.isOpen()) plugin_panels.hideAll();
+    if (!app.isOpen()) {
+        slots.hide(.workbench_plugins);
+        slots.hide(.workbench_engine);
+    }
     const active = app.isActive();
     // Held from opening till it's been in front and you've clicked back into the game
     if (active or !app.isOpen() or now >= self.opening_until_ns) self.awaiting_focus = false;

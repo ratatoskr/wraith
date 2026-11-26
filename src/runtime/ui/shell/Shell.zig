@@ -31,6 +31,7 @@ const TweaksWindow = @import("TweaksWindow.zig");
 const TweakLayout = @import("../TweakLayout.zig");
 const ui_area = @import("../../host/ui_area.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
+const slots = @import("../../host/slots.zig");
 const AboutWindow = @import("AboutWindow.zig");
 const ShellSettings = @import("ShellSettings.zig");
 const Screenshot = @import("../../Screenshot.zig");
@@ -176,7 +177,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
     };
     self.windows.photo.photo = self.photo;
     if (self.photo) |p| p.window = &self.windows.photo;
-    self.windows.photo.screenshot = self.screenshot;
+    if (self.photo) |p| p.screenshot = self.screenshot;
     self.applyFrameSettings(self.own.frameStats());
     self.applyThemeSetting();
     Workbench.keys.apply(self.own.workbenchKeys());
@@ -456,6 +457,8 @@ fn draw(self: *Shell) void {
     self.followOsTheme();
     self.watchClashes();
     self.hub.draw(self);
+    // What drew last frame is what's showing; a closed window drew nothing
+    inline for (.{ .settings, .photo_toolbar, .photo_scene, .photo_inspector, .photo_row }) |slot| slots.settleSlot(slot);
     self.windows.system.draw();
     if (self.welcome.draw(self.overlay)) |choices| {
         self.finishWelcome(choices);
@@ -787,7 +790,7 @@ const tests = struct {
         }
     }
 
-    test "Photo mode opens on Posing's key, draws each part, and closing it stops posing" {
+    test "Photo mode opens on its key, draws each part, and closing it stops posing" {
         var rig: Rig = undefined;
         try rig.init(.{});
         defer rig.deinit();
@@ -810,24 +813,84 @@ const tests = struct {
             photo.posing.store.shape(7, &shapes, &weights);
         }
 
-        photo.posing.setOpen(true);
+        photo.setOpen(true);
         for (0..2) |_| rig.present();
         try testing.expect(window.window.open);
         try testing.expect(rig.overlay.cursorRequested());
 
-        for ([_]@TypeOf(window.picked){ .world, .camera }) |p| {
-            window.picked = p;
+        for ([_]struct { []const u8, u64 }{ .{ "world", 0 }, .{ "cameras", 0 }, .{ "camera", 3 }, .{ "actors", 0 } }) |k| {
+            photo.scene.select(k[0], k[1]);
             for (0..2) |_| rig.present();
         }
         // Picking a bone in the game shows its actor
         photo.posing.select(photo.posing.store.byId(7).?, 1);
         for (0..2) |_| rig.present();
-        try testing.expectEqual(.actor, window.picked);
+        try testing.expectEqual(7, photo.scene.selectedOf("actor"));
 
         window.window.open = false;
         for (0..2) |_| rig.present();
-        try testing.expect(!photo.posing.isOpen());
+        try testing.expect(!photo.isOpen());
         try testing.expect(!rig.overlay.cursorRequested());
+    }
+
+    test "a plugin's contributions show in Photo mode's tree and inspector, and on its Settings page" {
+        const sdk = @import("wraith_sdk");
+        const Loaded = @import("../../PluginLoader.zig").Loaded;
+        const W = @import("wraith_api").wraith;
+        var rig: Rig = undefined;
+        try rig.init(.{});
+        defer rig.deinit();
+        // Room for the window's tree and inspector, since the rig's window starts tiny
+        try testing.expect(@import("tuft_window").setSize(rig.hwnd, .{ .width = 1280, .height = 800 }));
+        try testing.expect(rig.resize(1280, 800));
+        const shell = try Shell.create(testing.allocator, rig.overlay, rig.keybinds, .{ .io = testing.io });
+        defer shell.destroy();
+        const photo = shell.photo.?;
+
+        var loaded: Loaded = undefined;
+        loaded.initForTest(testing.allocator, "lights");
+        sdk.Owner.attach(loaded.root());
+        defer sdk.Owner.detach();
+        const area = sdk.wraith.root().?.ui();
+        const Draws = struct {
+            count: u32 = 0,
+            kind: [16]u8 = undefined,
+            kind_len: usize = 0,
+
+            fn draw(self: *@This(), target: W.Slot.Target) void {
+                self.count += 1;
+                self.kind_len = @min(target.kind.len, self.kind.len);
+                @memcpy(self.kind[0..self.kind_len], target.kind[0..self.kind_len]);
+            }
+        };
+        var node: Draws = .{};
+        var facet: Draws = .{};
+        var page: Draws = .{};
+        const lamp = try area.contribute(.{ .slot = "photo.scene", .id = "lamp", .parent = "world", .kind = "light", .node = 1, .title = "Lamp" }, .init(&node, Draws.draw));
+        _ = try area.contribute(.{ .slot = "photo.inspector", .kind = "light", .title = "Colour", .open = true }, .init(&facet, Draws.draw));
+        _ = try area.contribute(.{ .slot = "settings", .title = "Lights", .open = true }, .init(&page, Draws.draw));
+
+        photo.setOpen(true);
+        for (0..2) |_| rig.present();
+        try testing.expect(!lamp.isOpen());
+        // Picking it shows its own draw and the inspector's for its kind
+        lamp.focus();
+        for (0..3) |_| rig.present();
+        try testing.expect(photo.scene.isSelected("light", 1));
+        try testing.expect(node.count > 0 and facet.count > 0);
+        try testing.expectEqualStrings("light", facet.kind[0..facet.kind_len]);
+        try testing.expect(lamp.isOpen());
+
+        // Its page in Settings, though it has no settings of its own
+        shell.windows.settings.showGroup(loaded.displayName());
+        for (0..3) |_| rig.present();
+        try testing.expect(page.count > 0);
+
+        loaded.owner.close();
+        const drawn = node.count;
+        for (0..2) |_| rig.present();
+        try testing.expectEqual(drawn, node.count);
+        loaded.deinitForTest();
     }
 
     test "the welcome dims the game and holds input till it's dismissed" {

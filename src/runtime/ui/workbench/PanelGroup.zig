@@ -1,5 +1,5 @@
-//! A docked window of tabs: some of the Workbench's own panels, then plugins' panels from
-//! `host.workbench_panels`. The engine's group is named after the game's engine.
+//! A docked window of tabs: some of the Workbench's own panels, then what plugins add to its slot,
+//! `workbench.plugins` or `workbench.engine`. The engine's group is named after the game's engine.
 
 const PanelGroup = @This();
 
@@ -7,13 +7,10 @@ const std = @import("std");
 
 const ui = @import("wraith_ui");
 
-const panels = @import("../../host/workbench_panels.zig");
+const slots = @import("../../host/slots.zig");
 const Group = @import("Group.zig");
 
-const Panel = panels.Panel;
-
-/// Most plugin panels a group shows.
-pub const max_panels = 32;
+const Panel = slots.Entry;
 
 window: ui.Window,
 /// Engine plugins' panels, or the rest.
@@ -43,6 +40,10 @@ pub fn init(engine: bool, own: []const Group.Part, empty: [:0]const u8) PanelGro
     return self;
 }
 
+pub fn slot(self: *const PanelGroup) slots.Slot {
+    return if (self.engine) .workbench_engine else .workbench_plugins;
+}
+
 /// `name` like `Unity`, keeping it the same window.
 pub fn setName(self: *PanelGroup, name: []const u8) void {
     const id = if (self.engine) "###wraith.engine" else "###wraith.plugins";
@@ -53,13 +54,11 @@ pub fn setName(self: *PanelGroup, name: []const u8) void {
 /// Each frame before drawing, open or not: picks up plugins' `focus` and opens itself the first time
 /// there's something to show. Workbench thread.
 pub fn poll(self: *PanelGroup, something_to_show: bool) void {
-    var buf: [max_panels]*Panel = undefined;
-    const taken = panels.take(self.engine, &buf);
-    defer panels.release(taken);
+    var held = slots.take(self.slot());
+    defer held.end();
+    const taken = held.items();
+    slots.settle(taken);
     for (taken) |p| {
-        // What the last frame drew, so it never reads as closed while it's showing
-        p.shown.store(p.drawn, .release);
-        p.drawn = false;
         if (p.focus_wanted.swap(false, .acq_rel)) {
             self.pick_label = std.hash.Wyhash.hash(0, p.label);
             self.window.focus();
@@ -80,9 +79,9 @@ pub fn focusOwn(self: *PanelGroup, owner: *const anyopaque) void {
 }
 
 pub fn draw(self: *PanelGroup) void {
-    var buf: [max_panels]*Panel = undefined;
-    const taken = panels.take(self.engine, &buf);
-    defer panels.release(taken);
+    var held = slots.take(self.slot());
+    defer held.end();
+    const taken = held.items();
     defer self.pick_own = null;
     defer self.pick_label = null;
     const own_len: u8 = if (self.own_shown) self.own_len else 0;
@@ -103,10 +102,9 @@ pub fn draw(self: *PanelGroup) void {
         const picked = if (self.pick_label) |h| h == std.hash.Wyhash.hash(0, p.label) else false;
         const tab = ui.tabItem(p.label, .{ .select = picked }) orelse continue;
         defer tab.end();
-        p.drawn = true;
         p.shown.store(true, .release);
         const part = ui.child(p.label, .{ 0, 0 }, .{}) orelse continue;
         defer part.end();
-        panels.drawPanel(p);
+        slots.draw(p, .{});
     }
 }

@@ -291,26 +291,24 @@ const stopping_ns = std.time.ns_per_s;
 /// Before `loaded`'s owner closes: calls its `onStopping`s and waits up to a second for them, if
 /// frames or ticks can carry their tasks on meanwhile.
 pub fn runStopping(loaded: *Loaded, done_table: *const anyopaque) void {
-    var found: [32]*Frame = undefined;
-    const n = blk: {
+    var found: std.ArrayList(*Frame) = .empty;
+    defer found.deinit(loaded.allocator);
+    {
         callbacks.lock.lockShared();
         defer callbacks.lock.unlockShared();
-        var n: usize = 0;
         for (callbacks.entries.items) |e| {
-            if (n == found.len) break;
             const f = e.record;
             if (e.stopped or f.loaded != loaded or f.callback != .stopping or !f.going()) continue;
-            found[n] = f;
-            n += 1;
+            // Out of memory, the rest are stopped without winding down
+            found.append(loaded.allocator, f) catch break;
         }
-        break :blk n;
-    };
-    if (n == 0) return;
-    for (found[0..n]) |f| f.callback.stopping.invoke(.{.{ .data = @intFromPtr(f), .table = done_table }});
+    }
+    if (found.items.len == 0) return;
+    for (found.items) |f| f.callback.stopping.invoke(.{.{ .data = @intFromPtr(f), .table = done_table }});
     if (!canWaitForTasks()) return;
     const start = core.timing.now();
     while (core.timing.now() -| start < stopping_ns) {
-        for (found[0..n]) |f| {
+        for (found.items) |f| {
             if (!f.finished.load(.acquire)) break;
         } else return;
         @import("tuft_sys").thread.sleepMs(1);

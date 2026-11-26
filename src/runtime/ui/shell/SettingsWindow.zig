@@ -20,6 +20,7 @@ const Setting = Registry.Setting;
 const Shell = @import("Shell.zig");
 const Workbench = @import("../workbench/Workbench.zig");
 const GameSpeed = @import("../GameSpeed.zig");
+const slots = @import("../../host/slots.zig");
 
 const log = core.log.scoped(.wraith_ui);
 
@@ -44,6 +45,8 @@ page_name: [96]u8 = undefined,
 page_name_len: usize = 0,
 /// The Game speed page's, the same speed the Workbench and Photo mode show.
 speed: GameSpeed = .{},
+/// This frame's lists, names and text boxes, freed at the start of the next.
+frame: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
 
 const PageKind = enum {
     /// One of Wraith's sections, by name. Empty is General.
@@ -68,6 +71,7 @@ pub fn onOpen(self: *SettingsWindow) void {
 }
 
 pub fn deinit(self: *SettingsWindow) void {
+    self.frame.deinit();
     if (self.settings.len > 0) self.allocator.free(self.settings);
     if (self.clashes.len > 0) Keybinds.freeClashes(self.allocator, self.clashes);
     self.* = .{};
@@ -93,6 +97,7 @@ fn refresh(self: *SettingsWindow, shell: *Shell) void {
 }
 
 pub fn draw(self: *SettingsWindow) void {
+    _ = self.frame.reset(.retain_capacity);
     const shell = self.shell;
     self.refresh(shell);
     self.takePicked(shell);
@@ -140,10 +145,8 @@ pub fn showGroup(self: *SettingsWindow, group: []const u8) void {
 
 /// Wraith's sections, then whoever else has settings or keys, then every key.
 fn drawSidebar(self: *SettingsWindow) void {
-    var sections: [16][]const u8 = undefined;
-    for (self.wraithSections(&sections)) |section| self.pageItem(.wraith, section, if (section.len == 0) "General" else section);
-    var names: [64][]const u8 = undefined;
-    const others = self.owners(&names);
+    for (self.wraithSections()) |section| self.pageItem(.wraith, section, if (section.len == 0) "General" else section);
+    const others = self.owners();
     if (others.len > 0) {
         ui.spacing();
         ui.separatorText("Plugins and mods");
@@ -166,8 +169,7 @@ fn drawPage(self: *SettingsWindow, shell: *Shell) bool {
         .wraith => return self.drawSection(shell, self.pageName()),
         .owner => {
             const group = self.pageName();
-            var names: [64][]const u8 = undefined;
-            const there = for (self.owners(&names)) |o| {
+            const there = for (self.owners()) |o| {
                 if (std.mem.eql(u8, o, group)) break true;
             } else false;
             // Like a plugin that's been turned off
@@ -182,17 +184,18 @@ fn drawPage(self: *SettingsWindow, shell: *Shell) bool {
                 ui.separatorText(std.fmt.bufPrintSentinel(&buf, "{s}", .{group}, 0) catch "?");
             }
             self.drawGroup(shell, group);
+            drawContributed(group);
         },
         .all_keys => self.drawAllKeys(shell),
     }
     return false;
 }
 
-/// General first, then Wraith's sections in the order added, then `last_sections`.
-fn wraithSections(self: *SettingsWindow, out: [][]const u8) [][]const u8 {
-    var n: usize = 0;
-    out[n] = "";
-    n += 1;
+/// General first, then Wraith's sections in the order added, then `last_sections`. Good for the frame.
+fn wraithSections(self: *SettingsWindow) []const []const u8 {
+    const a = self.frame.allocator();
+    var out: std.ArrayList([]const u8) = .empty;
+    addName(a, &out, "");
     var last: [last_sections.len]bool = @splat(false);
     for (self.settings) |s| {
         if (s.def.hidden or !isWraith(s)) continue;
@@ -200,24 +203,49 @@ fn wraithSections(self: *SettingsWindow, out: [][]const u8) [][]const u8 {
             last[i] = true;
             continue;
         }
-        if (n < out.len - last_sections.len) n = addName(out, n, s.def.section);
+        addName(a, &out, s.def.section);
     }
-    for (last_sections, last) |section, any| if (any) {
-        out[n] = section;
-        n += 1;
-    };
-    return out[0..n];
+    for (last_sections, last) |section, any| if (any) addName(a, &out, section);
+    return out.items;
 }
 
-/// Everyone but Wraith with settings or keys, in the order they came.
-fn owners(self: *SettingsWindow, out: [][]const u8) [][]const u8 {
-    var n: usize = 0;
+/// Everyone but Wraith with settings, keys or something in the `settings` slot, in the order they
+/// came. Good for the frame.
+fn owners(self: *SettingsWindow) []const []const u8 {
+    const a = self.frame.allocator();
+    var out: std.ArrayList([]const u8) = .empty;
     for (self.settings) |s| {
         if (s.def.hidden or isWraith(s)) continue;
-        n = addName(out, n, s.def.group);
+        addName(a, &out, s.def.group);
     }
-    return out[0..n];
+    var taken = slots.take(.settings);
+    defer taken.end();
+    // Copied, since a plugin can go once they're let go of
+    for (taken.items()) |e| if (!e.own) {
+        const kept = a.dupe(u8, e.ownerName()) catch break;
+        addName(a, &out, kept);
+    };
+    return out.items;
 }
+
+/// What a plugin added to the `settings` slot, after its settings.
+fn drawContributed(group: []const u8) void {
+    var taken = slots.take(.settings);
+    defer taken.end();
+    for (taken.items()) |e| {
+        if (e.own or !std.mem.eql(u8, e.ownerName(), group)) continue;
+        if (e.presentation == .foldout) {
+            if (e.focus_wanted.swap(false, .acq_rel)) ui.setNextItemOpen(true, .always);
+            if (!ui.collapsingHeader(e.label, e.open)) continue;
+        } else ui.spacing();
+        const scope = ui.id(e.label);
+        defer scope.end();
+        slots.draw(e, .{});
+    }
+}
+
+/// How much more a text box takes in a frame than what's in it, like a paste.
+const typing_room = 4096;
 
 /// At the end, after everything else.
 const last_sections = [_][]const u8{ "Advanced", "Developer" };
@@ -270,26 +298,23 @@ fn drawSection(self: *SettingsWindow, shell: *Shell, section: []const u8) bool {
     return welcome;
 }
 
-/// `name` added to `list`'s first `n` if it's not there yet. The new count.
-fn addName(list: [][]const u8, n: usize, name: []const u8) usize {
-    for (list[0..n]) |have| if (std.mem.eql(u8, have, name)) return n;
-    if (n == list.len) return n;
-    list[n] = name;
-    return n + 1;
+/// `name` added to `list` if it's not there yet. Out of memory leaves it off.
+fn addName(a: std.mem.Allocator, list: *std.ArrayList([]const u8), name: []const u8) void {
+    for (list.items) |have| if (std.mem.eql(u8, have, name)) return;
+    list.append(a, name) catch {};
 }
 
 /// Its settings and keys without a section first, then a fold for each section.
 fn drawGroup(self: *SettingsWindow, shell: *Shell, group: []const u8) void {
-    var sections: [256][]const u8 = undefined;
-    var n: usize = 0;
+    const a = self.frame.allocator();
+    var sections: std.ArrayList([]const u8) = .empty;
     for (self.settings) |s| {
         if (s.def.hidden or !std.mem.eql(u8, s.def.group, group)) continue;
-        if (s.def.section.len == 0) self.row(shell, s) else n = addName(&sections, n, s.def.section);
+        if (s.def.section.len == 0) self.row(shell, s) else addName(a, &sections, s.def.section);
     }
-    for (sections[0..n]) |section| {
-        var buf: [192]u8 = undefined;
+    for (sections.items) |section| {
         ui.setNextItemOpen(true, .once);
-        const node = ui.treeNode(std.fmt.bufPrintSentinel(&buf, "{s}", .{section}, 0) catch "?") orelse continue;
+        const node = ui.treeNode(a.dupeSentinel(u8, section, 0) catch "?") orelse continue;
         defer node.end();
         for (self.settings) |s| {
             if (s.def.hidden or !std.mem.eql(u8, s.def.group, group) or !std.mem.eql(u8, s.def.section, section)) continue;
@@ -300,16 +325,15 @@ fn drawGroup(self: *SettingsWindow, shell: *Shell, group: []const u8) void {
 
 /// Every key on the game in one list, whoever's it is, Wraith's first. Clashes say so.
 fn drawAllKeys(self: *SettingsWindow, shell: *Shell) void {
-    var groups: [65][]const u8 = undefined;
-    groups[0] = Settings.group;
-    const others = self.owners(groups[1..]);
+    const others = self.owners();
+    const groups = std.mem.concat(self.frame.allocator(), []const u8, &.{ &.{Settings.group}, others }) catch return;
     const table = ui.table("##keys", 2, .{ .row_background = true }) orelse return;
     defer table.end();
     ui.tableColumnWith("What", .{ .stretch = true, .width = 1 });
     ui.tableColumnWith("Key", .{ .stretch = true, .width = 1 });
     ui.tableHeaders();
     var any = false;
-    for (groups[0 .. others.len + 1]) |group| for (self.settings) |s| {
+    for (groups) |group| for (self.settings) |s| {
         if (s.def.hidden or !isGameKey(s) or !std.mem.eql(u8, s.def.group, group)) continue;
         any = true;
         const scope = ui.id(s);
@@ -406,23 +430,23 @@ fn row(self: *SettingsWindow, shell: *Shell, s: *Setting) void {
             self.finish(shell, s);
         },
         .choice => |ch| {
-            var names: [64][:0]const u8 = undefined;
-            var bufs: [64][64]u8 = undefined;
-            const count = @min(ch.options.len, names.len);
-            var index: usize = count;
-            for (ch.options[0..count], 0..) |o, i| {
-                names[i] = std.fmt.bufPrintSentinel(&bufs[i], "{s}", .{o}, 0) catch "?";
+            const a = self.frame.allocator();
+            const names = a.alloc([:0]const u8, ch.options.len) catch return;
+            var index: usize = names.len;
+            for (ch.options, names, 0..) |o, *label, i| {
+                label.* = a.dupeSentinel(u8, o, 0) catch "?";
                 if (std.mem.eql(u8, o, v.choice)) index = i;
             }
             ui.setNextItemWidth(240);
-            if (ui.combo("##value", &index, names[0..count])) self.apply(shell, s, .{ .choice = ch.options[index] }, true);
+            if (ui.combo("##value", &index, names)) self.apply(shell, s, .{ .choice = ch.options[index] }, true);
         },
         .text => {
-            var buf: [256]u8 = @splat(0);
-            const n = @min(v.text.len, buf.len - 1);
-            @memcpy(buf[0..n], v.text[0..n]);
+            // Room to type past what's there, and it's made again from the new value each frame
+            const buf = self.frame.allocator().alloc(u8, v.text.len + typing_room) catch return;
+            @memset(buf, 0);
+            @memcpy(buf[0..v.text.len], v.text);
             ui.setNextItemWidth(320);
-            if (ui.inputText("##value", &buf)) self.apply(shell, s, .{ .text = std.mem.sliceTo(&buf, 0) }, false);
+            if (ui.inputText("##value", buf)) self.apply(shell, s, .{ .text = std.mem.sliceTo(buf, 0) }, false);
             self.finish(shell, s);
         },
         .colour => {
@@ -432,13 +456,13 @@ fn row(self: *SettingsWindow, shell: *Shell, s: *Setting) void {
         },
         .key => self.keyRow(shell, s, v.key),
         .path => |p| {
-            var buf: [512]u8 = @splat(0);
-            const n = @min(v.path.len, buf.len - 1);
-            @memcpy(buf[0..n], v.path[0..n]);
-            var hint_buf: [256]u8 = undefined;
-            const hint = std.fmt.bufPrintSentinel(&hint_buf, "{s}", .{p.placeholder}, 0) catch "";
+            const a = self.frame.allocator();
+            const buf = a.alloc(u8, v.path.len + typing_room) catch return;
+            @memset(buf, 0);
+            @memcpy(buf[0..v.path.len], v.path);
+            const hint = a.dupeSentinel(u8, p.placeholder, 0) catch "";
             ui.setNextItemWidth(320);
-            if (ui.inputTextHint("##value", hint, &buf)) self.apply(shell, s, .{ .path = std.mem.sliceTo(&buf, 0) }, false);
+            if (ui.inputTextHint("##value", hint, buf)) self.apply(shell, s, .{ .path = std.mem.sliceTo(buf, 0) }, false);
             self.finish(shell, s);
             ui.sameLine();
             const off = ui.disabled(pickerBusy());

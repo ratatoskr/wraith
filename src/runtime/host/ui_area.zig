@@ -25,6 +25,7 @@ pub const MenuItem = W.MenuItem;
 pub const Window = W.Window;
 pub const Gizmo = W.Gizmo;
 pub const WorkbenchPanel = W.WorkbenchPanel;
+pub const Contribution = W.Contribution;
 pub const DrawList = W.ImDrawList;
 
 /// Every draw list function calls dcimgui's with the list as `self`, only while the plugin's drawing.
@@ -378,13 +379,42 @@ pub const UiImpl = struct {
         };
     }
 
+    /// A tab in a Workbench slot.
     pub fn addWorkbenchPanel(loaded: *Loaded, options: W.WorkbenchPanel.Options, draw: W.WorkbenchPanel.Draw) sal.Object(WorkbenchPanel) {
         const t = wraith.tablesOf(loaded) orelse {
             draw.release();
             return .{};
         };
-        const p = host.workbench_panels.add(loaded, options, draw) orelse return .{};
-        return .init(p, t.workbench_panel);
+        const e = host.slots.add(loaded, .{ .slot = if (options.engine) .workbench_engine else .workbench_plugins, .title = options.title }, .{ .panel = draw }) catch return .{};
+        return .init(e, t.workbench_panel);
+    }
+
+    pub fn slots(_: *Loaded) []const W.Slot.Info {
+        return host.slots.infos(@import("scratch.zig").begin()) catch &.{};
+    }
+
+    pub fn contribute(loaded: *Loaded, placement: W.Slot.Placement, draw: W.Contribution.Draw) sal.Plain(Ui, "contribute") {
+        const t = wraith.tablesOf(loaded) orelse {
+            draw.release();
+            return error.Failed;
+        };
+        const slot = host.slots.Slot.byId(placement.slot) orelse {
+            draw.release();
+            return error.UnknownSlot;
+        };
+        const e = try host.slots.add(loaded, .{
+            .slot = slot,
+            .id = placement.id,
+            .title = placement.title,
+            .icon = placement.icon,
+            .parent = placement.parent,
+            .kind = placement.kind,
+            .node = placement.node,
+            .presentation = placement.presentation,
+            .order = placement.order,
+            .open = placement.open,
+        }, .{ .plugin = draw });
+        return .init(e, t.contribution);
     }
 
     pub fn showClass(_: *Loaded, class_name: []const u8) void {
@@ -392,21 +422,24 @@ pub const UiImpl = struct {
     }
 };
 
-pub const WorkbenchPanelImpl = struct {
-    const Panel = host.workbench_panels.Panel;
+/// A `Contribution`, and a Workbench panel, which is one in a Workbench slot.
+pub const ContributionImpl = struct {
+    const Entry = host.slots.Entry;
 
-    pub fn isOpen(p: *Panel) bool {
-        return p.shown.load(.acquire);
+    pub fn isOpen(e: *Entry) bool {
+        return e.shown.load(.acquire);
     }
 
-    pub fn focus(p: *Panel) void {
-        p.focus_wanted.store(true, .release);
+    pub fn focus(e: *Entry) void {
+        e.focus_wanted.store(true, .release);
     }
 
-    pub fn remove(p: *Panel) void {
-        p.stop();
+    pub fn remove(e: *Entry) void {
+        e.remove();
     }
 };
+
+pub const WorkbenchPanelImpl = ContributionImpl;
 
 /// A plugin's Settings button in the Mods window and under its button on the bar.
 const SettingsHandler = struct {

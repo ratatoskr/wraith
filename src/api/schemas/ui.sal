@@ -199,6 +199,10 @@ trait Ui {
 
     // Wraith's own UI
 
+    // Where a plugin can add to Wraith's UI, and what each place takes. Any thread.
+    []Slot.Info slots();
+    // Adds `draw` to a slot, placed as `placement` says. Gone with the plugin. Any thread.
+    Contribution!SlotError contribute(Slot.Placement placement, keep Contribution.Draw draw);
     // Drawn by `draw` while open; close, Esc, menu entry and Settings button all just work. Gone with
     // the plugin. Any thread.
     Window addWindow(Window.Options options, keep Window.Draw draw);
@@ -210,7 +214,8 @@ trait Ui {
 
     // The Workbench
 
-    // Drawn by `draw` on the Workbench's thread while showing. Gone with the plugin. Any thread.
+    // Drawn by `draw` on the Workbench's thread while showing. Gone with the plugin. Any thread. The
+    // same as contributing a tab to the `workbench.plugins` or `workbench.engine` slot
     WorkbenchPanel addWorkbenchPanel(WorkbenchPanel.Options options, keep WorkbenchPanel.Draw draw);
     // Opens the Workbench's Classes on a C# class by full name. Any thread.
     void showClass(string class_name);

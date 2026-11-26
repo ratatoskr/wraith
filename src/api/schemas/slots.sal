@@ -1,0 +1,105 @@
+// Slots: the places in Wraith's UI a plugin can add to, like a Workbench tab, its Settings page, or a
+// node in Photo mode's scene. Wraith describes each one in `Ui.slots`, so what a slot takes is data,
+// not a method per place. Wraith's own parts go through the same slots.
+
+namespace Wraith;
+
+error SlotError {
+    // No slot by that id, see `Ui.slots`
+    UnknownSlot = 1,
+    // The slot doesn't take that presentation or a kind
+    NotTaken,
+    // Not letters, digits, `_`, `-` and `.`
+    InvalidId,
+    // The plugin has one by that id in that slot already
+    AlreadyAdded,
+    Failed,
+}
+
+namespace Slot {
+    // How a contribution shows in its slot.
+    enum Presentation : u8 {
+        // The slot's first in `presentations`
+        default,
+        // Drawn in place, without a frame
+        inline,
+        // Under a header that folds
+        foldout,
+        // A tab beside the slot's others
+        tab,
+        // A row in the slot's tree, which can have children and be picked. Its draw shows once it's picked
+        node,
+    }
+
+    // Which thread a slot draws on.
+    enum Thread : u8 {
+        render,
+        // The Workbench's own. Read what game-thread code left rather than calling into the game
+        workbench,
+    }
+
+    // What a slot takes, from Wraith.
+    struct Info {
+        // Like "photo.inspector"
+        string id;
+        string title;
+        string help;
+        Thread thread;
+        // What it takes, the default first
+        []Presentation presentations;
+        // Nodes, and `parent`s to put things under
+        bool hierarchy;
+        // Contributions can show only for nodes of a `kind`, like "actor"
+        bool kinds;
+        // Wraith's own `parent`s, like "world/actors"
+        []string parents;
+        // Wraith's own kinds, like "actor"
+        []string known_kinds;
+    }
+
+    // Where a contribution goes, and how.
+    struct Placement {
+        // One of `Ui.slots`' ids
+        string slot;
+        // Unique for the plugin in the slot, so its other contributions can name it as `parent`. Can be empty
+        string id;
+        // Its tab, header or row. Defaults to the plugin's name
+        string title;
+        // A glyph from Wraith's icon font before the title, as UTF-8. Can be empty
+        string icon;
+        // In slots with a hierarchy: one of the slot's `parents`, or the `id` of one of the plugin's own
+        // nodes. Empty for the top
+        string parent;
+        // For a node, what it is. For anything else in a slot with kinds, which nodes it shows for.
+        // Empty shows it for every node
+        string kind;
+        // For a node, its id among its kind, handed to whatever shows for it
+        u64 node;
+        Presentation presentation;
+        // Lower comes first. Wraith's own are 100 apart, from 100
+        i32 order;
+        // Foldouts and nodes start open
+        bool open;
+    }
+
+    // What it's drawn for: the picked node, or nothing.
+    struct Target {
+        string kind;
+        u64 id;
+    }
+}
+
+namespace Contribution {
+    // On the slot's thread, inside its part of the window.
+    fn void Draw(Slot.Target target);
+}
+
+// Something a plugin added to a slot.
+trait Contribution {
+    // Shown last frame: its tab in front, its foldout open, or its node picked
+    bool isOpen();
+    // Brings its tab to the front, opens its foldout, or picks its node
+    void focus();
+    // Waits for a draw under way, except from inside a draw or a script. Fine to call twice.
+    void remove();
+}

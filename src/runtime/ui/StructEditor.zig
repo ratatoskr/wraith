@@ -234,12 +234,13 @@ fn enumChoices(r: Ref) []const TweakFields.Choice {
         .@"enum" => |e| e.values,
         else => return &.{},
     };
-    const n = @min(values.len, enum_buf.len);
-    for (values[0..n], enum_buf[0..n]) |item, *ch| ch.* = .{ .value = @floatFromInt(item.value), .label = item.name };
-    return enum_buf[0..n];
+    enum_choices.resize(std.heap.page_allocator, values.len) catch return &.{};
+    for (values, enum_choices.items) |item, *ch| ch.* = .{ .value = @floatFromInt(item.value), .label = item.name };
+    return enum_choices.items;
 }
 
-var enum_buf: [256]TweakFields.Choice = undefined;
+/// `enumChoices`'s, as big as the biggest enum so far. Render thread.
+var enum_choices: std.ArrayList(TweakFields.Choice) = .empty;
 
 /// Where the game has `type_name` now, through its `[Instance]`. Null till the game makes it.
 pub fn instanceOf(schema: *const Schema, type_name: []const u8) ?usize {
