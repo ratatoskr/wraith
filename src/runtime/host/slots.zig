@@ -67,7 +67,7 @@ pub const defs: std.EnumArray(Slot, Def) = .init(.{
     .settings = .{ .id = "settings", .title = "Settings", .help = "On the plugin's own page in Settings, after its settings.", .presentations = &.{ .foldout, .@"inline" } },
     .photo_toolbar = .{ .id = "photo.toolbar", .title = "Photo mode: toolbar", .help = "Buttons on Photo mode's toolbar.", .presentations = &.{.@"inline"} },
     .photo_scene = .{ .id = "photo.scene", .title = "Photo mode: scene", .help = "Nodes in Photo mode's scene. A node's draw shows in the inspector while it's picked.", .presentations = &.{.node}, .hierarchy = true, .parents = &photo_parents, .known_kinds = &photo_kinds },
-    .photo_inspector = .{ .id = "photo.inspector", .title = "Photo mode: inspector", .help = "Shown for the picked node, or for every node of a kind.", .presentations = &.{ .foldout, .@"inline" }, .kinds = true, .known_kinds = &photo_kinds },
+    .photo_inspector = .{ .id = "photo.inspector", .title = "Photo mode: inspector", .help = "Shown for the picked node, or for every node of a kind. One with the id `look` takes the place of Wraith's own Look section.", .presentations = &.{ .foldout, .@"inline" }, .kinds = true, .known_kinds = &photo_kinds },
     .photo_row = .{ .id = "photo.row", .title = "Photo mode: row buttons", .help = "Small buttons at the end of scene rows, for every node of a kind.", .presentations = &.{.@"inline"}, .kinds = true, .known_kinds = &photo_kinds },
     .photo_menu = .{ .id = "photo.menu", .title = "Photo mode: right-click menu", .help = "Items in a right-click menu, for every node of a kind, and for bones in an actor's bones. Draw them with ImGui's MenuItem.", .presentations = &.{.@"inline"}, .kinds = true, .known_kinds = &photo_kinds },
     .photo_tools = .{ .id = "photo.tools", .title = "Photo mode: panel tools", .help = "Buttons along the top of the picked node's panel, for every node of a kind. Kind `bone` goes beside an actor's own while one of its bones is picked.", .presentations = &.{.@"inline"}, .kinds = true, .known_kinds = &photo_kinds },
@@ -120,6 +120,8 @@ pub const Placement = struct {
     open: bool = false,
     /// Wraith's own nodes only: rows drawn under it, through `photo.Scene.row`
     children: ?Native = null,
+    /// Wraith's own only: shown till something else in the slot has its id for the same kind
+    fallback: bool = false,
 };
 
 pub const Entry = struct {
@@ -143,6 +145,7 @@ pub const Entry = struct {
     open: bool,
     draw: Draw,
     children: ?Native,
+    fallback: bool = false,
 
     /// Draws under way in the low bits, plus `stopped_bit`. Whoever stops it with none under way lets go of `draw`.
     state: Atomic(u32) = .init(0),
@@ -362,6 +365,7 @@ fn make(loaded: *Loaded, own: bool, p: Placement, d_: Draw) AddError!*Entry {
         .open = p.open,
         .draw = d_,
         .children = if (own) p.children else null,
+        .fallback = own and p.fallback,
     };
     return e;
 }

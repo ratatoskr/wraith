@@ -27,6 +27,8 @@ pub fn init(self: *Cameras, scene: *Scene, camera: *Camera) !void {
     try scene.add(.{ .slot = .photo_scene, .id = "cameras", .parent = "world", .kind = "cameras", .title = "Cameras", .icon = icons.video, .open = true, .order = 100, .children = .of(self, rows) }, .none);
     try scene.add(.{ .slot = .photo_inspector, .id = "cameras", .kind = "cameras", .presentation = .@"inline", .order = 100 }, .{ .native = .of(self, drawFolder) });
     try scene.add(.{ .slot = .photo_inspector, .id = "camera", .kind = "camera", .presentation = .@"inline", .order = 100 }, .{ .native = .of(self, drawCamera) });
+    // Till a plugin for the game adds its own
+    try scene.add(.{ .slot = .photo_inspector, .id = "look", .kind = "camera", .title = "Look", .presentation = .foldout, .open = true, .order = 400, .fallback = true }, .{ .native = .of(self, drawNoLook) });
     try scene.add(.{ .slot = .photo_row, .id = "add_camera", .kind = "cameras", .order = 100 }, .{ .native = .of(self, addIcon) });
     try scene.add(.{ .slot = .photo_row, .id = "free_camera", .kind = "camera", .order = 100 }, .{ .native = .of(self, freeIcon) });
     try scene.add(.{ .slot = .photo_row, .id = "view_camera", .kind = "camera", .order = 200 }, .{ .native = .of(self, viewIcon) });
@@ -142,6 +144,12 @@ fn cameraMenu(self: *Cameras, key: Target) void {
     } else return;
     if (ui.menuItem("Copy its name", .{})) self.scene.copy(it.name);
     if (snap.has.remove and ui.menuItem("Remove", .{})) held.record.callRemove(it.id);
+}
+
+/// Wraith's own Look, till a plugin for the game has one.
+fn drawNoLook(_: *Cameras, _: Target) void {
+    ui.textWrapped("This game doesn't support camera look settings.", .{});
+    ui.textDisabled("No plugin for it changes exposure, colour or effects.", .{});
 }
 
 /// Cameras itself has nothing of its own.

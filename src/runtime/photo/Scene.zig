@@ -369,7 +369,7 @@ pub fn drawInspector(self: *Scene) void {
     }
     var held = slots.take(.photo_inspector);
     defer held.end();
-    for (held.items()) |e| if (e.showsFor(target.kind)) {
+    for (held.items()) |e| if (e.showsFor(target.kind) and !replaced(held.items(), e, target.kind)) {
         const scope = ui.id(e.label);
         defer scope.end();
         if (e.presentation == .foldout) {
@@ -378,6 +378,13 @@ pub fn drawInspector(self: *Scene) void {
         }
         slots.draw(e, target);
     };
+}
+
+/// A stand-in of Wraith's that something else in its slot has taken the place of, by its id.
+fn replaced(all: []const *Entry, e: *const Entry, kind: []const u8) bool {
+    if (!e.fallback) return false;
+    for (all) |o| if (!o.fallback and o.showsFor(kind) and std.mem.eql(u8, o.id, e.id)) return true;
+    return false;
 }
 
 test "one selection, by kind and id" {
@@ -390,6 +397,23 @@ test "one selection, by kind and id" {
     try std.testing.expect(!scene.isSelected("camera", 7));
     scene.select("world", 0);
     try std.testing.expectEqual(null, scene.selectedOf("actor"));
+}
+
+test "a stand-in of Wraith's gives way to another with its id, for the same kind" {
+    const Own = struct {
+        fn draw(_: *u32, _: Target) void {}
+    };
+    var n: u32 = 0;
+    const stand_in = try slots.addOwn(.{ .slot = .photo_inspector, .id = "look", .kind = "camera", .fallback = true }, .{ .native = .of(&n, Own.draw) });
+    defer stand_in.remove();
+    const other = try slots.addOwn(.{ .slot = .photo_inspector, .id = "lens", .kind = "camera" }, .{ .native = .of(&n, Own.draw) });
+    defer other.remove();
+    try std.testing.expect(!replaced(&.{ stand_in, other }, stand_in, "camera"));
+    const look = try slots.addOwn(.{ .slot = .photo_inspector, .id = "look", .kind = "camera" }, .{ .native = .of(&n, Own.draw) });
+    defer look.remove();
+    try std.testing.expect(replaced(&.{ stand_in, other, look }, stand_in, "camera"));
+    // Only stand-ins give way
+    try std.testing.expect(!replaced(&.{ stand_in, look }, look, "camera"));
 }
 
 test "search matches names regardless of case" {
