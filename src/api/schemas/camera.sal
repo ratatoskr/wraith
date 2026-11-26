@@ -42,10 +42,34 @@ trait FreeCamera {
     // Once, before the first `camera`.
     void setWorld(World world);
     // Every frame from where the game sets its camera, like a hook after its camera update. While
-    // the free camera's on, Wraith changes it to its own. Otherwise it's left as it is.
-    void camera(inout State camera);
+    // the free camera's on, Wraith changes it to its own. Otherwise it's left as it is. `id` says
+    // which of the game's cameras it is: its id in `cameras` for games that list them, or else 0.
+    // When it changes, like the game cutting to another, the free camera carries on from this one,
+    // rather than putting it where the last one was.
+    void camera(u64 id, inout State camera);
     // Turns the free camera on if it isn't, and orbits it round `point`, in the world.
     void focus(Vec3 point);
     // Whether the free camera's on.
     bool active();
+
+    // For games with more than one camera, the plugin lists them, and the free camera always moves
+    // whichever's on screen:
+    //
+    // - `set` the game's cameras on `cameras`, with the one on screen current.
+    // - Each frame, put `wantedCamera` on screen, or the game's own for 0. That's the one picked
+    //   while the player's ticked Follow selection, which starts off.
+    // - Hand `camera` whichever's on screen, with its id.
+    // - When the free camera leaves one of the game's own, put back where the game had it. Ones the
+    //   player added stay where they were put.
+    //
+    // If more than one plugin lists cameras, Photo mode shows a game's plugin's, then a game
+    // engine's.
+
+    // The plugin's list of the game's cameras in Photo mode's Camera panel, made the first time.
+    // `add` and `rename` give it those buttons, if the plugin can make and rename cameras, and are
+    // only kept the first time. Its `add` makes one where the view is, and `select`s it.
+    ItemList cameras(keep ?ItemList.Add add, keep ?ItemList.Rename rename);
+    // The camera the player wants on screen, by its id in `cameras`, or 0 for whichever the game
+    // shows itself.
+    u64 wantedCamera();
 }

@@ -245,7 +245,26 @@ pub fn exportPlugin(comptime P: type) void {
                 return false;
             };
             started = true;
+            if (@hasDecl(P, "stopping")) {
+                _ = context.wraith.frame().onStopping(api.wraith.Frame.Stopping.init(&instance, onStopping)) catch |err| log.warn("Can't wind down before stopping: {t}", .{err});
+            }
             return true;
+        }
+
+        /// `P.stopping` runs as a task, which can move to the game thread to put things back.
+        fn onStopping(_: *P, done: api.wraith.Frame.WindDown) void {
+            context.spawn(windDown, .{done}) catch done.done();
+        }
+
+        fn windDown(done: api.wraith.Frame.WindDown) void {
+            defer done.done();
+            const result = instance.stopping(&context);
+            if (@typeInfo(@TypeOf(result)) == .error_union) {
+                if (result) |_| {} else |err| {
+                    const any: anyerror = err;
+                    if (any != error.Canceled and any != error.OwnerGone) log.err("Winding down failed: {t}", .{any});
+                }
+            }
         }
 
         fn stop() callconv(.c) void {

@@ -12,6 +12,7 @@ pub const config = @import("config.zig");
 pub const ui = @import("ui.zig");
 pub const keybinds = @import("keybinds.zig");
 pub const settings = @import("settings.zig");
+pub const lists = @import("lists.zig");
 pub const messages = @import("messages.zig");
 pub const frame = @import("frame.zig");
 pub const threads = @import("threads.zig");
@@ -53,6 +54,7 @@ test {
     _ = addresses;
     _ = tweaks;
     _ = settings;
+    _ = lists;
     _ = shared_schemas;
     _ = projects;
     _ = libraries;

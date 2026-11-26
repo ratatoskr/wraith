@@ -25,6 +25,8 @@ pub const Tick = W.Frame.Tick;
 pub const GameTick = W.Frame.GameTick;
 /// From `frame.sal`, kept till it runs.
 pub const Task = W.Frame.Task;
+/// From `frame.sal`, kept till the plugin's gone.
+pub const Stopping = W.Frame.Stopping;
 
 var bus: Bus = .init(std.heap.page_allocator);
 var tick_bus: Bus = .init(std.heap.page_allocator);
@@ -53,6 +55,7 @@ pub fn onRenderThread() bool {
 /// unless a driver has them.
 pub fn run() void {
     render_thread.store(std.Thread.getCurrentId(), .monotonic);
+    last_run.store(core.timing.now(), .monotonic);
     const has_driver = blk: {
         // Shared, so the driver can't be freed under us
         drivers_lock.lockShared();
@@ -137,6 +140,7 @@ fn tickNow() void {
     if (ticking.swap(true, .acquire)) return;
     defer ticking.store(false, .release);
     game_thread.store(std.Thread.getCurrentId(), .monotonic);
+    last_run.store(core.timing.now(), .monotonic);
     tick_bus.fire(.{});
     host.salamander.pollGame();
     host.threads.checkDelays();
@@ -257,12 +261,16 @@ pub const Frame = struct {
     stopped: Atomic(bool) = .init(false),
     zone: core.timing.Zone,
     warned: bool = false,
+    /// For `stopping`, once the plugin's said it's done.
+    finished: Atomic(bool) = .init(false),
 
     pub const Callback = union(enum) {
         /// Render thread, and can draw.
         frame: Tick,
         /// Game thread, and can't.
         game: GameTick,
+        /// Once, as the plugin's about to stop. On no bus.
+        stopping: Stopping,
     };
 
     fn fire(self: *Frame) void {
@@ -271,6 +279,7 @@ pub const Frame = struct {
         switch (self.callback) {
             .frame => host.ui.runAs(self.loaded, &self.warned, self, call),
             .game => |t| t.invoke(.{}),
+            .stopping => {},
         }
     }
 
@@ -285,8 +294,12 @@ pub const Frame = struct {
 
     pub fn stop(self: *Frame) void {
         if (self.stopped.swap(true, .acq_rel)) return;
-        self.subscription.unsubscribe();
-        core.timing.registry.remove(&self.zone);
+        if (self.callback != .stopping) {
+            self.subscription.unsubscribe();
+            core.timing.registry.remove(&self.zone);
+        }
+        // Nothing waits on one that's gone
+        self.finished.store(true, .release);
         // Won't be called again
         switch (self.callback) {
             inline else => |c| c.release(),
@@ -329,6 +342,65 @@ pub fn onTick(loaded: *Loaded, tick: GameTick) api.FrameError!*Frame {
         tick.release();
         return err;
     };
+}
+
+/// Through `frame.sal`. Released if it fails.
+pub fn onStopping(loaded: *Loaded, stopping: Stopping) api.FrameError!*Frame {
+    const f = loaded.allocator.create(Frame) catch {
+        stopping.release();
+        return error.OutOfMemory;
+    };
+    f.* = .{ .loaded = loaded, .callback = .{ .stopping = stopping }, .zone = .init("stopping") };
+    callbacks.add(f) catch |err| {
+        stopping.release();
+        loaded.allocator.destroy(f);
+        return if (err == error.OutOfMemory) error.OutOfMemory else error.OwnerGone;
+    };
+    return f;
+}
+
+/// How long plugins get to wind down.
+const stopping_ns = std.time.ns_per_s;
+
+/// Before `loaded`'s owner closes. Calls its `onStopping`s, each with a `Done` from `done_table`,
+/// and waits up to a second for them all, if anything's still running frames or ticks to carry
+/// their tasks on, and this isn't the thread that would.
+pub fn runStopping(loaded: *Loaded, done_table: *const anyopaque) void {
+    var found: [32]*Frame = undefined;
+    const n = blk: {
+        callbacks.lock.lockShared();
+        defer callbacks.lock.unlockShared();
+        var n: usize = 0;
+        for (callbacks.entries.items) |e| {
+            if (n == found.len) break;
+            const f = e.record;
+            if (e.stopped or f.loaded != loaded or f.callback != .stopping or !f.going()) continue;
+            found[n] = f;
+            n += 1;
+        }
+        break :blk n;
+    };
+    if (n == 0) return;
+    for (found[0..n]) |f| f.callback.stopping.invoke(.{.{ .data = @intFromPtr(f), .table = done_table }});
+    if (!canWaitForTasks()) return;
+    const start = core.timing.now();
+    while (core.timing.now() -| start < stopping_ns) {
+        for (found[0..n]) |f| {
+            if (!f.finished.load(.acquire)) break;
+        } else return;
+        @import("tuft_sys").thread.sleepMs(1);
+    }
+    log.warn("{s} took over a second to wind down, so it's stopped anyway", .{loaded.name});
+}
+
+/// `core.timing.now()` at the last frame or tick.
+var last_run: Atomic(u64) = .init(0);
+
+/// Whether frames or ticks are carrying tasks on, lately enough that they'll carry on while this
+/// thread waits, which isn't one of theirs. Not when the game's closing, or stuck loading.
+fn canWaitForTasks() bool {
+    if (onRenderThread() or onGameThread()) return false;
+    return core.timing.now() -| last_run.load(.monotonic) < 250 * std.time.ns_per_ms;
 }
 
 fn subscribe(loaded: *Loaded, callback: Frame.Callback, on: *Bus) api.FrameError!*Frame {
@@ -553,6 +625,47 @@ const tests = struct {
         sub.unsubscribe();
         run();
         try testing.expectEqual(2, counter.frames);
+    }
+
+    test "a plugin winds down before it stops, which waits for it, but never on the game thread" {
+        const sleepMs = @import("tuft_sys").thread.sleepMs;
+        var a: FakePlugin = undefined;
+        a.init("a");
+        defer a.loaded.deinitForTest();
+        const State = struct {
+            done: ?W.Frame.WindDown = null,
+            calls: Atomic(u32) = .init(0),
+
+            fn stopping(self: *@This(), done: W.Frame.WindDown) void {
+                self.done = done;
+                _ = self.calls.fetchAdd(1, .acq_rel);
+            }
+        };
+        var state: State = .{};
+        {
+            const acting = a.owner().enter();
+            defer acting.end();
+            _ = try sdk.wraith.root().?.frame().onStopping(W.Frame.Stopping.init(&state, State.stopping));
+        }
+        // Ticking lately, and this is the game thread, which mustn't wait on itself
+        tickForTests();
+        host.wraith.runStopping(&a.loaded);
+        try testing.expectEqual(1, state.calls.load(.acquire));
+
+        const Waiter = struct {
+            fn run(loaded: *Loaded, finished: *Atomic(bool)) void {
+                host.wraith.runStopping(loaded);
+                finished.store(true, .release);
+            }
+        };
+        var finished: Atomic(bool) = .init(false);
+        const t = try std.Thread.spawn(.{}, Waiter.run, .{ &a.loaded, &finished });
+        while (state.calls.load(.acquire) < 2) sleepMs(1);
+        sleepMs(20);
+        try testing.expect(!finished.load(.acquire));
+        state.done.?.done();
+        t.join();
+        try testing.expect(finished.load(.acquire));
     }
 
     test "posts from other threads" {

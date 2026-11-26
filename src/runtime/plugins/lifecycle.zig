@@ -432,9 +432,11 @@ fn releaseServices(loaded: *Loaded) void {
     loaded.services = .empty;
 }
 
-/// Close, stop, release, unload. What its kinds run must already be unloaded.
+/// Wind down, close, stop, release, unload. What its kinds run must already be unloaded.
 fn teardown(loaded: *Loaded) void {
     const r = &loaded.runner;
+    // While everything still works, so it can put the game back from the thread that can
+    host.wraith.runStopping(loaded);
     loaded.owner.close();
     releaseServices(loaded);
     if (r.plugin.table != null) r.plugin.stop();

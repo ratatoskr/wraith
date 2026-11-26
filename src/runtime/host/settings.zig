@@ -20,6 +20,10 @@ pub fn setRegistry(r: ?*Registry) void {
     registry = r;
 }
 
+pub fn registryOf() ?*Registry {
+    return registry;
+}
+
 const sal = api.salamander;
 const W = api.wraith;
 const Definition = W.Setting.Definition;

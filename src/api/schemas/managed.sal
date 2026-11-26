@@ -118,7 +118,9 @@ trait Managed {
     // object for an instance method, or 0 for a static one. It runs right here on a thread the
     // runtime knows, like Unity's main thread in `frame.onTick` with the `unity` plugin, which
     // Unity's own methods need. Anywhere else it runs on Wraith's own thread. If it throws, it fails
-    // with `Threw`, saying what. Structs come back as their boxed object.
+    // with `Threw`, saying what. Structs come back as their boxed object. `.ctor` with a `target`
+    // of 0 makes a new object, like `invoke("UnityEngine.GameObject", ".ctor", 0, [text "Cam"])`,
+    // and gives it back.
     Value!ManagedError invoke(string class_name, string method, usize target, []Value args);
     // Keeps the C# object at `object` from being collected till `release`. The garbage collector
     // doesn't see what a plugin keeps in its own memory, so hold anything kept past the call it came

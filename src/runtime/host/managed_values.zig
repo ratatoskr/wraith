@@ -158,6 +158,28 @@ pub fn call(rt: *const Runtime, a: Allocator, m: *Method, target: usize, args: [
     return .{ .value = try fromResult(rt, a, rt.returnType(m), result) };
 }
 
+/// A new object of `c` from its constructor `m`, which it gives back. CoreCLR's helper makes and
+/// constructs it in one go, as its garbage collector could move it in between. Mono's and IL2CPP's
+/// stay put, so it's made first and constructed after.
+pub fn construct(rt: *const Runtime, a: Allocator, c: *ManagedRuntime.Class, m: *Method, args: []const Value) E!Outcome {
+    if (args.len > max_args) return error.Failed;
+    var slots: [max_args]u64 = undefined;
+    var pointers: [max_args]?*anyopaque = undefined;
+    for (args, 0..) |arg, i| pointers[i] = try argument(rt, a, rt.paramType(m, @intCast(i)) orelse return error.Failed, arg, &slots[i]);
+    var exception: ?*Object = null;
+    const made: ?*Object = switch (rt.*) {
+        .coreclr => rt.invoke(m, null, &pointers, &exception),
+        else => blk: {
+            const object = rt.newObject(c) orelse return error.Failed;
+            _ = rt.invoke(m, object, &pointers, &exception);
+            break :blk object;
+        },
+    };
+    if (exception) |e| return .{ .threw = describe(rt, a, e) };
+    const object = made orelse return error.Failed;
+    return .{ .value = .{ .kind = .object, .flag = false, .integer = 0, .number = 0, .text = "", .object = @intFromPtr(object) } };
+}
+
 /// What a call got, worked out where it ran, so what's wrong is said on the caller's thread.
 pub const Outcome = union(enum) {
     value: Value,

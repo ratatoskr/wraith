@@ -20,6 +20,7 @@ const Settings = @import("../Settings.zig");
 const Photo = @import("Photo.zig");
 const Overlay = @import("../ui/Overlay.zig");
 const host_keys = @import("../host/keybinds.zig");
+const lists = @import("../host/lists.zig");
 const rig = @import("rig.zig");
 
 const W = api.wraith;
@@ -40,6 +41,11 @@ const Shared = struct {
     pose: rig.Pose = undefined,
     /// A point something wants to orbit, till the render thread picks it up
     focus_at: ?V3 = null,
+    /// Which of the game's cameras was handed over last, so a cut to another is where the pose
+    /// starts again
+    id: u64 = 0,
+    /// It did, till the render thread picks it up
+    restarted: bool = false,
 
     fn acquire(s: *Shared) void {
         while (s.lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) std.atomic.spinLoopHint();
@@ -192,6 +198,9 @@ presses: std.EnumArray(Press, PressKey) = .init(.{
 }),
 /// Whether it's on, for any thread.
 on_flag: Atomic(bool) = .init(false),
+/// Follow selection, from Photo mode: the game's camera that's picked goes on screen. Off each time
+/// the game starts.
+follow: Atomic(bool) = .init(false),
 /// Everything it added to the registry, to take out again.
 added: [40]*Registry.Setting = undefined,
 added_len: usize = 0,
@@ -309,13 +318,23 @@ pub fn world(self: *Camera, w: W.FreeCamera.World) void {
     self.shared.metre = if (w.metre > 0) w.metre else 1;
 }
 
-pub fn camera(self: *Camera, cam: *W.FreeCamera.State) void {
+/// `id` says which of the game's cameras it is, so a cut to another carries on from there.
+pub fn camera(self: *Camera, id: u64, cam: *W.FreeCamera.State) void {
     self.shared.acquire();
     defer self.shared.release();
     var c = fromApi(cam.*);
+    const cut = self.shared.seen and id != self.shared.id;
+    self.shared.id = id;
     if (!self.shared.on) {
         self.shared.game = c;
         self.shared.seen = true;
+        return;
+    }
+    if (cut) {
+        // Carries on from here, so the camera stays put
+        self.shared.game = c;
+        self.shared.pose = .fromCamera(self.shared.basis, c);
+        self.shared.restarted = true;
         return;
     }
     self.shared.pose.toCamera(self.shared.basis, &c);
@@ -548,7 +567,15 @@ pub fn tick(self: *Camera) void {
     const basis = self.shared.basis;
     const metre = self.shared.metre;
     var pose = self.shared.pose;
+    const restarted = self.shared.restarted;
+    self.shared.restarted = false;
     self.shared.release();
+    if (restarted) {
+        // Another camera, so it starts again from where that one is
+        self.goal = pose;
+        self.velocity = @splat(0);
+        self.orbiting = false;
+    }
 
     const typing = uiHasKeys();
     const pad: ?tuft_input.Axes = if (options.gamepad) host_keys.gamepad() else null;
@@ -592,7 +619,8 @@ pub fn tick(self: *Camera) void {
     } else pose.position = self.goal.position;
 
     self.shared.acquire();
-    self.shared.pose = pose;
+    // Not over a cut that came in meanwhile, which the next frame starts from
+    if (!self.shared.restarted) self.shared.pose = pose;
     self.shared.release();
 
     if (self.registry.get(self.show_controls).toggle) self.drawControls(options, pad != null);
@@ -707,6 +735,30 @@ fn drawKeys(self: *Camera, mouse_look: MouseLook, pad: bool) void {
     if (pad) row("Controller", "Sticks move and look, triggers go down and up", .{});
     row("Hide these", "{s}", .{self.keyNames(&buf, self.presses.getPtrConst(.controls).setting)});
     row("Stop", "{s}", .{self.keyNames(&buf, self.presses.getPtrConst(.toggle).setting)});
+}
+
+/// The game's cameras, for games whose plugin lists them, and whether what's on screen follows
+/// what's picked. Render thread.
+pub fn drawCameraPicker(self: *Camera) void {
+    const held = lists.best(.cameras) orelse return;
+    defer held.end();
+    ui.separatorText("Game cameras");
+    held.record.draw(false);
+    var follow = self.follow.load(.acquire);
+    if (ui.checkbox("Follow selection", &follow)) self.follow.store(follow, .release);
+    ui.tooltip("Show the selected camera instead of the one the game picks. Off, the game decides.", .{});
+    ui.textDisabled("The free camera moves whichever's on screen.", .{});
+}
+
+/// What the plugin that owns `loaded`'s cameras should put on screen: the one picked while Follow
+/// selection's on, or 0 for the game's own. Only for the plugin whose cameras Photo mode shows. Any
+/// thread.
+pub fn wantedCamera(self: *Camera, loaded: *const anyopaque) u64 {
+    if (!self.follow.load(.acquire)) return 0;
+    const held = lists.best(.cameras) orelse return 0;
+    defer held.end();
+    if (@as(*const anyopaque, held.record.loaded) != loaded) return 0;
+    return held.record.firstSelected();
 }
 
 /// The keys, for Photo mode's camera panel.

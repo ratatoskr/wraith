@@ -184,6 +184,7 @@ pub const Window = struct {
             return;
         }
         var buf: [96]u8 = undefined;
+        cam.drawCameraPicker();
         ui.separatorText("Free camera");
         var on = cam.isOn();
         if (ui.checkbox("On", &on)) cam.flip();
@@ -223,7 +224,7 @@ test "the game's camera goes through untouched till the free camera's on, then i
 
     var state: W.FreeCamera.State = .{ .position = .{ .x = 1 }, .aim = .rotation, .target = .{}, .up = .{ .y = 1 }, .rotation = .identity, .roll = 0, .fov = 1 };
     const before = state;
-    cam.camera(&state);
+    cam.camera(0, &state);
     try testing.expectEqual(before, state);
     try testing.expect(!cam.active());
 
@@ -231,13 +232,21 @@ test "the game's camera goes through untouched till the free camera's on, then i
     cam.flip();
     try testing.expect(cam.active());
     state.position = .{ .x = 50 };
-    cam.camera(&state);
+    cam.camera(0, &state);
     try testing.expectApproxEqAbs(1, state.position.x, 1e-4);
+
+    // A cut to another of the game's cameras carries on from that one, which stays put
+    state.position = .{ .x = 20 };
+    cam.camera(1, &state);
+    try testing.expectEqual(20, state.position.x);
+    state.position = .{ .x = 50 };
+    cam.camera(1, &state);
+    try testing.expectApproxEqAbs(20, state.position.x, 1e-4);
 
     // Off, the game's is left alone again
     cam.flip();
     state.position = .{ .x = 50 };
-    cam.camera(&state);
+    cam.camera(1, &state);
     try testing.expectEqual(50, state.position.x);
     try testing.expect(!photo.posing.active());
 }
@@ -255,7 +264,7 @@ test "the free camera hides only its controls from the game, unless it's set to 
     const cam = &photo.camera;
     cam.world(.{ .up = .pos_y, .look = .pos_z, .left_handed = true, .metre = 1 });
     var state: W.FreeCamera.State = .{ .position = .{}, .aim = .rotation, .target = .{}, .up = .{ .y = 1 }, .rotation = .identity, .roll = 0, .fov = 1 };
-    cam.camera(&state);
+    cam.camera(0, &state);
     rig.present(); // attaches
 
     const forward = cam.holds.getPtrConst(.forward).setting.binding.?;

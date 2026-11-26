@@ -20,6 +20,7 @@ const code_area = @import("code_area.zig");
 const files_area = @import("files_area.zig");
 const game_area = @import("game_area.zig");
 const photo_area = @import("photo_area.zig");
+const lists = @import("lists.zig");
 const hooks_area = @import("hooks_area.zig");
 const managed_area = @import("managed_area.zig");
 const sync_area = @import("sync_area.zig");
@@ -39,6 +40,8 @@ pub const Frame = W.Frame;
 pub const Game = game_area.Game;
 pub const FreeCamera = photo_area.FreeCamera;
 pub const Posing = photo_area.Posing;
+pub const Lists = W.Lists;
+pub const ItemList = W.ItemList;
 pub const SchemaArea = host.schemas.Area;
 pub const FrameSubscription = W.Frame.Subscription;
 pub const TickDriver = W.Frame.TickDriver;
@@ -99,9 +102,12 @@ pub const Tables = struct {
     game: *const sal.Table(Game),
     camera: *const sal.Table(FreeCamera),
     posing: *const sal.Table(Posing),
+    lists: *const sal.Table(Lists),
+    item_list: *const sal.Table(ItemList),
     schema: *const sal.Table(SchemaArea),
     frame_subscription: *const sal.Table(FrameSubscription),
     tick_driver: *const sal.Table(TickDriver),
+    done: *const sal.Table(W.Frame.WindDown),
     input: *const sal.Table(Input),
     keybind: *const sal.Table(Keybind),
     libraries: *const sal.Table(Library),
@@ -175,9 +181,12 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .game = h.adopt(Game, sal.implement(Game, game_area.Impl), o) catch return null,
         .camera = h.adopt(FreeCamera, sal.implement(FreeCamera, photo_area.CameraImpl), o) catch return null,
         .posing = h.adopt(Posing, sal.implement(Posing, photo_area.PosingImpl), o) catch return null,
+        .lists = h.adopt(Lists, sal.implement(Lists, ListsImpl), o) catch return null,
+        .item_list = h.adopt(ItemList, sal.implement(ItemList, ItemListImpl), o) catch return null,
         .schema = h.adopt(SchemaArea, sal.implement(SchemaArea, host.schemas.SchemaImpl), o) catch return null,
         .frame_subscription = h.adopt(FrameSubscription, sal.implement(FrameSubscription, SubscriptionImpl), o) catch return null,
         .tick_driver = h.adopt(TickDriver, sal.implement(TickDriver, TickDriverImpl), o) catch return null,
+        .done = h.adopt(W.Frame.WindDown, sal.implement(W.Frame.WindDown, DoneImpl), o) catch return null,
         .input = h.adopt(Input, sal.implement(Input, InputImpl), o) catch return null,
         .keybind = h.adopt(Keybind, sal.implement(Keybind, KeybindImpl), o) catch return null,
         .libraries = h.adopt(Library, sal.implement(Library, LibrariesImpl), o) catch return null,
@@ -265,6 +274,10 @@ const Root = struct {
 
     pub fn posing(loaded: *Loaded) sal.Object(Posing) {
         return area(loaded, Posing, "posing");
+    }
+
+    pub fn lists(loaded: *Loaded) sal.Object(Lists) {
+        return area(loaded, Lists, "lists");
     }
 
     pub fn diagnostics(loaded: *Loaded) sal.Object(Diagnostics) {
@@ -455,6 +468,78 @@ const SettingImpl = struct {
     }
 };
 
+// Lists
+
+const ListsImpl = struct {
+    pub fn open(loaded: *Loaded, id: []const u8, options: W.ItemList.Options, add: ?W.ItemList.Add, remove: ?W.ItemList.Remove, rename: ?W.ItemList.Rename) sal.Plain(Lists, "open") {
+        var handlers: lists.Handlers = .{ .add = add, .remove = remove, .rename = rename };
+        const t = tablesOf(loaded) orelse {
+            handlers.release();
+            return error.Failed;
+        };
+        const record = lists.open(loaded, id, .plain, .{
+            .title = options.title,
+            .pick = options.pick,
+            .current_by_default = options.current_by_default,
+            .remember = options.remember,
+            .current_label = options.current_label,
+        }, handlers) catch |err| {
+            handlers.release();
+            return err;
+        };
+        return .init(record, t.item_list);
+    }
+};
+
+const ItemListImpl = struct {
+    pub fn set(record: *lists.Record, items: []const W.ItemList.Item) void {
+        record.set(items);
+    }
+
+    pub fn selected(record: *lists.Record) []const u64 {
+        return record.selected();
+    }
+
+    pub fn select(record: *lists.Record, id: u64) void {
+        record.select(id);
+    }
+
+    pub fn deselect(record: *lists.Record, id: u64) void {
+        record.deselect(id);
+    }
+
+    pub fn draw(record: *lists.Record) void {
+        if (!host.ui.inFrame()) return;
+        record.draw(true);
+    }
+
+    pub fn close(record: *lists.Record) void {
+        record.stop();
+    }
+};
+
+/// The free camera's list of the plugin's cameras, the same each call. Only the first call's
+/// handlers are kept.
+pub fn cameraList(loaded: *Loaded, add: ?W.ItemList.Add, rename: ?W.ItemList.Rename) sal.Object(ItemList) {
+    var handlers: lists.Handlers = .{ .add = add, .rename = rename };
+    const t = tablesOf(loaded) orelse {
+        handlers.release();
+        return .{};
+    };
+    const id = "wraith.cameras";
+    const r = lists.open(loaded, id, .cameras, .{
+        .title = "Cameras",
+        .pick = .one,
+        .current_by_default = true,
+        .current_label = "On screen",
+    }, handlers) catch blk: {
+        // Open already, or it couldn't be, so these aren't its
+        handlers.release();
+        break :blk lists.find(loaded, id) orelse return .{};
+    };
+    return .init(r, t.item_list);
+}
+
 // Tweaks
 
 const TweaksImpl = struct {
@@ -554,6 +639,15 @@ const FrameImpl = struct {
             return error.Failed;
         };
         const f = frame.onTick(loaded, tick) catch |err| return frameError(err);
+        return .init(f, t.frame_subscription);
+    }
+
+    pub fn onStopping(loaded: *Loaded, stopping: frame.Stopping) sal.Plain(Frame, "onStopping") {
+        const t = tablesOf(loaded) orelse {
+            stopping.release();
+            return error.Failed;
+        };
+        const f = frame.onStopping(loaded, stopping) catch |err| return frameError(err);
         return .init(f, t.frame_subscription);
     }
 
@@ -681,6 +775,18 @@ const FrameImpl = struct {
 
 /// What `Frame.next` settles.
 pub const NextResolver = ResolverOf(sal.Plain(Frame, "next"));
+
+const DoneImpl = struct {
+    pub fn done(f: *frame.Frame) void {
+        f.finished.store(true, .release);
+    }
+};
+
+/// Gives the plugin up to a second to wind down, before its owner closes.
+pub fn runStopping(loaded: *Loaded) void {
+    const t = tablesOf(loaded) orelse return;
+    frame.runStopping(loaded, t.done);
+}
 
 const SubscriptionImpl = struct {
     pub fn cancel(f: *frame.Frame) void {

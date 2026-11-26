@@ -364,6 +364,8 @@ fn invokeOn(rt: *const Runtime, a: Allocator, class_name: []const u8, method_nam
     var kinds: [values.max_args]W.Managed.ValueKind = undefined;
     for (args, kinds[0..args.len]) |arg, *k| k.* = arg.kind;
     const m = values.pickMethod(rt, c, method_name, kinds[0..args.len]) orelse return error.NotFound;
+    // A constructor with no object makes one, and gives it back
+    if (target == 0 and std.mem.eql(u8, method_name, ".ctor")) return values.construct(rt, a, c, m, args);
     return values.call(rt, a, m, target, args);
 }
 
@@ -733,6 +735,22 @@ test "CoreCLR's C#, through the API" {
     try testing.expectEqual(1, (try m.getField(version.object, "_Major")).integer);
     try m.setField(version.object, "_Major", .{ .kind = .integer, .integer = 7 });
     try testing.expectEqual(7, (try m.invoke("System.Version", "get_Major", version.object, &.{})).integer);
+
+    // A constructor with no object makes one, all in one go here, as the collector moves things
+    const built = try m.invoke("System.Version", ".ctor", 0, &.{.{ .kind = .text, .text = "5.6" }});
+    try testing.expectEqual(W.Managed.ValueKind.object, built.kind);
+    try testing.expectEqualStrings("System.Version", try m.classOf(built.object));
+    try testing.expectEqual(5, (try m.invoke("System.Version", "get_Major", built.object, &.{})).integer);
+    try testing.expectError(error.Threw, m.invoke("System.Version", ".ctor", 0, &.{.{ .kind = .text, .text = "nope" }}));
+    // And made without constructing, zeroed
+    const blank = try global().call(struct {
+        fn f(rt: *const Runtime) usize {
+            const c = ManagedRuntime.findClass(rt, "System.Version") orelse return 0;
+            return @intFromPtr(rt.newObject(c) orelse return 0);
+        }
+    }.f, .{});
+    try testing.expect(blank != 0);
+    try testing.expectEqualStrings("System.Version", try m.classOf(blank));
 
     // Calling C#, picking the overload that fits
     try testing.expectEqual(42, (try m.invoke("System.Int32", "Parse", 0, &.{.{ .kind = .text, .text = "42" }})).integer);

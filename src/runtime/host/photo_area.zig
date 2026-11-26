@@ -35,10 +35,10 @@ pub const CameraImpl = struct {
         if (photo) |p| p.camera.world(w);
     }
 
-    pub fn camera(_: *Loaded, state: *W.FreeCamera.State) void {
+    pub fn camera(_: *Loaded, id: u64, state: *W.FreeCamera.State) void {
         lock.lockShared();
         defer lock.unlockShared();
-        if (photo) |p| p.camera.camera(state);
+        if (photo) |p| p.camera.camera(id, state);
     }
 
     pub fn focus(_: *Loaded, point: math.Vec3) void {
@@ -52,6 +52,17 @@ pub const CameraImpl = struct {
         defer lock.unlockShared();
         const p = photo orelse return false;
         return p.camera.active();
+    }
+
+    pub fn wantedCamera(loaded: *Loaded) u64 {
+        lock.lockShared();
+        defer lock.unlockShared();
+        const p = photo orelse return 0;
+        return p.camera.wantedCamera(loaded);
+    }
+
+    pub fn cameras(loaded: *Loaded, add: ?W.ItemList.Add, rename: ?W.ItemList.Rename) api.salamander.Object(W.ItemList) {
+        return @import("wraith.zig").cameraList(loaded, add, rename);
     }
 };
 

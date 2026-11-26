@@ -21,6 +21,8 @@ namespace Wraith;
     Images images();
     Input input();
     Libraries libraries();
+    // Lists of the plugin's things that Wraith shows, for the player to pick from
+    Lists lists();
     Log log();
     // The game's C# runtime, Mono or IL2CPP, for Unity games and others
     Managed managed();

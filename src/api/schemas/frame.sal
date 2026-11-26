@@ -78,6 +78,15 @@ namespace Frame {
         void cancel();
     }
 
+    // Says a plugin's done winding down, from `onStopping`.
+    trait WindDown {
+        // Any thread. Fine to call twice.
+        void done();
+    }
+
+    // As the plugin's about to stop, with everything still working.
+    fn void Stopping(WindDown wind_down);
+
     // Ticks from the game's own thread, for games that don't run it on the render thread.
     trait TickDriver {
         // Once a game frame, on the game's thread. Runs every `onTick`. Does nothing unless it's active.
@@ -135,6 +144,11 @@ trait Frame {
     // Takes over ticks, for a game engine or game plugin that knows the game's own thread. Ticks
     // wait for its first `tick`, so ask in `start`. Gone with the plugin.
     TickDriver!FrameError driveTicks();
+    // As the plugin's about to be unloaded, before anything it was given stops, so it can put back
+    // what it changed in the game from the thread that can, like with `toGame`. Call `wind_down.done` once
+    // it's finished, from anywhere. Wraith waits up to a second for all of them, then stops it
+    // anyway. Not when the game's closing and nothing ticks any more. Gone with the plugin.
+    Subscription!FrameError onStopping(keep Stopping stopping);
     // Whether this is the thread ticks run on. False everywhere till the first tick.
     bool onGameThread();
     // From a game or game engine plugin each frame, once the camera's where it'll be drawn from,
