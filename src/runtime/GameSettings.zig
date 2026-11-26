@@ -11,9 +11,9 @@ name: []const u8 = "",
 /// Plugins not loaded in this game.
 disabled_plugins: []const []const u8 = &.{},
 
-/// The open project's `.rwp`. Empty for an unsaved one.
+/// The `.rwp` older versions saved the project to. Moved into `workbench/` and emptied.
 project_file: []const u8 = "",
-/// Where the save and open dialogs start.
+/// Where the export and open dialogs start.
 project_folder: []const u8 = "",
 
 tweaks: Tweaks = .{},

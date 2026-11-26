@@ -1,4 +1,5 @@
-//! The File menu. Saves the project, or opens, merges or starts another.
+//! The File menu. Saves the project to its folder, exports it as a mod, or opens, merges or starts
+//! another.
 
 const ProjectMenu = @This();
 
@@ -7,6 +8,7 @@ const std = @import("std");
 const devtools = @import("tuft_devtools");
 const tuft_window = @import("tuft_window");
 const ui = @import("wraith_ui");
+const platform = @import("wraith_platform");
 
 const Workbench = @import("Workbench.zig");
 const Project = @import("../../Project.zig");
@@ -17,7 +19,7 @@ const unsaved_popup = "Unsaved changes##project";
 const revert_popup = "Revert project##project";
 const close_popup = "Unsaved changes##document";
 
-pub const Action = enum { save, save_as, open, merge, new, revert, import_ce };
+pub const Action = enum { save, open, merge, new, revert, import_ce };
 
 /// Waiting on the unsaved changes prompt.
 pending: ?Action = null,
@@ -69,10 +71,11 @@ pub fn drawMenu(self: *ProjectMenu, wb: *Workbench) void {
     const keys = &devtools.keys;
     const dirty = project.isDirty();
     ui.textDisabled("{s}{s}", .{ project.name(), if (dirty) " (unsaved)" else "" });
-    if (project.path) |p| ui.tooltip("{s}", .{p});
+    ui.tooltip("Saved in {s}", .{project.dir});
     ui.separator();
     if (ui.menuItem("New project", .{})) self.request(wb, .new);
     if (ui.menuItem("Open project...", .{ .shortcut = shortcut(keys.open) })) self.request(wb, .open);
+    ui.tooltip("An .rwp, like one from Export as mod, in place of this project. Kept once you save", .{});
     if (ui.menuItem("Merge project...", .{})) self.request(wb, .merge);
     ui.tooltip("Bring another project's addresses, tweaks, scripts and schemas into this one", .{});
     const importing = self.ce.busy();
@@ -80,11 +83,12 @@ pub fn drawMenu(self: *ProjectMenu, wb: *Workbench) void {
     ui.tooltip("A new project from a .CT, its scripts as tweaks and its records as addresses", .{});
     ui.separator();
     if (ui.menuItem("Save", .{ .shortcut = shortcut(keys.save) })) self.request(wb, .save);
-    if (ui.menuItem("Save as...", .{ .shortcut = shortcut(keys.save_as) })) self.request(wb, .save_as);
+    ui.tooltip("Its files, in the workbench folder by the game's settings", .{});
     if (ui.menuItem("Revert to saved", .{ .enabled = dirty })) self.request(wb, .revert);
     ui.tooltip("Drop what's not saved", .{});
-    if (ui.menuItem("Export as mod...", .{})) wb.export_mod.start(wb);
-    ui.tooltip("A zip of the project as a mod, to send someone or upload to the Wraith Hub", .{});
+    if (ui.menuItem("Export as mod...", .{ .shortcut = shortcut(keys.save_as) })) wb.export_mod.start(wb);
+    ui.tooltip("An .rwp of the project as a mod, to send someone, open in another workbench or upload to the Wraith Hub", .{});
+    if (ui.menuItem("Show project folder", .{})) showFolder(wb, project);
     ui.separator();
     filesMenu(wb, project, "Schemas", "schemas", &.{Project.ext.schema});
     filesMenu(wb, project, "Scripts", "scripts", &.{ Project.ext.script, Project.ext.script_lua });
@@ -138,7 +142,7 @@ pub fn drawPopups(self: *ProjectMenu, wb: *Workbench) void {
         ui.openPopup(name);
     }
     self.drawClose(wb);
-    if (self.ce.poll(wb)) remember(wb, "");
+    _ = self.ce.poll(wb);
     const project = wb.project orelse return;
     self.drawUnsaved(wb, project);
     drawRevert(wb, project);
@@ -148,25 +152,16 @@ pub fn drawPopups(self: *ProjectMenu, wb: *Workbench) void {
 fn run(wb: *Workbench, action: Action) bool {
     const project = wb.project orelse return false;
     switch (action) {
-        .save => {
-            if (project.isUnnamed()) return run(wb, .save_as);
-            project.save() catch |err| return failed(wb, "save", err);
-        },
-        .save_as => {
-            const path = pick(wb, project, .save) orelse return false;
-            defer wb.allocator.free(path);
-            project.saveAs(path) catch |err| return failed(wb, "save", err);
-            remember(wb, path);
-        },
+        .save => project.save() catch |err| return failed(wb, "save", err),
         .open => {
-            const path = pick(wb, project, .open) orelse return false;
+            const path = pick(wb) orelse return false;
             defer wb.allocator.free(path);
             wb.dropEditors();
             project.open(path) catch |err| return failed(wb, "open it", err);
             remember(wb, path);
         },
         .merge => {
-            const path = pick(wb, project, .open) orelse return false;
+            const path = pick(wb) orelse return false;
             defer wb.allocator.free(path);
             _ = project.mergeFrom(path) catch |err| return failed(wb, "merge it", err);
             wb.panels.addresses.reload();
@@ -174,7 +169,6 @@ fn run(wb: *Workbench, action: Action) bool {
         .new => {
             wb.dropEditors();
             project.new();
-            remember(wb, "");
         },
         .revert => {
             wb.dropEditors();
@@ -195,24 +189,29 @@ fn failed(wb: *Workbench, what: []const u8, err: anyerror) bool {
     return false;
 }
 
+/// Where the file dialogs start next time.
 fn remember(wb: *Workbench, path: []const u8) void {
-    if (wb.shell) |shell| shell.rememberProject(path);
+    if (wb.shell) |shell| shell.rememberProjectFolder(path);
 }
 
-/// Starts where the last one was. Null if cancelled.
-fn pick(wb: *Workbench, project: *Project, mode: tuft_window.FileDialog.Mode) ?[]u8 {
+/// In Explorer. There's none till the first save.
+fn showFolder(wb: *Workbench, project: *Project) void {
+    platform.process.openUri(wb.allocator, project.dir) catch |err| {
+        _ = failed(wb, "open the folder, it's made when you first save", err);
+    };
+}
+
+/// An `.rwp` to open or merge, starting where the last one was. Null if cancelled.
+fn pick(wb: *Workbench) ?[]u8 {
     const gpa = wb.allocator;
     const folder = if (wb.shell) |shell| shell.projectFolder(gpa) catch null else null;
     defer if (folder) |f| gpa.free(f);
-    var buf: [128]u8 = undefined;
-    const file_name = if (mode == .save) std.fmt.bufPrint(&buf, "{s}{s}", .{ project.name(), Project.ext.project }) catch "" else "";
     return tuft_window.pickFile(gpa, .{
-        .mode = mode,
+        .mode = .open,
         .owner = wb.dialogOwner(),
         .alive = wb.dialogAlive(),
-        .title = if (mode == .save) "Save project" else "Open project",
+        .title = "Open project",
         .folder = folder orelse "",
-        .file_name = file_name,
         .kind = "Wraith project",
         .extension = Project.ext.project,
     }) catch |err| {

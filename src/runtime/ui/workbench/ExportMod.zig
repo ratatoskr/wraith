@@ -1,6 +1,6 @@
 //! File > Export as mod. Asks what the project is on the hub, prefilled from last time or the game
-//! that's running, checks it like the hub does, then writes the project as a mod's zip where you
-//! pick. That's what you send someone or upload to the hub.
+//! that's running, checks it like the hub does, then writes the project as an `.rwp` where you pick:
+//! a mod's zip, to send someone, upload to the hub, or open in another workbench.
 
 const ExportMod = @This();
 
@@ -15,6 +15,7 @@ const game_engine = @import("wraith_game").game_engine;
 const Workbench = @import("Workbench.zig");
 const GameInfo = @import("../../GameInfo.zig");
 const ProjectManifest = @import("../../ProjectManifest.zig");
+const Project = @import("../../Project.zig");
 
 const popup = "Export as mod##export_mod";
 const red: ui.Color = .{ 1, 0.5, 0.5, 1 };
@@ -275,15 +276,18 @@ fn exportTo(self: *ExportMod, wb: *Workbench) bool {
     };
     if (wb.shell) |shell| shell.registry.set(shell.own.export_author, .{ .text = d.author }) catch {};
     var name_buf: [128]u8 = undefined;
-    const file_name = std.fmt.bufPrint(&name_buf, "{s}-{s}.zip", .{ d.id, d.version }) catch d.id;
+    const file_name = std.fmt.bufPrint(&name_buf, "{s}-{s}{s}", .{ d.id, d.version, Project.ext.project }) catch d.id;
+    const folder = if (wb.shell) |shell| shell.projectFolder(wb.allocator) catch null else null;
+    defer if (folder) |f| wb.allocator.free(f);
     const picked = tuft_window.pickFile(wb.allocator, .{
         .mode = .save,
         .owner = wb.dialogOwner(),
         .alive = wb.dialogAlive(),
         .title = "Export as mod",
+        .folder = folder orelse "",
         .file_name = file_name,
-        .kind = "Wraith mod",
-        .extension = ".zip",
+        .kind = "Wraith project",
+        .extension = Project.ext.project,
     }) catch |err| {
         self.problem.print("Couldn't show the file dialog: {t}", .{err});
         return false;
@@ -294,6 +298,7 @@ fn exportTo(self: *ExportMod, wb: *Workbench) bool {
         self.problem.print("Couldn't write it: {t}", .{err});
         return false;
     };
+    if (wb.shell) |shell| shell.rememberProjectFolder(path);
     self.problem = .{};
     return true;
 }

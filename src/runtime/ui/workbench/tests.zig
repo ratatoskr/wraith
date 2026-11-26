@@ -604,8 +604,6 @@ test "address list" {
     const root = try tmp.dir.realPathFileAlloc(io, ".", testing.allocator);
     defer testing.allocator.free(root);
 
-    const file = try std.fs.path.join(testing.allocator, &.{ root, "game.rwp" });
-    defer testing.allocator.free(file);
     var value: u32 align(4) = 5;
     var other: u32 align(4) = 6;
     var project = try Project.create(testing.allocator, io, root);
@@ -620,7 +618,7 @@ test "address list" {
         // Closed, but its tick still puts the value back
         wb.tick();
         try testing.expectEqual(5, value);
-        try project.saveAs(file);
+        try project.save();
         // Never saved, so it's gone next time
         addresses.add(@intFromPtr(&other), .four_bytes, 4);
         addresses.changed();
@@ -631,7 +629,7 @@ test "address list" {
 
     project = try Project.create(testing.allocator, io, root);
     defer project.destroy();
-    project.startUp(file);
+    project.startUp(null);
     try testing.expect(!project.isDirty());
     wb = try Workbench.create(testing.allocator, .{ .io = io, .project = project });
     defer wb.destroy();
@@ -733,8 +731,6 @@ test "tweaks panel and editor" {
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(io, ".", testing.allocator);
     defer testing.allocator.free(dir);
-    const file = try std.fs.path.join(testing.allocator, &.{ dir, "game.rwp" });
-    defer testing.allocator.free(file);
     const project = try Project.create(testing.allocator, io, dir);
     defer project.destroy();
     try project.write("tweaks/god.rwt", "first");
@@ -748,7 +744,7 @@ test "tweaks panel and editor" {
         \\  f32 speed = 1.5
     );
     try project.write("tweaks/zone.rwt", Workbench.TweakEditor.group_template);
-    try project.saveAs(file);
+    try project.save();
     const tweaks = try Tweaks.create(testing.allocator, project, null, .{}, .{});
     defer tweaks.destroy();
 
@@ -823,20 +819,19 @@ test "switching projects" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(io, ".", testing.allocator);
     defer testing.allocator.free(root);
-    const a = try std.fs.path.join(testing.allocator, &.{ root, "a.rwp" });
-    defer testing.allocator.free(a);
     const b = try std.fs.path.join(testing.allocator, &.{ root, "b.rwp" });
     defer testing.allocator.free(b);
     {
         const other = try Project.create(testing.allocator, io, root);
         defer other.destroy();
         try other.write(Project.addresses_file, ".{ .items = .{ .{ .name = \"x\" }, .{ .name = \"y\" } } }");
-        try other.saveAs(b);
+        try other.write("wraith.json", "{ \"title\": \"b\" }");
+        try other.exportTo(b);
     }
     const project = try Project.create(testing.allocator, io, root);
     defer project.destroy();
     try project.write(Project.addresses_file, ".{ .items = .{ .{ .name = \"x\" } } }");
-    try project.saveAs(a);
+    try project.save();
 
     var frames = try Frames.init();
     defer frames.deinit();
@@ -955,7 +950,7 @@ test "importing a Cheat Engine table becomes the project" {
     frames.run(wb, 3);
 
     try testing.expectEqual(0, wb.failures);
-    try testing.expect(project.isDirty() and project.isUnnamed());
+    try testing.expect(project.isDirty());
     const tweak = (try project.read(testing.allocator, "tweaks/game.rwt")).?;
     defer testing.allocator.free(tweak);
     try testing.expect(std.mem.indexOf(u8, tweak, "@patch game.exe+0x10 expect \"sub r8d,edx\"") != null);
@@ -1024,6 +1019,22 @@ test "export as mod prefills from the project, or from the game" {
     try testing.expectEqualStrings("Asgard", again.author);
     try testing.expectEqual(2, again.ids.len);
     try testing.expectEqualStrings("gog-2", again.ids[1]);
+
+    // Exported, then opened into another project: prefilled the same
+    const rwp = try std.fs.path.join(testing.allocator, &.{ dir, "kai_tables-0.1.0.rwp" });
+    defer testing.allocator.free(rwp);
+    try project.exportMod(rwp);
+    project.new();
+    wb.export_mod.start(wb);
+    frames.run(wb, 2);
+    try testing.expectEqualStrings("untitled", (try wb.export_mod.details(arena.allocator())).id);
+    try project.open(rwp);
+    wb.export_mod.start(wb);
+    frames.run(wb, 2);
+    const opened = try wb.export_mod.details(arena.allocator());
+    try testing.expectEqualStrings("Kai Tables", opened.title);
+    try testing.expectEqualStrings("Asgard", opened.author);
+    try testing.expectEqualStrings("gog-2", opened.ids[1]);
 }
 
 test "names panel" {

@@ -1,5 +1,6 @@
-//! A game's project, its addresses, tweaks, scripts and schemas in one `.rwp` file, like a cheat
-//! table. Saved only when asked, and unsaved changes go when the game does, a crash included.
+//! A game's project, its addresses, tweaks, scripts and schemas. Saved only when asked, as plain
+//! files in `workbench/` next to the game's settings, and unsaved changes go when the game does, a
+//! crash included. A `.rwp` is a zip of one, for sending: exported, opened and merged, never saved to.
 
 const Project = @This();
 
@@ -16,6 +17,8 @@ pub const manifest_file = "project.rwp.zon";
 /// What older versions kept unsaved changes in. Deleted when found.
 const old_recovery_name = "recovery.rwp";
 const scratch_name = ".unzip";
+/// Where it's saved, in the game's settings folder.
+pub const folder_name = "workbench";
 
 /// Our extensions. The real format comes last, so editors still know them.
 pub const ext = struct {
@@ -40,8 +43,8 @@ allocator: std.mem.Allocator,
 io: std.Io,
 /// Scratch space, like the game's settings folder.
 work_dir: []u8,
-/// Where it's saved. Null until it is.
-path: ?[]u8 = null,
+/// Where it's saved, `workbench/` in `work_dir`.
+dir: []u8,
 lock: sync.RwLock = .{},
 files: std.ArrayList(File) = .empty,
 dirty: bool = false,
@@ -49,41 +52,66 @@ dirty: bool = false,
 generation: Atomic(u32) = .init(1),
 /// Bumped when it becomes another project, so views can start over.
 epoch_counter: Atomic(u32) = .init(1),
+/// `name`, kept up as `wraith.json` changes. Under `lock`.
+title_buf: [64]u8 = undefined,
+title_len: usize = 0,
+/// `name` without a title, see `setDefaultName`. Under `lock`.
+default_buf: [64]u8 = undefined,
+default_len: usize = 0,
 
 /// An empty unsaved one.
 pub fn create(allocator: std.mem.Allocator, io: std.Io, work_dir: []const u8) !*Project {
     const self = try allocator.create(Project);
     errdefer allocator.destroy(self);
-    self.* = .{ .allocator = allocator, .io = io, .work_dir = try allocator.dupe(u8, work_dir) };
+    const work = try allocator.dupe(u8, work_dir);
+    errdefer allocator.free(work);
+    const dir = try std.fs.path.join(allocator, &.{ work_dir, folder_name });
+    self.* = .{ .allocator = allocator, .io = io, .work_dir = work, .dir = dir };
+    self.updateTitle();
     return self;
 }
 
-/// `last` if it's there, else nothing.
+/// What's saved. With nothing saved yet, `last` is an `.rwp` older versions saved to, brought into
+/// the folder.
 pub fn startUp(self: *Project, last: ?[]const u8) void {
     self.dropOldRecovery();
+    self.reload() catch |err| log.warn("Couldn't open the project in {s}: {t}", .{ self.dir, err });
+    if (self.files.items.len > 0) return;
     const path = last orelse return;
     if (path.len == 0) return;
-    self.open(path) catch |err| log.warn("Couldn't open the project {s}: {t}", .{ path, err });
+    self.open(path) catch |err| return log.warn("Couldn't open the project {s}: {t}", .{ path, err });
+    self.save() catch |err| return log.warn("Couldn't save {s} into {s}: {t}", .{ path, self.dir, err });
+    log.info("Moved the project {s} into {s}", .{ path, self.dir });
 }
 
 /// Unsaved changes are dropped.
 pub fn destroy(self: *Project) void {
     self.clearFiles();
     self.files.deinit(self.allocator);
-    if (self.path) |p| self.allocator.free(p);
+    self.allocator.free(self.dir);
     self.allocator.free(self.work_dir);
     self.allocator.destroy(self);
 }
 
-pub fn isUnnamed(self: *const Project) bool {
-    return self.path == null;
+/// The title in its `wraith.json`, else the default, see `setDefaultName`.
+pub fn name(self: *Project) []const u8 {
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    return self.title_buf[0..self.title_len];
 }
 
-/// The file's name without `.rwp`, or Untitled.
-pub fn name(self: *const Project) []const u8 {
-    const path = self.path orelse return "Untitled";
-    const base = std.fs.path.basename(path);
-    return if (std.ascii.endsWithIgnoreCase(base, ext.project)) base[0 .. base.len - ext.project.len] else base;
+/// Its name till it has a title, like the game's exe without `.exe`. Untitled if empty.
+pub fn setDefaultName(self: *Project, default: []const u8) void {
+    const stem = if (std.ascii.endsWithIgnoreCase(default, ".exe")) default[0 .. default.len - 4] else default;
+    {
+        self.lock.lock();
+        defer self.lock.unlock();
+        const n = @min(stem.len, self.default_buf.len);
+        @memcpy(self.default_buf[0..n], stem[0..n]);
+        self.default_len = n;
+        self.updateTitle();
+    }
+    self.changed();
 }
 
 pub fn isDirty(self: *Project) bool {
@@ -126,6 +154,7 @@ pub fn write(self: *Project, path: []const u8, text: []const u8) !void {
             try self.files.append(self.allocator, .{ .path = p, .text = copy });
         }
         self.dirty = true;
+        if (std.mem.eql(u8, path, core.manifest.file_name)) self.updateTitle();
     }
     self.changed();
 }
@@ -139,6 +168,7 @@ pub fn delete(self: *Project, path: []const u8) void {
         } else return;
         self.freeFile(self.files.orderedRemove(i));
         self.dirty = true;
+        if (std.mem.eql(u8, path, core.manifest.file_name)) self.updateTitle();
     }
     self.changed();
 }
@@ -183,42 +213,49 @@ pub fn freeName(self: *Project, path: []const u8) ![]u8 {
     return error.NoFreeName;
 }
 
-/// Writes it to its file. It has to have one, see `saveAs`.
+/// Writes its files to `dir`, and deletes the ones it no longer has. Files and folders starting
+/// with a dot, like `.git`, are left alone.
 pub fn save(self: *Project) !void {
-    const path = try self.allocator.dupe(u8, self.path orelse return error.Unnamed);
-    defer self.allocator.free(path);
-    try self.saveAs(path);
-}
-
-/// Writes it to `path` and carries on there.
-pub fn saveAs(self: *Project, path: []const u8) !void {
-    try self.writeZip(path);
-    const copy = try self.allocator.dupe(u8, path);
+    {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        var saving = try self.io.concurrent(saveTree, .{ self.io, self.allocator, self.dir, self.files.items });
+        try saving.await(self.io);
+    }
     {
         self.lock.lock();
         defer self.lock.unlock();
-        if (self.path) |p| self.allocator.free(p);
-        self.path = copy;
         self.dirty = false;
     }
     self.changed();
 }
 
-/// Becomes the project in `path`. Unsaved changes here are dropped.
+/// A zip of it at `path`, to send someone. Doesn't count as saving.
+pub fn exportTo(self: *Project, path: []const u8) !void {
+    var out: std.Io.Writer.Allocating = .init(self.allocator);
+    defer out.deinit();
+    {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        try zipTo(self.allocator, &out.writer, self.files.items);
+    }
+    try core.files.write(self.io, path, out.written(), .{ .make_dir = true });
+}
+
+/// Becomes the `.rwp` in `path`, unsaved till `save`. Unsaved changes here are dropped.
 pub fn open(self: *Project, path: []const u8) !void {
     var files = try self.unzip(path);
     errdefer {
         for (files.items) |f| self.freeFile(f);
         files.deinit(self.allocator);
     }
-    const copy = try self.allocator.dupe(u8, path);
-    self.replace(&files, copy, false);
+    self.replace(&files, true);
 }
 
-/// An empty unsaved one. Unsaved changes here are dropped.
+/// An empty one, unsaved till `save` empties the folder. Unsaved changes here are dropped.
 pub fn new(self: *Project) void {
     var files: std.ArrayList(File) = .empty;
-    self.replace(&files, null, false);
+    self.replace(&files, true);
 }
 
 /// Becomes an unsaved one of `files`, each with a `path` and `text`, like an import. Unsaved
@@ -236,18 +273,23 @@ pub fn load(self: *Project, files: anytype) !void {
         errdefer self.allocator.free(text);
         try copies.append(self.allocator, .{ .path = p, .text = text });
     }
-    self.replace(&copies, null, true);
+    self.replace(&copies, true);
 }
 
 /// Back to what's saved, or empty if it never was.
 pub fn reload(self: *Project) !void {
-    const path = if (self.path) |p| try self.allocator.dupe(u8, p) else return self.new();
-    defer self.allocator.free(path);
-    try self.open(path);
+    var reading = try self.io.concurrent(readSaved, .{ self.io, self.allocator, self.dir });
+    var files = try reading.await(self.io);
+    errdefer {
+        for (files.items) |f| self.freeFile(f);
+        files.deinit(self.allocator);
+    }
+    self.replace(&files, false);
 }
 
-/// Brings in another project's files as unsaved changes. Address lists join, other files that
-/// clash get a new name. Returns how many files came in.
+/// Brings in another project's files as unsaved changes. Address lists join, its `wraith.json`
+/// comes in only if this has none, and other files that clash get a new name. Returns how many
+/// files came in.
 pub fn mergeFrom(self: *Project, path: []const u8) !usize {
     var theirs = try self.unzip(path);
     defer {
@@ -256,9 +298,9 @@ pub fn mergeFrom(self: *Project, path: []const u8) !usize {
     }
     var count: usize = 0;
     for (theirs.items) |f| {
-        if (std.mem.eql(u8, f.path, manifest_file)) {
-            if (try self.read(self.allocator, manifest_file)) |mine| self.allocator.free(mine) else {
-                try self.write(manifest_file, f.text);
+        if (std.mem.eql(u8, f.path, manifest_file) or std.mem.eql(u8, f.path, core.manifest.file_name)) {
+            if (try self.read(self.allocator, f.path)) |mine| self.allocator.free(mine) else {
+                try self.write(f.path, f.text);
                 count += 1;
             }
             continue;
@@ -332,7 +374,7 @@ fn changed(self: *Project) void {
     _ = self.generation.fetchAdd(1, .release);
 }
 
-fn replace(self: *Project, files: *std.ArrayList(File), path: ?[]u8, dirty: bool) void {
+fn replace(self: *Project, files: *std.ArrayList(File), dirty: bool) void {
     {
         self.lock.lock();
         defer self.lock.unlock();
@@ -340,12 +382,27 @@ fn replace(self: *Project, files: *std.ArrayList(File), path: ?[]u8, dirty: bool
         self.files.deinit(self.allocator);
         self.files = files.*;
         files.* = .empty;
-        if (self.path) |p| self.allocator.free(p);
-        self.path = path;
         self.dirty = dirty;
+        self.updateTitle();
     }
     _ = self.epoch_counter.fetchAdd(1, .release);
     _ = self.generation.fetchAdd(1, .release);
+}
+
+/// Under the write lock.
+fn updateTitle(self: *Project) void {
+    var title: []const u8 = if (self.default_len > 0) self.default_buf[0..self.default_len] else "Untitled";
+    var buf: [4096]u8 = undefined;
+    var fba: std.heap.FixedBufferAllocator = .init(&buf);
+    if (self.find(core.manifest.file_name)) |f| {
+        const Titled = struct { title: []const u8 = "" };
+        if (std.json.parseFromSliceLeaky(Titled, fba.allocator(), f.text, .{ .ignore_unknown_fields = true })) |m| {
+            if (m.title.len > 0) title = m.title;
+        } else |_| {}
+    }
+    const n = @min(title.len, self.title_buf.len);
+    @memcpy(self.title_buf[0..n], title[0..n]);
+    self.title_len = n;
 }
 
 fn clearFiles(self: *Project) void {
@@ -376,8 +433,8 @@ fn dropOldRecovery(self: *Project) void {
 }
 // Zips
 
-/// A mod the hub takes and the mods folder installs: its files with `wraith.json` at the top, and
-/// without the project's own manifest. It has to have a `wraith.json` already.
+/// An `.rwp` that's also a mod the hub takes: its files with `wraith.json` at the top, and without
+/// the manifest older projects had. It has to have a `wraith.json` already. `open` reads it back.
 pub fn exportMod(self: *Project, path: []const u8) !void {
     var out: std.Io.Writer.Allocating = .init(self.allocator);
     defer out.deinit();
@@ -389,17 +446,6 @@ pub fn exportMod(self: *Project, path: []const u8) !void {
         defer files.deinit(self.allocator);
         for (self.files.items) |f| if (!std.mem.eql(u8, f.path, manifest_file)) try files.append(self.allocator, f);
         try zipTo(self.allocator, &out.writer, files.items);
-    }
-    try core.files.write(self.io, path, out.written(), .{ .make_dir = true });
-}
-
-fn writeZip(self: *Project, path: []const u8) !void {
-    var out: std.Io.Writer.Allocating = .init(self.allocator);
-    defer out.deinit();
-    {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-        try zipTo(self.allocator, &out.writer, self.files.items);
     }
     try core.files.write(self.io, path, out.written(), .{ .make_dir = true });
 }
@@ -427,6 +473,19 @@ fn unzipAll(io: std.Io, gpa: std.mem.Allocator, path: []const u8, scratch: []con
         var reader = file.reader(io, &read_buf);
         try std.zip.extract(dest, &reader, .{ .allow_backslashes = true });
     }
+    return readTree(io, gpa, scratch);
+}
+
+/// Empty if there's no folder yet.
+fn readSaved(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !std.ArrayList(File) {
+    return readTree(io, gpa, path) catch |err| switch (err) {
+        error.FileNotFound => .empty,
+        else => err,
+    };
+}
+
+/// Every file under `path` but hidden ones, see `hidden`.
+fn readTree(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !std.ArrayList(File) {
     var out: std.ArrayList(File) = .empty;
     errdefer {
         for (out.items) |f| {
@@ -435,12 +494,12 @@ fn unzipAll(io: std.Io, gpa: std.mem.Allocator, path: []const u8, scratch: []con
         }
         out.deinit(gpa);
     }
-    var dir = try cwd.openDir(io, scratch, .{ .iterate = true });
+    var dir = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
     defer dir.close(io);
     var walker = try dir.walk(gpa);
     defer walker.deinit(io);
     while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
+        if (entry.kind != .file or hidden(entry.path)) continue;
         const text = try dir.readFileAlloc(io, entry.path, gpa, .limited(max_file));
         errdefer gpa.free(text);
         const p = try gpa.dupe(u8, entry.path);
@@ -448,6 +507,66 @@ fn unzipAll(io: std.Io, gpa: std.mem.Allocator, path: []const u8, scratch: []con
         try out.append(gpa, .{ .path = p, .text = text });
     }
     return out;
+}
+
+/// Not the project's: anything starting with a dot or in a folder that does, like `.git`, and a
+/// half written `.tmp`.
+fn hidden(path: []const u8) bool {
+    var parts = std.mem.tokenizeAny(u8, path, "/\\");
+    while (parts.next()) |part| if (part[0] == '.') return true;
+    return std.mem.endsWith(u8, path, ".tmp");
+}
+
+/// `files` into `path`, each replaced whole, then the files from before it no longer has, and any
+/// folders that leaves empty, deleted.
+fn saveTree(io: std.Io, gpa: std.mem.Allocator, path: []const u8, files: []const File) !void {
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, path);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    for (files) |f| {
+        const at = try std.fmt.bufPrint(&buf, "{s}{c}{s}", .{ path, std.fs.path.sep, f.path });
+        try core.files.writeHere(io, at, f.text, .{ .make_dir = true, .replace = true });
+    }
+    var stale: std.ArrayList([]u8) = .empty;
+    defer freePaths(gpa, &stale);
+    var folders: std.ArrayList([]u8) = .empty;
+    defer freePaths(gpa, &folders);
+    var dir = try cwd.openDir(io, path, .{ .iterate = true });
+    defer dir.close(io);
+    {
+        var walker = try dir.walk(gpa);
+        defer walker.deinit(io);
+        while (try walker.next(io)) |entry| {
+            if (hidden(entry.path)) continue;
+            switch (entry.kind) {
+                .directory => try folders.append(gpa, try gpa.dupe(u8, entry.path)),
+                .file => {
+                    const kept = for (files) |f| {
+                        if (samePath(f.path, entry.path)) break true;
+                    } else false;
+                    if (!kept) try stale.append(gpa, try gpa.dupe(u8, entry.path));
+                },
+                else => {},
+            }
+        }
+    }
+    for (stale.items) |s| dir.deleteFile(io, s) catch |err| log.warn("Couldn't delete {s} from {s}: {t}", .{ s, path, err });
+    // Deepest first, and only empty ones go
+    var i = folders.items.len;
+    while (i > 0) {
+        i -= 1;
+        dir.deleteDir(io, folders.items[i]) catch {};
+    }
+}
+
+/// `/` and `\\` alike, since the walker gives Windows' own.
+fn samePath(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        const slash = (x == '/' or x == '\\') and (y == '/' or y == '\\');
+        if (x != y and !slash) return false;
+    }
+    return true;
 }
 
 fn readPlain(io: std.Io, gpa: std.mem.Allocator, path: []const u8) ![]u8 {
@@ -534,19 +653,32 @@ const tests = struct {
         defer tmp.cleanup();
         const work = try workDir(&tmp);
         defer testing.allocator.free(work);
-        const file = try std.fs.path.join(testing.allocator, &.{ work, "mine", "health.rwp" });
-        defer testing.allocator.free(file);
 
         {
             const p = try create(testing.allocator, testing.io, work);
             defer p.destroy();
-            try testing.expect(p.isUnnamed());
+            p.startUp(null);
+            try testing.expectEqualStrings("Untitled", p.name());
+            p.setDefaultName("kai.exe");
+            try testing.expectEqualStrings("kai", p.name());
             try p.write("tweaks/god.rwt", "one");
             try p.write("tweaks/fly.rwt", "two");
-            try testing.expectError(error.Unnamed, p.save());
-            try p.saveAs(file);
+            try p.write("old/gone.rwt", "three");
+            try p.write(core.manifest.file_name, "{ \"title\": \"Health\" }");
+            try testing.expectEqualStrings("Health", p.name());
+            try p.save();
             try testing.expect(!p.isDirty());
-            try testing.expectEqualStrings("health", p.name());
+            // Things of yours that aren't the project's stay put
+            try tmp.dir.createDirPath(testing.io, folder_name ++ "/.git");
+            try tmp.dir.writeFile(testing.io, .{ .sub_path = folder_name ++ "/.git/HEAD", .data = "ref" });
+            // Gone when saved again
+            p.delete("old/gone.rwt");
+            try p.save();
+            try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, folder_name ++ "/old", .{}));
+            // Plain files, as they are in the project
+            const on_disk = try tmp.dir.readFileAlloc(testing.io, folder_name ++ "/tweaks/god.rwt", testing.allocator, .unlimited);
+            defer testing.allocator.free(on_disk);
+            try testing.expectEqualStrings("one", on_disk);
             // Changed after saving, then the game closes
             p.delete("tweaks/fly.rwt");
             try p.write("tweaks/god.rwt", "changed");
@@ -557,15 +689,55 @@ const tests = struct {
         {
             const p = try create(testing.allocator, testing.io, work);
             defer p.destroy();
-            p.startUp(file);
+            p.startUp(null);
             try testing.expect(!p.isDirty());
+            try testing.expectEqualStrings("Health", p.name());
             const god = (try p.read(testing.allocator, "tweaks/god.rwt")).?;
             defer testing.allocator.free(god);
             try testing.expectEqualStrings("one", god);
             var tweaks = try p.list(testing.allocator, "tweaks", ext.tweak);
             defer freePaths(testing.allocator, &tweaks);
             try testing.expectEqual(2, tweaks.items.len);
+            try testing.expectEqual(null, try p.read(testing.allocator, ".git/HEAD"));
             try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, old_recovery_name, .{}));
+            try tmp.dir.access(testing.io, folder_name ++ "/.git/HEAD", .{});
+        }
+    }
+    test "an rwp older versions saved to moves into the folder" {
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const work = try workDir(&tmp);
+        defer testing.allocator.free(work);
+        const file = try std.fs.path.join(testing.allocator, &.{ work, "mine", "health.rwp" });
+        defer testing.allocator.free(file);
+        {
+            const p = try create(testing.allocator, testing.io, work);
+            defer p.destroy();
+            try p.write("tweaks/god.rwt", "one");
+            try p.exportTo(file);
+            // Exporting isn't saving
+            try testing.expect(p.isDirty());
+            try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, folder_name, .{}));
+        }
+        {
+            const p = try create(testing.allocator, testing.io, work);
+            defer p.destroy();
+            p.startUp(file);
+            try testing.expect(!p.isDirty());
+            try tmp.dir.access(testing.io, folder_name ++ "/tweaks/god.rwt", .{});
+        }
+        // Once there, the folder wins
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = folder_name ++ "/tweaks/god.rwt", .data = "edited" });
+        {
+            const p = try create(testing.allocator, testing.io, work);
+            defer p.destroy();
+            p.startUp(file);
+            const god = (try p.read(testing.allocator, "tweaks/god.rwt")).?;
+            defer testing.allocator.free(god);
+            try testing.expectEqualStrings("edited", god);
+            // Opening one is a change to save
+            try p.open(file);
+            try testing.expect(p.isDirty());
         }
     }
     test "merging another in" {
@@ -581,19 +753,30 @@ const tests = struct {
             try other.write("tweaks/god.rwt", "theirs");
             try other.write("tweaks/fly.rwt", "fly");
             try other.write(addresses_file, ".{ .items = .{ .{ .name = \"y\" } } }");
-            try other.saveAs(theirs);
+            try other.write(core.manifest.file_name, "{ \"title\": \"Theirs\" }");
+            try other.exportTo(theirs);
         }
         const p = try create(testing.allocator, testing.io, work);
         defer p.destroy();
         try p.write("tweaks/god.rwt", "ours");
         try p.write(addresses_file, ".{ .items = .{ .{ .name = \"x\" } } }");
-        try testing.expectEqual(3, try p.mergeFrom(theirs));
+        try testing.expectEqual(4, try p.mergeFrom(theirs));
         const kept = (try p.read(testing.allocator, "tweaks/god_2.rwt")).?;
         defer testing.allocator.free(kept);
         try testing.expectEqualStrings("theirs", kept);
         const joined = (try p.read(testing.allocator, addresses_file)).?;
         defer testing.allocator.free(joined);
         try testing.expectEqual(2, std.mem.count(u8, joined, ".name"));
+        // Without a wraith.json of its own, it takes theirs
+        try testing.expectEqualStrings("Theirs", p.name());
+
+        // With one, it keeps its own
+        const q = try create(testing.allocator, testing.io, work);
+        defer q.destroy();
+        try q.write(core.manifest.file_name, "{ \"title\": \"Ours\" }");
+        try testing.expectEqual(3, try q.mergeFrom(theirs));
+        try testing.expectEqualStrings("Ours", q.name());
+        try testing.expectEqual(null, try q.read(testing.allocator, "wraith_2.json"));
     }
 };
 

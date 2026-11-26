@@ -17,7 +17,8 @@ pub fn projectKeys(self: *Workbench) void {
     if (self.project == null or self.own_file_focused) return;
     const chords = &devtools.keys;
     if (pressed(chords.save_as)) {
-        self.project_menu.request(self, .save_as);
+        self.flushEditors();
+        self.export_mod.start(self);
     } else if (pressed(chords.save)) {
         self.project_menu.request(self, .save);
     } else if (pressed(chords.open)) {
@@ -25,7 +26,7 @@ pub fn projectKeys(self: *Workbench) void {
     }
 }
 
-/// Saves the project, asking where if it's never been saved.
+/// Saves the project to its folder.
 pub fn saveProject(self: *Workbench) void {
     self.project_menu.request(self, .save);
 }

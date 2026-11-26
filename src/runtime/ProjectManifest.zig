@@ -267,10 +267,10 @@ test "written, read back and checked like the hub" {
     try testing.expect(check(bad) != null);
     try testing.expectError(error.Invalid, write(project, testing.allocator, bad));
 
-    // Exported as a mod: wraith.json at the top, without the project's own manifest
+    // Exported as a mod's zip, named .rwp: wraith.json at the top, without the old manifest
     try project.write(Project.manifest_file, ".{}");
     try project.write("tweaks/speed.rwt", "@js\n");
-    const zip = try std.fs.path.join(a, &.{ dir, "out", "kai_tables-0.1.0.zip" });
+    const zip = try std.fs.path.join(a, &.{ dir, "out", "kai_tables-0.1.0.rwp" });
     try project.exportMod(zip);
     try tmp.dir.createDirPath(testing.io, "unzipped");
     var unzipped = try tmp.dir.openDir(testing.io, "unzipped", .{});
@@ -285,6 +285,15 @@ test "written, read back and checked like the hub" {
     try unzipped.access(testing.io, file, .{});
     try unzipped.access(testing.io, "tweaks/speed.rwt", .{});
     try testing.expectError(error.FileNotFound, unzipped.access(testing.io, Project.manifest_file, .{}));
+    // And opens as a project, titled from its wraith.json
+    {
+        const other = try Project.create(testing.allocator, testing.io, dir);
+        defer other.destroy();
+        try other.open(zip);
+        try testing.expectEqualStrings("Kai Tables", other.name());
+        const speed = (try other.read(a, "tweaks/speed.rwt")).?;
+        try testing.expectEqualStrings("@js\n", speed);
+    }
     bad = again;
     bad.exes = &.{"C:/kai.exe"};
     try testing.expect(check(bad) != null);

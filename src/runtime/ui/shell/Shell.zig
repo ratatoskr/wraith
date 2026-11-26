@@ -16,6 +16,7 @@ const Themes = @import("../Themes.zig");
 const Settings = @import("../../Settings.zig");
 const Workbench = @import("../workbench/Workbench.zig");
 const Project = @import("../../Project.zig");
+const GameInfo = @import("../../GameInfo.zig");
 const Tweaks = @import("../../Tweaks.zig");
 const GameSettings = @import("../../GameSettings.zig");
 
@@ -188,6 +189,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
         self.ready_toast = !self.welcome.open;
     }
 
+    if (project != null) self.forgetOldProjectFile();
     if (project) |p| {
         const settings = if (options.game) |g| g.value.tweaks else GameSettings.Tweaks{};
         if (options.game) |g| self.tweak_layout.load(g.value.tweak_layout);
@@ -222,9 +224,10 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
     return self;
 }
 
-/// The last one saved, taking in the game's address list from before projects.
+/// What's saved in the game's folder, taking in the `.rwp` and address list older versions kept.
 fn openProject(allocator: std.mem.Allocator, io: std.Io, game_dir: []const u8, last: []const u8) !*Project {
     const project = try Project.create(allocator, io, game_dir);
+    project.setDefaultName(GameInfo.global.name());
     project.startUp(last);
     const old = try std.fs.path.join(allocator, &.{ game_dir, "addresses.zon" });
     defer allocator.free(old);
@@ -409,15 +412,24 @@ fn tweaksReady(context: ?*anyopaque, _: []const u8) bool {
     return self.scriptsReady();
 }
 
-/// The project to open next time, and where the file dialogs start. Any thread.
-pub fn rememberProject(self: *Shell, path: []const u8) void {
+/// Where the file dialogs start, the folder `path` is in. Any thread.
+pub fn rememberProjectFolder(self: *Shell, path: []const u8) void {
+    const game = self.options.game orelse return;
+    const folder = std.fs.path.dirname(path) orelse return;
+    self.settings_lock.lock();
+    defer self.settings_lock.unlock();
+    game.value.project_folder = game.arena.allocator().dupe(u8, folder) catch return;
+    game.save() catch |err| log.warn("Couldn't save where the project dialogs start: {t}", .{err});
+}
+
+/// Done with the `.rwp` older versions saved to, now it's in the project's folder.
+fn forgetOldProjectFile(self: *Shell) void {
     const game = self.options.game orelse return;
     self.settings_lock.lock();
     defer self.settings_lock.unlock();
-    const a = game.arena.allocator();
-    game.value.project_file = a.dupe(u8, path) catch return;
-    if (std.fs.path.dirname(path)) |folder| game.value.project_folder = a.dupe(u8, folder) catch return;
-    game.save() catch |err| log.warn("Couldn't save which project is open: {t}", .{err});
+    if (game.value.project_file.len == 0) return;
+    game.value.project_file = "";
+    game.save() catch |err| log.warn("Couldn't save the game's settings: {t}", .{err});
 }
 
 /// Where the file dialogs start. Empty if they never ran.
