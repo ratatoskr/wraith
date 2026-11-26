@@ -370,7 +370,9 @@ fn updateGizmo(self: *Posing, store: *poses.Store, posed: ?*poses.Actor) bool {
 }
 
 fn hideGizmo(self: *Posing) bool {
-    if (self.gizmo_shown) self.gizmo.hide();
+    // Even when it's not said to show: picking another actor or bone clears `gizmo_shown` so it
+    // comes back in front, and with nothing picked after, it'd be left where it was
+    self.gizmo.hide();
     self.gizmo_shown = false;
     return false;
 }
