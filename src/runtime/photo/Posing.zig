@@ -62,6 +62,11 @@ overlay: *Overlay,
 scene: *Scene,
 /// What the game's threads and the render thread share.
 lock: Atomic(u32) = .init(0),
+/// The thread holding `lock`, so drawing that calls back into posing, like its tools, doesn't wait on
+/// itself. 0 for none
+lock_owner: Atomic(u64) = .init(0),
+/// How many times `lock_owner` has it. Only it touches this
+lock_depth: u32 = 0,
 /// Whether to bother the game for skeletons
 wanted: Atomic(bool) = .init(false),
 store: poses.Store = undefined,
@@ -129,6 +134,11 @@ pub fn init(self: *Posing, registry: *Registry, overlay: *Overlay, scene: *Scene
     try scene.add(.{ .slot = .photo_inspector, .id = "actors", .kind = "actors", .presentation = .@"inline", .order = 100 }, .{ .native = .of(self, drawActors) });
     try scene.add(.{ .slot = .photo_inspector, .id = "actor", .kind = "actor", .presentation = .@"inline", .order = 100 }, .{ .native = .of(self, drawActor) });
     try scene.add(.{ .slot = .photo_row, .id = "freeze", .kind = "actor", .order = 100 }, .{ .native = .of(self, actorIcons) });
+    try scene.add(.{ .slot = .photo_menu, .id = "actor", .kind = "actor", .order = 100 }, .{ .native = .of(self, actorMenu) });
+    try scene.add(.{ .slot = .photo_menu, .id = "bone", .kind = "bone", .order = 100 }, .{ .native = .of(self, boneMenu) });
+    try scene.add(.{ .slot = .photo_tools, .id = "gizmo", .kind = "actor", .order = 100 }, .{ .native = .of(self, gizmoTools) });
+    try scene.add(.{ .slot = .photo_tools, .id = "actor", .kind = "actor", .order = 200 }, .{ .native = .of(self, actorTools) });
+    try scene.add(.{ .slot = .photo_tools, .id = "bone", .kind = "bone", .order = 100 }, .{ .native = .of(self, boneTools) });
 }
 
 /// Waits for keys in flight. Game plugins may still call in, so the store stays till the end.
@@ -146,10 +156,20 @@ pub fn deinit(self: *Posing) void {
 }
 
 fn acquire(self: *Posing) void {
+    const me: u64 = @intCast(std.Thread.getCurrentId());
+    if (self.lock_owner.load(.monotonic) == me) {
+        self.lock_depth += 1;
+        return;
+    }
     while (self.lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) std.atomic.spinLoopHint();
+    self.lock_owner.store(me, .monotonic);
+    self.lock_depth = 1;
 }
 
 fn release(self: *Posing) void {
+    self.lock_depth -= 1;
+    if (self.lock_depth > 0) return;
+    self.lock_owner.store(0, .monotonic);
     self.lock.store(0, .release);
 }
 
@@ -439,6 +459,29 @@ fn actorIcons(self: *Posing, key: Target) void {
     if (Scene.rowIcon(icons.snowflake ++ "##freeze", a.frozen, "{s} the actor", .{if (a.frozen) "Unfreeze" else "Freeze"})) setFrozen(a, !a.frozen);
 }
 
+/// An actor's right-click menu in the scene.
+fn actorMenu(self: *Posing, key: Target) void {
+    self.acquire();
+    defer self.release();
+    const store = &self.store;
+    const a = store.byId(key.id) orelse return;
+    if (ui.menuItem(if (a.frozen) "Unfreeze" else "Freeze", .{})) setFrozen(a, !a.frozen);
+    const bone: usize = if (self.actor == a.id) self.currentBone(a) orelse 0 else 0;
+    if (ui.menuItem("Focus the camera on it", .{ .enabled = a.count > 0 })) self.scene.focus(a.position(bone));
+    if (ui.menuItem("Reset its pose", .{ .enabled = store.hasEdits(a.id) })) store.resetActor(a.id);
+    if (ui.menuItem("Copy its name", .{})) self.scene.copy(a.name.get());
+}
+
+/// A bone's right-click menu in the actor's bones.
+fn boneMenu(self: *Posing, key: Target) void {
+    self.acquire();
+    defer self.release();
+    const a, const b = self.boneOf(key) orelse return;
+    if (ui.menuItem("Focus the camera here", .{})) self.scene.focus(a.position(b));
+    if (ui.menuItem("Reset this bone", .{ .enabled = self.store.findEdit(a.id, key.name) != null })) self.store.resetBone(a.id, key.name);
+    if (ui.menuItem("Copy its name", .{})) self.scene.copy(key.name);
+}
+
 /// What Actors itself shows: how to pick one.
 fn drawActors(self: *Posing, _: Target) void {
     self.acquire();
@@ -457,7 +500,9 @@ fn drawActor(self: *Posing, key: Target) void {
     const store = &self.store;
     const a = store.byId(key.id) orelse return ui.textDisabled("That actor's gone.", .{});
     if (!store.isLive(a)) return ui.textDisabled("That actor's gone.", .{});
-    self.actorTools(store, a);
+    // Its tools, then the picked bone's beside them
+    const any = Scene.drawTools(.{ .kind = "actor", .id = a.id }, false);
+    if (self.currentBone(a)) |b| _ = Scene.drawTools(boneTarget(a, b), any);
     var title: [64:0]u8 = undefined;
     ui.separatorText(std.fmt.bufPrintSentinel(&title, "{s}{s}", .{ a.name.get(), if (a.frozen) " (frozen)" else "" }, 0) catch "Actor");
 
@@ -475,36 +520,51 @@ fn drawActor(self: *Posing, key: Target) void {
     }
 }
 
-/// The gizmo's tool, freezing, focusing and resetting, over the actor's bones.
-fn actorTools(self: *Posing, store: *poses.Store, a: *poses.Actor) void {
-    const tight = Photo.compact();
-    defer tight.end();
-    {
-        const hidden = ui.disabled(!self.overlay_on);
-        defer hidden.end();
-        inline for (.{ .{ Tool.rotate, icons.rotate_3d, "Rotate" }, .{ Tool.move, icons.move_3d, "Move" }, .{ Tool.scale, icons.scale_3d, "Scale" } }) |t| {
-            if (Photo.toolButton(t[1] ++ "##posing_" ++ t[2], self.tool == t[0], t[2] ++ " with the gizmo", .{})) self.tool = t[0];
-            ui.sameLine();
-        }
-        if (Photo.toolButton(icons.globe ++ "##posing_world", self.world_axes, "Line the gizmo up with the world, not the bone", .{})) self.world_axes = !self.world_axes;
+/// A bone as `photo.tools` and `photo.menu` see it: by its place, its actor and its name.
+fn boneTarget(a: *const poses.Actor, bone: u32) Target {
+    return .{ .kind = "bone", .id = bone, .parent = a.id, .name = a.names[bone].get() };
+}
+
+/// The bone a `boneTarget` names, if it's still there. Under the lock.
+fn boneOf(self: *Posing, key: Target) ?struct { *poses.Actor, u32 } {
+    const a = self.store.byId(key.parent) orelse return null;
+    return .{ a, a.find(key.name) orelse return null };
+}
+
+/// What the gizmo does, along the top of an actor's panel.
+fn gizmoTools(self: *Posing, _: Target) void {
+    const hidden = ui.disabled(!self.overlay_on);
+    defer hidden.end();
+    inline for (.{ .{ Tool.rotate, icons.rotate_3d, "Rotate" }, .{ Tool.move, icons.move_3d, "Move" }, .{ Tool.scale, icons.scale_3d, "Scale" } }) |t| {
+        if (Photo.toolButton(t[1] ++ "##posing_" ++ t[2], self.tool == t[0], t[2] ++ " with the gizmo", .{})) self.tool = t[0];
+        ui.sameLine();
     }
-    Photo.gap();
+    if (Photo.toolButton(icons.globe ++ "##posing_world", self.world_axes, "Line the gizmo up with the world, not the bone", .{})) self.world_axes = !self.world_axes;
+}
+
+/// Freezing and resetting the whole actor.
+fn actorTools(self: *Posing, key: Target) void {
+    self.acquire();
+    defer self.release();
+    const store = &self.store;
+    const a = store.byId(key.id) orelse return;
     if (Photo.toolButton(icons.snowflake ++ "##posing_freeze", a.frozen, "{s} the actor. {s}", .{ if (a.frozen) "Unfreeze" else "Freeze", self.keyName(.freeze) })) setFrozen(a, !a.frozen);
     ui.sameLine();
-    const bone = self.currentBone(a);
-    {
-        const no_bone = ui.disabled(bone == null);
-        defer no_bone.end();
-        if (Photo.toolButton(icons.crosshair ++ "##posing_focus", false, "Orbit the camera round the picked bone. {s}", .{self.keyName(.focus)})) {
-            if (bone) |b| self.scene.focus(a.position(b));
-        }
-    }
+    const nothing = ui.disabled(!store.hasEdits(a.id));
+    defer nothing.end();
+    if (Photo.toolButton(icons.rotate_ccw ++ "##posing_reset", false, "Put the actor back, bones and shapes", .{})) store.resetActor(a.id);
+}
+
+/// Focusing on and resetting the picked bone.
+fn boneTools(self: *Posing, key: Target) void {
+    self.acquire();
+    defer self.release();
+    const a, const b = self.boneOf(key) orelse return;
+    if (Photo.toolButton(icons.crosshair ++ "##posing_focus", false, "Orbit the camera round {s}. {s}", .{ key.name, self.keyName(.focus) })) self.scene.focus(a.position(b));
     ui.sameLine();
-    {
-        const nothing = ui.disabled(!store.hasEdits(a.id));
-        defer nothing.end();
-        if (Photo.toolButton(icons.rotate_ccw ++ "##posing_reset", false, "Put the actor back, bones and shapes", .{})) store.resetActor(a.id);
-    }
+    const nothing = ui.disabled(self.store.findEdit(a.id, key.name) == null);
+    defer nothing.end();
+    if (Photo.toolButton(icons.undo_2 ++ "##posing_reset_bone", false, "Put {s} back", .{key.name})) self.store.resetBone(a.id, key.name);
 }
 
 fn bonesTab(self: *Posing, store: *poses.Store, a: *poses.Actor) void {
@@ -628,6 +688,15 @@ fn boneList(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
         const mark = if (store.findEdit(a.id, name) != null) " *" else "";
         const label = std.fmt.bufPrintSentinel(&buf, "{s}{s}{s}##{d}", .{ pad[0 .. depth[i] * 2], name, mark, i }, 0) catch continue;
         if (ui.selectable(label, picked == @as(u32, i))) self.select(a, i);
+        // Picked by a right-click too, so what the menu's for is what's shown
+        if (ui.isItemClicked(.right)) self.select(a, i);
+        const scope = ui.id(@as(i32, @intCast(i)));
+        defer scope.end();
+        // The `photo.menu` items for bones, Wraith's and plugins'
+        if (Scene.hasMenu("bone")) if (ui.contextMenu("##bone")) |m| {
+            defer m.end();
+            Scene.drawMenu(boneTarget(a, i));
+        };
     }
 }
 

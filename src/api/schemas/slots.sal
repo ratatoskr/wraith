@@ -86,6 +86,10 @@ namespace Slot {
     struct Target {
         string kind;
         u64 id;
+        // For part of a node, like a bone: the node's id, like its actor's. Else 0
+        u64 parent;
+        // What it's called, like a bone's name, which its edits go by. Can be empty
+        string name;
     }
 }
 

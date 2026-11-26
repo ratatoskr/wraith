@@ -27,6 +27,8 @@ pub const Slot = enum(u8) {
     photo_scene,
     photo_inspector,
     photo_row,
+    photo_menu,
+    photo_tools,
 
     pub fn def(s: Slot) *const Def {
         return defs.getPtrConst(s);
@@ -56,7 +58,8 @@ pub const Def = struct {
 };
 
 const photo_parents = [_][]const u8{ "world", "world/cameras", "world/actors" };
-const photo_kinds = [_][]const u8{ "world", "cameras", "camera", "actors", "actor" };
+/// A bone isn't in the tree, but has a menu and tools, with its actor as `parent` and its name as `name`
+const photo_kinds = [_][]const u8{ "world", "cameras", "camera", "actors", "actor", "bone" };
 
 pub const defs: std.EnumArray(Slot, Def) = .init(.{
     .workbench_plugins = .{ .id = "workbench.plugins", .title = "Workbench: Plugins", .help = "A tab in the Workbench's Plugins group.", .thread = .workbench, .presentations = &.{.tab} },
@@ -66,12 +69,17 @@ pub const defs: std.EnumArray(Slot, Def) = .init(.{
     .photo_scene = .{ .id = "photo.scene", .title = "Photo mode: scene", .help = "Nodes in Photo mode's scene. A node's draw shows in the inspector while it's picked.", .presentations = &.{.node}, .hierarchy = true, .parents = &photo_parents, .known_kinds = &photo_kinds },
     .photo_inspector = .{ .id = "photo.inspector", .title = "Photo mode: inspector", .help = "Shown for the picked node, or for every node of a kind.", .presentations = &.{ .foldout, .@"inline" }, .kinds = true, .known_kinds = &photo_kinds },
     .photo_row = .{ .id = "photo.row", .title = "Photo mode: row buttons", .help = "Small buttons at the end of scene rows, for every node of a kind.", .presentations = &.{.@"inline"}, .kinds = true, .known_kinds = &photo_kinds },
+    .photo_menu = .{ .id = "photo.menu", .title = "Photo mode: right-click menu", .help = "Items in a right-click menu, for every node of a kind, and for bones in an actor's bones. Draw them with ImGui's MenuItem.", .presentations = &.{.@"inline"}, .kinds = true, .known_kinds = &photo_kinds },
+    .photo_tools = .{ .id = "photo.tools", .title = "Photo mode: panel tools", .help = "Buttons along the top of the picked node's panel, for every node of a kind. Kind `bone` goes beside an actor's own while one of its bones is picked.", .presentations = &.{.@"inline"}, .kinds = true, .known_kinds = &photo_kinds },
 });
 
 /// What a contribution is drawn for, like the picked node.
 pub const Target = struct {
     kind: []const u8 = "",
     id: u64 = 0,
+    /// For part of a node, like a bone, the node's id
+    parent: u64 = 0,
+    name: []const u8 = "",
 };
 
 /// Wraith's own drawing, or children of a node.
@@ -466,7 +474,7 @@ const Call = struct {
     fn run(ctx: ?*anyopaque) callconv(.c) void {
         const self: *Call = @ptrCast(@alignCast(ctx.?));
         switch (self.entry.draw) {
-            .plugin => |d| d.invoke(.{.{ .kind = .init(self.target.kind), .id = self.target.id }}),
+            .plugin => |d| d.invoke(.{.{ .kind = .init(self.target.kind), .id = self.target.id, .parent = self.target.parent, .name = .init(self.target.name) }}),
             .panel => |d| d.invoke(.{}),
             .native, .none => {},
         }
@@ -556,7 +564,43 @@ const tests = struct {
         try testing.expectError(error.NotTaken, area.contribute(.{ .slot = "settings", .parent = "x" }, .init(&c, Counts.draw)));
         try testing.expectError(error.InvalidId, area.contribute(.{ .slot = "settings", .id = "a b" }, .init(&c, Counts.draw)));
         _ = try area.contribute(.{ .slot = "photo.scene", .id = "lights", .parent = "world" }, .init(&c, Counts.draw));
+        // A plugin's items in a row's right-click menu, for every actor
+        _ = try area.contribute(.{ .slot = "photo.menu", .kind = "actor" }, .init(&c, Counts.draw));
         try testing.expectError(error.AlreadyAdded, area.contribute(.{ .slot = "photo.scene", .id = "lights" }, .init(&c, Counts.draw)));
+        a.owner.close();
+        a.deinitForTest();
+    }
+
+    const Bone = struct {
+        parent: u64 = 0,
+        name: [16]u8 = undefined,
+        name_len: usize = 0,
+
+        fn draw(self: *Bone, target: W.Slot.Target) void {
+            self.parent = target.parent;
+            self.name_len = @min(target.name.len, self.name.len);
+            @memcpy(self.name[0..self.name_len], target.name[0..self.name_len]);
+        }
+    };
+
+    test "a bone's tools and menu items are told its actor and name" {
+        const sdk = @import("wraith_sdk");
+        var a: Loaded = undefined;
+        a.initForTest(testing.allocator, "a");
+        sdk.Owner.attach(a.root());
+        defer sdk.Owner.detach();
+        const area = sdk.wraith.root().?.ui();
+        var tool: Bone = .{};
+        var item: Bone = .{};
+        _ = try area.contribute(.{ .slot = "photo.tools", .kind = "bone" }, .init(&tool, Bone.draw));
+        _ = try area.contribute(.{ .slot = "photo.menu", .kind = "bone" }, .init(&item, Bone.draw));
+        const target: Target = .{ .kind = "bone", .id = 3, .parent = 7, .name = "head" };
+        try testing.expectEqual(1, drawAll(.photo_tools, target));
+        try testing.expectEqual(1, drawAll(.photo_menu, target));
+        for ([_]*Bone{ &tool, &item }) |b| {
+            try testing.expectEqual(7, b.parent);
+            try testing.expectEqualStrings("head", b.name[0..b.name_len]);
+        }
         a.owner.close();
         a.deinitForTest();
     }

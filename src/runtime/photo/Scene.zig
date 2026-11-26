@@ -42,14 +42,22 @@ selected: ?Key = null,
 search: [64:0]u8 = @splat(0),
 /// Where to point the camera, asked by a part this frame
 focus_at: ?math.Vec3 = null,
+/// The tree's labels and the like, freed as the next frame's drawn
+frame: std.heap.ArenaAllocator,
 
 pub fn init(allocator: std.mem.Allocator) Scene {
-    return .{ .allocator = allocator };
+    return .{ .allocator = allocator, .frame = .init(allocator) };
 }
 
 pub fn deinit(self: *Scene) void {
     for (self.own.items) |e| e.remove();
     self.own.deinit(self.allocator);
+    self.frame.deinit();
+}
+
+/// Puts `text` on the clipboard.
+pub fn copy(self: *Scene, text: []const u8) void {
+    ui.setClipboard(self.frame.allocator().dupeSentinel(u8, text, 0) catch return);
 }
 
 /// One of Wraith's own, in one of the `photo.*` slots.
@@ -102,20 +110,77 @@ pub fn takeFocus(self: *Scene) ?math.Vec3 {
 const base_flags = c.ImGuiTreeNodeFlags_SpanAvailWidth | c.ImGuiTreeNodeFlags_AllowOverlap | c.ImGuiTreeNodeFlags_OpenOnArrow | c.ImGuiTreeNodeFlags_OpenOnDoubleClick;
 const leaf_flags = c.ImGuiTreeNodeFlags_Leaf | c.ImGuiTreeNodeFlags_NoTreePushOnOpen;
 
-/// A leaf row under a node, like an actor, with the `photo.row` buttons for its kind. True when clicked.
+/// A leaf row under a node, like an actor, with the `photo.row` buttons and `photo.menu` items for its
+/// kind. True when clicked.
 pub fn row(self: *Scene, kind: []const u8, id: u64, icon: []const u8, comptime fmt: []const u8, args: anytype) bool {
-    var buf: [192:0]u8 = undefined;
-    const label = std.fmt.bufPrintSentinel(&buf, "{s}  " ++ fmt ++ "###{s}.{d}", .{icon} ++ args ++ .{ kind, id }, 0) catch return false;
+    const a = self.frame.allocator();
+    const text = std.fmt.allocPrint(a, fmt, args) catch return false;
+    const id_part = std.fmt.allocPrint(a, "###{s}.{d}", .{ kind, id }) catch return false;
+    const was = self.isSelected(kind, id);
+    _ = self.treeRow(.{ .kind = kind, .id = id }, id_part, icon, text, base_flags | leaf_flags);
+    return !was and self.isSelected(kind, id);
+}
+
+/// A row's tree node, its name cut short to leave room for its buttons, picked by either click, with
+/// its right-click menu. True if it's open.
+fn treeRow(self: *Scene, target: Target, id_part: []const u8, icon: []const u8, text: []const u8, base: c.ImGuiTreeNodeFlags) bool {
+    const a = self.frame.allocator();
     const right = rightEdge();
-    var flags: c.ImGuiTreeNodeFlags = base_flags | leaf_flags;
-    if (self.isSelected(kind, id)) flags |= c.ImGuiTreeNodeFlags_Selected;
-    _ = ui.raw("ImGui_TreeNodeEx")(label, flags);
-    const clicked = ui.isItemClicked(.left);
-    if (clicked) self.select(kind, id);
+    const spacing = ui.getStyle().item_spacing[0];
+    const start = ui.raw("ImGui_GetCursorPosX")() + ui.raw("ImGui_GetTreeNodeToLabelSpacing")();
+    const room = right - start - buttonsWidth(target.kind) - spacing;
+    const full = std.fmt.allocPrint(a, "{s}{s}{s}", .{ icon, if (icon.len > 0) "  " else "", text }) catch return false;
+    const shown = fit(a, full, room);
+    const label = std.fmt.allocPrintSentinel(a, "{s}{s}", .{ shown, id_part }, 0) catch return false;
+    var flags = base;
+    if (self.isSelected(target.kind, target.id)) flags |= c.ImGuiTreeNodeFlags_Selected;
+    const open = ui.raw("ImGui_TreeNodeEx")(label, flags);
+    const toggled = ui.raw("ImGui_IsItemToggledOpen")();
+    if ((ui.isItemClicked(.left) and !toggled) or ui.isItemClicked(.right)) self.select(target.kind, target.id);
+    if (shown.len != full.len) ui.tooltip("{s}", .{text});
     const scope = ui.id(label);
     defer scope.end();
-    self.drawRowButtons(.{ .kind = kind, .id = id }, right);
-    return clicked;
+    if (hasMenu(target.kind)) if (ui.contextMenu("##menu")) |m| {
+        defer m.end();
+        drawMenu(target);
+    };
+    self.drawRowButtons(target, right);
+    return open;
+}
+
+/// As much of `text` as fits in `width` pixels, with `...` where it's cut.
+fn fit(a: std.mem.Allocator, text: []const u8, width: f32) []const u8 {
+    if (ui.calcTextSize(text)[0] <= width) return text;
+    var end = text.len;
+    while (end > 0) {
+        end -= 1;
+        // Whole letters only
+        while (end > 0 and text[end] & 0xC0 == 0x80) end -= 1;
+        const cut = std.fmt.allocPrint(a, "{s}...", .{text[0..end]}) catch return text;
+        if (ui.calcTextSize(cut)[0] <= width) return cut;
+    }
+    return "...";
+}
+
+pub fn hasMenu(kind: []const u8) bool {
+    var held = slots.take(.photo_menu);
+    defer held.end();
+    for (held.items()) |e| if (e.showsFor(kind)) return true;
+    return false;
+}
+
+/// The `photo.menu` items for `target`'s kind, with a line between each contributor's.
+pub fn drawMenu(target: Target) void {
+    var held = slots.take(.photo_menu);
+    defer held.end();
+    var any = false;
+    for (held.items()) |e| if (e.showsFor(target.kind)) {
+        if (any) ui.separator();
+        any = true;
+        const scope = ui.id(e.label);
+        defer scope.end();
+        slots.draw(e, target);
+    };
 }
 
 fn rightEdge() f32 {
@@ -140,6 +205,17 @@ pub fn skipIcon() void {
 
 fn iconWidth() f32 {
     return ui.getTextLineHeight() + ui.scaled(4);
+}
+
+/// How wide `kind`'s row buttons drew last frame.
+fn buttonsWidth(kind: []const u8) f32 {
+    var held = slots.take(.photo_row);
+    defer held.end();
+    var width: f32 = 0;
+    for (held.items()) |e| if (e.showsFor(kind)) {
+        width += e.width + ui.scaled(2);
+    };
+    return width;
 }
 
 /// The `photo.row` contributions for `target`'s kind, ending at `right`. Each's width is last frame's.
@@ -173,17 +249,36 @@ fn drawRowButtons(self: *Scene, target: Target, right: f32) void {
 /// The toolbar's contributions on one line, a gap between each.
 pub fn drawToolbar(self: *Scene) void {
     _ = self;
-    var held = slots.take(.photo_toolbar);
+    _ = drawRow(.photo_toolbar, .{}, false);
+}
+
+/// The `photo.tools` contributions for `target`'s kind, along the top of its panel. With `after`, on
+/// the line before. True if any drew.
+pub fn drawTools(target: Target, after: bool) bool {
+    return drawRow(.photo_tools, target, after);
+}
+
+/// A slot's contributions for `target` on one line, a gap between each, as tight as the toolbar's.
+fn drawRow(slot: slots.Slot, target: Target, after: bool) bool {
+    var held = slots.take(slot);
     defer held.end();
-    for (held.items(), 0..) |e, i| {
-        if (i > 0) ui.sameLineWith(0, ui.scaled(8));
+    const tight = ui.styleVars(.{ .frame_padding = .{ ui.scaled(4), ui.scaled(2) }, .item_spacing = .{ ui.scaled(2), ui.scaled(4) } });
+    defer tight.end();
+    var any = after;
+    for (held.items()) |e| if (e.showsFor(target.kind)) {
+        if (any) ui.sameLineWith(0, ui.scaled(8));
+        any = true;
         const scope = ui.id(e.label);
         defer scope.end();
         ui.raw("ImGui_BeginGroup")();
-        slots.draw(e, .{});
+        slots.draw(e, target);
         ui.raw("ImGui_EndGroup")();
-    }
+    };
+    return any;
 }
+
+/// Unscaled.
+const tree_indent = 10;
 
 /// A `photo.scene` node, with where it sits in the tree.
 const Node = struct {
@@ -196,8 +291,12 @@ const Node = struct {
 
 /// The search box over every node in one tree.
 pub fn drawTree(self: *Scene) void {
+    _ = self.frame.reset(.retain_capacity);
     ui.setNextItemWidth(ui.fill);
     _ = ui.inputTextHint("##search", "Search", &self.search);
+    // Tighter than ImGui's, so deep rows keep room for their names
+    ui.raw("ImGui_PushStyleVar")(c.ImGuiStyleVar_IndentSpacing, ui.scaled(tree_indent));
+    defer ui.raw("ImGui_PopStyleVar")();
     var held = slots.take(.photo_scene);
     defer held.end();
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
@@ -243,18 +342,8 @@ fn drawNode(self: *Scene, nodes: []const Node, i: usize) void {
     var flags: c.ImGuiTreeNodeFlags = base_flags;
     if (!children) flags |= leaf_flags;
     if (e.open) flags |= c.ImGuiTreeNodeFlags_DefaultOpen;
-    if (self.isSelected(kind, e.node)) flags |= c.ImGuiTreeNodeFlags_Selected;
-    var buf: [192:0]u8 = undefined;
     const id_part = e.label[(std.mem.indexOf(u8, e.label, "###") orelse 0)..];
-    const label = std.fmt.bufPrintSentinel(&buf, "{s}{s}{s}{s}", .{ e.icon, if (e.icon.len > 0) "  " else "", e.title, id_part }, 0) catch return;
-    const right = rightEdge();
-    const open = ui.raw("ImGui_TreeNodeEx")(label, flags);
-    if (ui.isItemClicked(.left) and !ui.raw("ImGui_IsItemToggledOpen")()) self.select(kind, e.node);
-    {
-        const scope = ui.id(label);
-        defer scope.end();
-        self.drawRowButtons(.{ .kind = kind, .id = e.node }, right);
-    }
+    const open = self.treeRow(.{ .kind = kind, .id = e.node }, id_part, e.icon, e.title, flags);
     if (!children or !open) return;
     defer ui.raw("ImGui_TreePop")();
     if (e.children) |f| f.func(f.ctx, .{ .kind = kind, .id = e.node });

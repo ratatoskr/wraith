@@ -143,12 +143,9 @@ fn drawCameraTools(self: *Photo, _: Target) void {
     var buf: [96]u8 = undefined;
     const no_camera = ui.disabled(!cam.hasCamera());
     defer no_camera.end();
+    // Fly or orbit, and the rest, are on the camera it's moving
     const on = cam.isOn();
     if (toolButton(if (on) icons.video ++ "##photo_free" else icons.video_off ++ "##photo_free", on, "Free camera. {s}", .{cam.toggleKeyName(&buf)})) cam.flip();
-    ui.sameLine();
-    const not_on = ui.disabled(!on);
-    defer not_on.end();
-    if (toolButton(icons.orbit ++ "##photo_orbit", cam.isOrbiting(), "Orbit. {s}", .{cam.orbitKeyName(&buf)})) cam.setOrbiting(!cam.isOrbiting(), null);
 }
 
 fn drawSpeedTool(self: *Photo, _: Target) void {

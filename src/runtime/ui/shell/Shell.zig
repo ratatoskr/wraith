@@ -458,7 +458,7 @@ fn draw(self: *Shell) void {
     self.watchClashes();
     self.hub.draw(self);
     // What drew last frame is what's showing; a closed window drew nothing
-    inline for (.{ .settings, .photo_toolbar, .photo_scene, .photo_inspector, .photo_row }) |slot| slots.settleSlot(slot);
+    inline for (.{ .settings, .photo_toolbar, .photo_scene, .photo_inspector, .photo_row, .photo_menu, .photo_tools }) |slot| slots.settleSlot(slot);
     self.windows.system.draw();
     if (self.welcome.draw(self.overlay)) |choices| {
         self.finishWelcome(choices);
@@ -818,7 +818,7 @@ const tests = struct {
         try testing.expect(window.window.open);
         try testing.expect(rig.overlay.cursorRequested());
 
-        for ([_]struct { []const u8, u64 }{ .{ "world", 0 }, .{ "cameras", 0 }, .{ "camera", 3 }, .{ "actors", 0 } }) |k| {
+        for ([_]struct { []const u8, u64 }{ .{ "world", 0 }, .{ "cameras", 0 }, .{ "camera", 0 }, .{ "camera", 3 }, .{ "actors", 0 } }) |k| {
             photo.scene.select(k[0], k[1]);
             for (0..2) |_| rig.present();
         }
