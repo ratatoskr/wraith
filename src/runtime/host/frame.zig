@@ -1,6 +1,5 @@
-//! Frame service. Owners get a callback every frame and can post to the next one. Ticks are the
-//! game thread's frames. With no driver they run on the render thread just before each frame. A
-//! game engine or game plugin that knows the game's own thread drives them from there instead.
+//! Frame service: per-frame callbacks and posts. Ticks are the game thread's frames, run on the
+//! render thread before each frame unless a plugin drives them from the game's own thread.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -11,8 +10,7 @@ const sync = @import("tuft_sys").sync;
 
 const host = @import("root.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
-const Owner = @import("tuft_event").Owner;
-const OnGone = @import("Owned.zig").OnGone;
+const leases = @import("leases.zig");
 const gfx = @import("tuft_gfx");
 
 const Bus = core.Event(fn () void);
@@ -51,19 +49,11 @@ pub fn onRenderThread() bool {
     return id != 0 and id == std.Thread.getCurrentId();
 }
 
-/// Render thread, each frame, inside the overlay's ImGui frame or a headless one. Ticks first,
-/// unless a driver has them.
+/// Render thread, each frame, inside an ImGui frame. Ticks first, unless a driver has them.
 pub fn run() void {
     render_thread.store(std.Thread.getCurrentId(), .monotonic);
     last_run.store(core.timing.now(), .monotonic);
-    const has_driver = blk: {
-        // Shared, so the driver can't be freed under us
-        drivers_lock.lockShared();
-        defer drivers_lock.unlockShared();
-        const d = active.load(.acquire) orelse break :blk false;
-        d.checkStalled();
-        break :blk true;
-    };
+    const has_driver = leases.withHolder(.ticks, {}, checkStalled);
     if (!has_driver) tickNow();
     bus.fire(.{});
     host.salamander.pollRender();
@@ -88,6 +78,12 @@ var view_at: u64 = 0;
 /// Older than this and it's not known any more, since the plugin's stopped saying.
 const view_ns = std.time.ns_per_s;
 
+/// Through `display.sal`. Only the plugin holding the view's count.
+pub fn setViewFrom(loaded: *const Loaded, view_: W.Mat4, projection: W.Mat4) void {
+    if (!leases.holds(loaded, .view)) return;
+    setView(view_, projection);
+}
+
 pub fn setView(view_: W.Mat4, projection: W.Mat4) void {
     view_lock.lock();
     defer view_lock.unlock();
@@ -103,24 +99,32 @@ pub fn view() W.Display.View {
     return v;
 }
 
-/// Whose `setColorSpace` it is, so it goes with them.
-var hint_owner: Atomic(usize) = .init(0);
-var hint_cleanup: OnGone(.closing, hintGone) = .{};
-
+/// Through `display.sal`. Kept with the plugin's lease on the view, and only used while it holds it.
 pub fn setColorSpace(loaded: *Loaded, space: W.ColorSpace) void {
-    const lease = hint_cleanup.lease(&loaded.owner) orelse return;
-    defer lease.end();
-    hint_owner.store(@intFromPtr(&loaded.owner), .release);
-    gfx.color_space_hint.set(switch (space) {
+    _ = leases.withLease(loaded, .view, space, keepColorSpace);
+}
+
+fn keepColorSpace(space: W.ColorSpace, lease: *leases.Lease) void {
+    lease.color_space = space;
+    if (lease.held()) hintColorSpace(space);
+}
+
+/// As the view changes hands, from `leases`: the new one's color space, or none.
+pub fn viewHandedOver(after: ?*leases.Lease) void {
+    hintColorSpace(if (after) |a| a.color_space else null);
+    // The one before's isn't the game's any more, till the new one says
+    view_lock.lock();
+    defer view_lock.unlock();
+    game_view.known = false;
+}
+
+fn hintColorSpace(space: ?W.ColorSpace) void {
+    gfx.color_space_hint.set(if (space) |s| switch (s) {
         .srgb => .srgb,
         .scrgb => .scrgb,
         .hdr10 => .hdr10,
         _ => null,
-    });
-}
-
-fn hintGone(owner: *Owner) void {
-    if (hint_owner.cmpxchgStrong(@intFromPtr(owner), 0, .acq_rel, .acquire) == null) gfx.color_space_hint.set(null);
+    } else null);
 }
 
 pub const TickSubscription = Bus.Subscription;
@@ -146,112 +150,34 @@ fn tickNow() void {
     host.threads.checkDelays();
 }
 
-/// A plugin that ticks from the game's own thread. The best-ranked one is `active`.
-pub const Driver = struct {
-    loaded: *Loaded,
-    /// A game's plugin 2, a game engine's 1, the rest 0.
-    rank: u8,
-    /// Ties go to the lowest.
-    order: u64,
-    released: bool = false,
-    /// `core.timing.now()`, when it became active or last ticked.
-    last_tick: Atomic(u64) = .init(0),
-    warned: Atomic(bool) = .init(false),
+/// How long the plugin holding ticks can go without ticking before it's logged.
+const stall_ns = 30 * std.time.ns_per_s;
 
-    /// How long an active driver can go without ticking before it's logged.
-    const stall_ns = 30 * std.time.ns_per_s;
-
-    pub fn tick(self: *Driver) void {
-        if (active.load(.acquire) != self) return;
-        self.last_tick.store(core.timing.now(), .monotonic);
-        tickNow();
-    }
-
-    pub fn isActive(self: *Driver) bool {
-        return active.load(.acquire) == self;
-    }
-
-    /// Render thread, while it's active.
-    fn checkStalled(self: *Driver) void {
-        if (self.warned.load(.monotonic)) return;
-        if (core.timing.now() -| self.last_tick.load(.monotonic) < stall_ns) return;
-        if (self.warned.swap(true, .monotonic)) return;
-        log.warn("{s} drives ticks but hasn't ticked in {d}s, so nothing's running on the game thread", .{ self.loaded.name, stall_ns / std.time.ns_per_s });
-    }
-
-    pub fn release(self: *Driver) void {
-        drivers_lock.lock();
-        defer drivers_lock.unlock();
-        if (self.released) return;
-        self.released = true;
-        if (std.mem.indexOfScalar(*Driver, drivers.items, self)) |at| _ = drivers.orderedRemove(at);
-        pickActive();
-    }
-
-    pub fn stop(self: *Driver) void {
-        self.release();
-    }
-
-    pub fn free(self: *Driver) void {
-        self.release();
-        self.loaded.allocator.destroy(self);
-    }
-};
-
-var drivers_lock: sync.RwLock = .{};
-/// Under `drivers_lock`.
-var drivers: std.ArrayList(*Driver) = .empty;
-var next_order: u64 = 0;
-var active: Atomic(?*Driver) = .init(null);
-var driver_records: host.Owned(Driver) = .{};
+/// Render thread, while `lease` holds ticks.
+fn checkStalled(_: void, lease: *leases.Lease) void {
+    if (lease.warned.load(.monotonic)) return;
+    if (core.timing.now() -| lease.last_tick.load(.monotonic) < stall_ns) return;
+    if (lease.warned.swap(true, .monotonic)) return;
+    log.warn("{s} has ticks but hasn't ticked in {d}s, so nothing's running on the game thread", .{ lease.loaded.name, stall_ns / std.time.ns_per_s });
+}
 
 /// Whether a plugin drives ticks from the game's own thread.
 pub fn driven() bool {
-    return active.load(.acquire) != null;
+    return leases.holder(.ticks) != null;
 }
 
-/// Under `drivers_lock`.
-fn pickActive() void {
-    var best: ?*Driver = null;
-    for (drivers.items) |d| {
-        if (best == null or d.rank > best.?.rank or (d.rank == best.?.rank and d.order < best.?.order)) best = d;
-    }
-    if (active.load(.acquire) == best) return;
-    if (best) |b| {
-        b.last_tick.store(core.timing.now(), .monotonic);
-        log.info("{s} drives ticks now", .{b.loaded.name});
-    } else log.info("Ticks are back on the render thread", .{});
+/// As ticks change hands, from `leases`.
+pub fn ticksHandedOver(after: ?*leases.Lease) void {
+    if (after) |a| a.last_tick.store(core.timing.now(), .monotonic);
     // Not the game thread till the new one ticks
     game_thread.store(0, .monotonic);
-    active.store(best, .release);
 }
 
-fn rankOf(loaded: *const Loaded) u8 {
-    const m = loaded.manifest.value;
-    if (m.game != null) return 2;
-    if (m.gameEngine != null) return 1;
-    return 0;
-}
-
-/// Through `threads.sal`.
-pub fn driveTicks(loaded: *Loaded) api.FrameError!*Driver {
-    const d = try loaded.allocator.create(Driver);
-    d.* = .{ .loaded = loaded, .rank = rankOf(loaded), .order = 0 };
-    driver_records.add(d) catch |err| {
-        loaded.allocator.destroy(d);
-        return if (err == error.OutOfMemory) error.OutOfMemory else error.OwnerGone;
-    };
-    drivers_lock.lock();
-    defer drivers_lock.unlock();
-    d.order = next_order;
-    next_order += 1;
-    drivers.append(std.heap.page_allocator, d) catch {
-        // Owned frees it with the plugin
-        d.released = true;
-        return error.OutOfMemory;
-    };
-    pickActive();
-    return d;
+/// Through `threads.sal`, from the game's own thread. Only the plugin holding ticks' count.
+pub fn tickFrom(loaded: *Loaded) void {
+    const h = leases.heldBy(loaded, .ticks) orelse return;
+    h.last_tick.store(core.timing.now(), .monotonic);
+    tickNow();
 }
 
 pub const Frame = struct {
@@ -362,9 +288,8 @@ pub fn onStopping(loaded: *Loaded, stopping: Stopping) api.FrameError!*Frame {
 /// How long plugins get to wind down.
 const stopping_ns = std.time.ns_per_s;
 
-/// Before `loaded`'s owner closes. Calls its `onStopping`s, each with a `Done` from `done_table`,
-/// and waits up to a second for them all, if anything's still running frames or ticks to carry
-/// their tasks on, and this isn't the thread that would.
+/// Before `loaded`'s owner closes: calls its `onStopping`s and waits up to a second for them, if
+/// frames or ticks can carry their tasks on meanwhile.
 pub fn runStopping(loaded: *Loaded, done_table: *const anyopaque) void {
     var found: [32]*Frame = undefined;
     const n = blk: {
@@ -396,8 +321,7 @@ pub fn runStopping(loaded: *Loaded, done_table: *const anyopaque) void {
 /// `core.timing.now()` at the last frame or tick.
 var last_run: Atomic(u64) = .init(0);
 
-/// Whether frames or ticks are carrying tasks on, lately enough that they'll carry on while this
-/// thread waits, which isn't one of theirs. Not when the game's closing, or stuck loading.
+/// Whether frames or ticks will carry tasks on while this thread waits. Not while closing or stuck loading.
 fn canWaitForTasks() bool {
     if (onRenderThread() or onGameThread()) return false;
     return core.timing.now() -| last_run.load(.monotonic) < 250 * std.time.ns_per_ms;
@@ -452,9 +376,8 @@ const Posted = union(enum) {
     }
 };
 
-/// The plugin's posts as a Salamander queue, adopted for its owner so posting stops once it
-/// closes. What's posted runs at the next frame inside the plugin's frame, like its frame
-/// callbacks, so code carrying on on the render thread can draw.
+/// The plugin's posts as a Salamander queue, adopted by its owner. Runs at the next frame inside the
+/// plugin's frame, so it can draw.
 pub const PluginQueue = struct {
     pub fn post(loaded: *Loaded, task: api.salamander.Task) bool {
         postAny(loaded, .{ .waiter = task }) catch return false;
@@ -787,8 +710,11 @@ const tests = struct {
         try testing.expect(sdk.threads.onGameThread());
     }
 
-    fn tickOn(driver: sdk.threads.TickDriver) void {
-        driver.tick();
+    /// What `p` does from the game's thread each frame, if it holds ticks.
+    fn tickAs(p: *FakePlugin) void {
+        const acting = p.owner().enter();
+        defer acting.end();
+        sdk.threads.tick();
     }
 
     /// Where a promise settled, taken there.
@@ -955,6 +881,11 @@ const tests = struct {
 
         try testing.expectEqual(null, sdk.display.view());
         const moved = math.Mat4.translation(.{ .x = 2 });
+        // Only the plugin holding the view's count
+        sdk.display.setView(moved, .identity);
+        try testing.expectEqual(null, sdk.display.view());
+        const lease = try sdk.display.claimView(.none);
+        defer lease.release();
         sdk.display.setView(moved, .identity);
         const v = sdk.display.view().?;
         try testing.expectEqual(moved, v.view);
@@ -963,21 +894,41 @@ const tests = struct {
         try testing.expectEqual(null, sdk.display.view());
     }
 
-    test "a plugin's colour space hint goes with it" {
+    test "a plugin's colour space hint goes with its lease on the view" {
         var a: FakePlugin = undefined;
         a.init("a");
+        var game: FakePlugin = undefined;
+        game.init("game");
+        game.loaded.manifest.value.game = .{};
         {
             const acting = a.owner().enter();
             defer acting.end();
             sdk.display.setColorSpace(.hdr10);
+            try testing.expectEqual(null, gfx.color_space_hint.get());
+            _ = try sdk.display.claimView(.none);
+            sdk.display.setColorSpace(.hdr10);
         }
+        try testing.expectEqual(gfx.ColorSpace.hdr10, gfx.color_space_hint.get().?);
+
+        // Kept for when the game's plugin gets the view, and the engine's goes back once it goes
+        {
+            const acting = game.owner().enter();
+            defer acting.end();
+            const lease = try sdk.display.claimView(.none);
+            try testing.expect(lease.held());
+            try testing.expectEqual(null, gfx.color_space_hint.get());
+            sdk.display.setColorSpace(.scrgb);
+        }
+        try testing.expectEqual(gfx.ColorSpace.scrgb, gfx.color_space_hint.get().?);
+        game.loaded.owner.close();
+        game.loaded.deinitForTest();
         try testing.expectEqual(gfx.ColorSpace.hdr10, gfx.color_space_hint.get().?);
         a.loaded.owner.close();
         try testing.expectEqual(null, gfx.color_space_hint.get());
         a.loaded.deinitForTest();
     }
 
-    test "drivers take ticks by rank, and hand them back as they go" {
+    test "the best placed plugin holds ticks, and hands them back as they go" {
         setFrames(true);
         defer setFrames(false);
         var a: FakePlugin = undefined;
@@ -998,19 +949,19 @@ const tests = struct {
         };
         defer sub.unsubscribe();
 
-        const engine_driver = blk: {
+        const engine_ticks = blk: {
             const acting = engine.owner().enter();
             defer acting.end();
-            break :blk try sdk.threads.driveTicks();
+            break :blk try sdk.threads.claimTicks(.none);
         };
-        try testing.expect(engine_driver.active());
-        // Ticks wait for the driver now
+        try testing.expect(engine_ticks.held());
+        // Ticks wait for it now
         run();
         try testing.expectEqual(0, order.n);
         try testing.expect(!onGameThread());
 
         // From its own thread, which is the game thread now
-        const t = try std.Thread.spawn(.{}, tickOn, .{engine_driver});
+        const t = try std.Thread.spawn(.{}, tickAs, .{&engine});
         t.join();
         try testing.expectEqual(1, order.n);
         try testing.expect(order.game_thread);
@@ -1018,35 +969,35 @@ const tests = struct {
         try testing.expect(!onGameThread());
 
         // A plain plugin asking later doesn't win over a game engine's
-        const plain_driver = blk: {
+        const plain_ticks = blk: {
             const acting = a.owner().enter();
             defer acting.end();
-            break :blk try sdk.threads.driveTicks();
+            break :blk try sdk.threads.claimTicks(.none);
         };
-        try testing.expect(!plain_driver.active());
-        plain_driver.tick();
+        try testing.expect(!plain_ticks.held());
+        tickAs(&a);
         try testing.expectEqual(1, order.n);
 
         // A game's plugin does, even later
         {
             const acting = game.owner().enter();
             defer acting.end();
-            _ = try sdk.threads.driveTicks();
+            _ = try sdk.threads.claimTicks(.none);
         }
-        try testing.expect(!engine_driver.active());
-        engine_driver.tick();
+        try testing.expect(!engine_ticks.held());
+        tickAs(&engine);
         try testing.expectEqual(1, order.n);
 
         // The game's plugin going hands back to the engine's, then the plain one, then the render thread
         game.loaded.owner.close();
         game.loaded.deinitForTest();
-        try testing.expect(engine_driver.active());
-        engine_driver.release();
-        engine_driver.release();
-        try testing.expect(plain_driver.active());
-        plain_driver.tick();
+        try testing.expect(engine_ticks.held());
+        engine_ticks.release();
+        engine_ticks.release();
+        try testing.expect(plain_ticks.held());
+        tickAs(&a);
         try testing.expectEqual(2, order.n);
-        plain_driver.release();
+        plain_ticks.release();
         run();
         try testing.expectEqual(3, order.n);
         try testing.expect(onGameThread());

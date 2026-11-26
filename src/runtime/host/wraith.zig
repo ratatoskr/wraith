@@ -45,7 +45,8 @@ pub const Lists = W.Lists;
 pub const ItemList = W.ItemList;
 pub const SchemaArea = host.schemas.Area;
 pub const FrameSubscription = W.Threads.Subscription;
-pub const TickDriver = W.Threads.TickDriver;
+pub const Lease = W.Lease;
+pub const Leases = W.Leases;
 pub const Input = W.Input;
 pub const Keybind = W.Keybind;
 pub const Library = W.Libraries;
@@ -108,7 +109,8 @@ pub const Tables = struct {
     item_list: *const sal.Table(ItemList),
     schema: *const sal.Table(SchemaArea),
     frame_subscription: *const sal.Table(FrameSubscription),
-    tick_driver: *const sal.Table(TickDriver),
+    lease: *const sal.Table(Lease),
+    leases: *const sal.Table(Leases),
     done: *const sal.Table(W.Threads.WindDown),
     input: *const sal.Table(Input),
     keybind: *const sal.Table(Keybind),
@@ -190,7 +192,8 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .item_list = h.adopt(ItemList, sal.implement(ItemList, ItemListImpl), o) catch return null,
         .schema = h.adopt(SchemaArea, sal.implement(SchemaArea, host.schemas.SchemaImpl), o) catch return null,
         .frame_subscription = h.adopt(FrameSubscription, sal.implement(FrameSubscription, SubscriptionImpl), o) catch return null,
-        .tick_driver = h.adopt(TickDriver, sal.implement(TickDriver, TickDriverImpl), o) catch return null,
+        .lease = h.adopt(Lease, sal.implement(Lease, LeaseImpl), o) catch return null,
+        .leases = h.adopt(Leases, sal.implement(Leases, LeasesImpl), o) catch return null,
         .done = h.adopt(W.Threads.WindDown, sal.implement(W.Threads.WindDown, DoneImpl), o) catch return null,
         .input = h.adopt(Input, sal.implement(Input, InputImpl), o) catch return null,
         .keybind = h.adopt(Keybind, sal.implement(Keybind, KeybindImpl), o) catch return null,
@@ -286,6 +289,10 @@ const Root = struct {
         return area(loaded, Posing, "posing");
     }
 
+    pub fn leases(loaded: *Loaded) sal.Object(Leases) {
+        return area(loaded, Leases, "leases");
+    }
+
     pub fn lists(loaded: *Loaded) sal.Object(Lists) {
         return area(loaded, Lists, "lists");
     }
@@ -370,8 +377,7 @@ pub fn ResolverOf(comptime P: type) type {
     return @FieldType(Pair, "resolver");
 }
 
-/// Clipboard work, on its own thread. It enters the plugin's owner before touching anything of the
-/// plugin's, so unloading waits for it, and it gives up once the plugin's gone.
+/// Clipboard work on its own thread. Enters the plugin's owner before touching its things, so unloading waits.
 const Job = struct {
     owner: *sal.Owner,
     work: union(enum) {
@@ -528,15 +534,14 @@ const ItemListImpl = struct {
     }
 };
 
-/// The free camera's list of the plugin's cameras, the same each call. Only the first call's
-/// handlers are kept.
+/// The free camera's list of the plugin's cameras, the same each call. Only the first call's handlers are kept.
 pub fn cameraList(loaded: *Loaded, add: ?W.ItemList.Add, rename: ?W.ItemList.Rename) sal.Object(ItemList) {
     var handlers: lists.Handlers = .{ .add = add, .rename = rename };
     const t = tablesOf(loaded) orelse {
         handlers.release();
         return .{};
     };
-    const id = "wraith.cameras";
+    const id = lists.cameras_id;
     const r = lists.open(loaded, id, .cameras, .{
         .title = "Cameras",
         .pick = .one,
@@ -643,12 +648,12 @@ const ThreadsImpl = struct {
         return .init(f, t.frame_subscription);
     }
 
-    pub fn onTick(loaded: *Loaded, tick: frame.Tick) sal.Plain(Threads, "onTick") {
+    pub fn onTick(loaded: *Loaded, callback: frame.Tick) sal.Plain(Threads, "onTick") {
         const t = tablesOf(loaded) orelse {
-            tick.release();
+            callback.release();
             return error.Failed;
         };
-        const f = frame.onTick(loaded, tick) catch |err| return frameError(err);
+        const f = frame.onTick(loaded, callback) catch |err| return frameError(err);
         return .init(f, t.frame_subscription);
     }
 
@@ -661,10 +666,17 @@ const ThreadsImpl = struct {
         return .init(f, t.frame_subscription);
     }
 
-    pub fn driveTicks(loaded: *Loaded) sal.Plain(Threads, "driveTicks") {
-        const t = tablesOf(loaded) orelse return error.Failed;
-        const d = frame.driveTicks(loaded) catch |err| return frameError(err);
-        return .init(d, t.tick_driver);
+    pub fn claimTicks(loaded: *Loaded, changed: ?W.Lease.Changed) sal.Plain(Threads, "claimTicks") {
+        const t = tablesOf(loaded) orelse {
+            if (changed) |c| c.release();
+            return error.Failed;
+        };
+        const l = host.leases.claim(loaded, .ticks, changed, null) catch return error.Failed;
+        return .init(l, t.lease);
+    }
+
+    pub fn tick(loaded: *Loaded) void {
+        frame.tickFrom(loaded);
     }
 
     pub fn onGameThread(_: *Loaded) bool {
@@ -730,8 +742,7 @@ const ThreadsImpl = struct {
         return pair.promise;
     }
 
-    /// Carries on on `to`, right here if it's there already unless `always`. On the render thread,
-    /// inside the plugin's frame, so it can draw.
+    /// Carries on on `to`, right here if already there unless `always`. On the render thread, inside the plugin's frame.
     fn hop(comptime name: []const u8, loaded: *Loaded, to: threads.Thread, always: bool) sal.Plain(Threads, name) {
         const P = sal.Plain(Threads, name);
         const pair = P.make() catch return .{};
@@ -756,8 +767,17 @@ pub const NextResolver = ResolverOf(sal.Plain(Threads, "nextDraw"));
 // Display
 
 const DisplayImpl = struct {
-    pub fn setView(_: *Loaded, view_: W.Mat4, projection: W.Mat4) void {
-        frame.setView(view_, projection);
+    pub fn claimView(loaded: *Loaded, changed: ?W.Lease.Changed) sal.Plain(Display, "claimView") {
+        const t = tablesOf(loaded) orelse {
+            if (changed) |c| c.release();
+            return error.Failed;
+        };
+        const l = host.leases.claim(loaded, .view, changed, null) catch return error.Failed;
+        return .init(l, t.lease);
+    }
+
+    pub fn setView(loaded: *Loaded, view_: W.Mat4, projection: W.Mat4) void {
+        frame.setViewFrom(loaded, view_, projection);
     }
 
     pub fn gameView(_: *Loaded) W.Display.View {
@@ -809,17 +829,31 @@ const SubscriptionImpl = struct {
     }
 };
 
-const TickDriverImpl = struct {
-    pub fn tick(d: *frame.Driver) void {
-        d.tick();
+const LeasesImpl = struct {
+    pub fn holder(loaded: *Loaded, part: W.Lease.Part) W.Lease.Holder {
+        const p: host.leases.Part = switch (part) {
+            .ticks => .ticks,
+            .speed => .speed,
+            .camera => .camera,
+            .posing => .posing,
+            .view => .view,
+            _ => return .{ .held = false, .mine = false, .plugin = "" },
+        };
+        var buf: [64]u8 = undefined;
+        const name = host.leases.holderName(p, &buf) orelse return .{ .held = false, .mine = false, .plugin = "" };
+        // Good till the thread's next call in
+        const copy = scratch.begin().dupe(u8, name) catch "";
+        return .{ .held = true, .mine = host.leases.holds(loaded, p), .plugin = copy };
+    }
+};
+
+const LeaseImpl = struct {
+    pub fn held(l: *host.leases.Lease) bool {
+        return l.held();
     }
 
-    pub fn active(d: *frame.Driver) bool {
-        return d.isActive();
-    }
-
-    pub fn release(d: *frame.Driver) void {
-        d.release();
+    pub fn release(l: *host.leases.Lease) void {
+        l.release();
     }
 };
 

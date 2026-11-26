@@ -1,6 +1,4 @@
-//! One Cheat Engine Auto Assembler script to a tweak's parts. It knows CE's templates, the
-//! injection one and the patch one, plus data in `alloc`. Anything it isn't sure about comes back
-//! for review instead of a guess.
+//! Converts one CE Auto Assembler script to a tweak's parts. Anything unsure is flagged for review.
 
 const std = @import("std");
 
@@ -845,8 +843,7 @@ const Converter = struct {
 
     const Covered = struct { len: usize, text: []const []const u8, relative: bool };
 
-    /// The instructions in `bytes` that make up exactly its first `len`, or null if `len`
-    /// splits one.
+    /// The instructions covering exactly the first `len` bytes, or null if `len` splits one.
     fn coveredBytes(self: *Converter, bytes: []const u8, len: usize, where: []const u8) !?Covered {
         const insns = try machine.decode(self.arena, bytes, self.env.bits, self.fake(where)) orelse return null;
         var at: usize = 0;
@@ -1089,8 +1086,7 @@ const Converter = struct {
         return machine.same(self.gpa, ours.items, want, .{ .context = self, .func = resolveFake });
     }
 
-    /// The site's own instruction that `reassemble(where)` copies, if we know it and it
-    /// doesn't depend on where it is.
+    /// The site instruction `reassemble(where)` copies, if known and position-independent.
     fn copied(self: *Converter, where: []const u8, relative_ok: bool) !?[]const u8 {
         const h = self.here orelse return null;
         const bytes = h.original.bytes orelse return null;
@@ -1259,8 +1255,7 @@ fn widenPush(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "{s} {s}", .{ w, wide });
 }
 
-/// `jmp short x` as `jmp x`, since ours picks the shortest that reaches. And `sal`, which is
-/// `shl` by another name.
+/// `jmp short x` as `jmp x` (ours picks the shortest), and `sal` as `shl`.
 fn plainBranch(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     const t = std.mem.trim(u8, text, " \t");
     const w = firstWord(t);
@@ -1273,8 +1268,7 @@ fn plainBranch(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     return text;
 }
 
-/// CE takes a memory operand with no size next to a number as a dword, like `cmp [x],1`. Ours
-/// does too, but saying so means nobody has to know that.
+/// Makes CE's implicit dword size explicit, like `cmp [x],1`.
 fn sizedMemory(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     const w = firstWord(text);
     const sized = [_][]const u8{ "mov", "cmp", "add", "sub", "and", "or", "xor", "adc", "sbb", "test", "shl", "shr", "sal", "sar", "rol", "ror", "rcl", "rcr", "bt", "bts", "btr", "btc" };

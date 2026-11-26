@@ -4,8 +4,7 @@
 //!     _ = w.ui().toast(.{ .text = "Saved" });
 //!     const fov = try w.settings().add(.{ .id = "fov", .kind = .number, .min = 60, .max = 120 }, null);
 //!
-//! The SDK adds what Zig plugins need on top: the DLL's entry and `Context`, tasks that wait for
-//! frames, typed native hooks, logging and timing through Wraith, and image and file helpers.
+//! The SDK adds the DLL entry, `Context`, tasks, typed hooks, logging, timing and helpers.
 
 const std = @import("std");
 
@@ -28,6 +27,7 @@ pub const hooks = @import("hooks.zig");
 pub const overlay = @import("overlay.zig");
 pub const threads = @import("threads.zig");
 pub const display = @import("display.zig");
+pub const Lease = @import("lease.zig").Lease;
 pub const tasks = @import("tasks.zig");
 /// A lock that tasks wait for by parking. See `sync.Mutex`.
 pub const sync = @import("sync.zig");

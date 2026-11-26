@@ -1,13 +1,5 @@
-//! Game speed, like Cheat Engine's speedhack, for games without a plugin that handles their speed.
-//! Wraith only speeds games up this way, since games cap their frame rate with the same clocks, so
-//! slowing them slows the frame rate, and Wraith's windows drawn with it. The clocks games time
-//! their frames with are hooked,
-//! and each reads as where it was when the speed last changed, plus the real time since times the
-//! speed. Calls from Wraith's own code and its plugins' still get the real time, so Wraith's UI,
-//! timers and frame stats don't change. Nothing's hooked till the speed first isn't 1.
-//!
-//! Nearly every game reads its time from the hooked clocks. A few read the CPU's counter or
-//! Windows' shared time page themselves, which can't be hooked.
+//! Game speed by hooking the clocks, like Cheat Engine's speedhack. Only speeds up, since slowing
+//! would slow the frame rate too. Wraith's own calls still get real time.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -29,8 +21,7 @@ const Atomic = tuft_arch.atomic.Value;
 pub const min = 0.01;
 pub const max = 100;
 
-/// The kinds of clock, each in its own units. `ticks` is milliseconds, `counter` the performance
-/// counter's ticks, and `multimedia` milliseconds that wrap at 32 bits.
+/// `ticks` is ms, `counter` performance counter ticks, `multimedia` ms wrapping at 32 bits.
 pub const Clock = enum { counter, ticks, multimedia };
 
 /// Where a clock's fake time picks up from, as of the last change.
@@ -86,8 +77,7 @@ pub fn start(c: Clock, real: u64) void {
     live.getPtr(c).store(true, .release);
 }
 
-/// Puts the clocks back before Wraith goes. The game's time jumps back to the real time, which
-/// most games take in their stride.
+/// Puts the clocks back before Wraith goes; the game's time jumps back to real time.
 pub fn stop() void {
     install_lock.lock();
     defer install_lock.unlock();

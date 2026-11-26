@@ -1,5 +1,4 @@
-//! Where text and slices the API gives back live, one per thread. They're good till that thread's
-//! next call that gives some, which is longer than any script binder needs, since it copies them.
+//! Per-thread storage for what the API gives back, good till that thread's next call that gives some.
 
 const std = @import("std");
 

@@ -1,9 +1,8 @@
-// Keys, buttons and the mouse, going by the game window's messages, and keybinds.
+// Keys, buttons and the mouse, from the game window's messages, and keybinds.
 
 namespace Wraith;
 
-// Physical keys, named for the US layout. Sided keys always report their side. `gamepad_a` is the
-// bottom face button on any controller.
+// Physical keys, named for the US layout. `gamepad_a` is the bottom face button on any controller.
 enum Key : u8 {
     tab, left, right, up, down, page_up, page_down, home, end, insert, delete, backspace, space, enter, escape,
     left_ctrl, left_shift, left_alt, left_super, right_ctrl, right_shift, right_alt, right_super, menu,
@@ -25,8 +24,7 @@ enum MouseButton : u8 { left, right, middle, x1, x2 }
 // Either side.
 bitfield Mods : u8 { bool ctrl; bool shift; bool alt; bool super; }
 
-// A key with exactly these modifiers held. The key can't be a modifier, and controller buttons take
-// no modifiers.
+// A non-modifier key with exactly these modifiers. Controller buttons take none.
 struct Chord { Key key; Mods mods; }
 
 // In the game window's client coords.
@@ -42,16 +40,13 @@ namespace Keybind {
 }
 
 trait Keybind {
-    // Its keys from now on, any of which does it. Saved, like picking them in Settings. Empty
-    // leaves it without one.
+    // Replaces its keys and saves them, like picking them in Settings. Empty leaves it without one.
     void!KeybindError rebind([]Chord chords);
     // Its keys stay saved for next time.
     void unbind();
-    // What it's on now, the player's picks if they made some. Empty without a key. Good till the
-    // thread's next call into Wraith.
+    // Its keys now, including the player's picks. Good till the thread's next call into Wraith.
     []Chord chords();
-    // Its next press, carrying on on the thread that asked. Fails with Unavailable once it's
-    // unbound.
+    // Its next press, carrying on on the thread that asked. Unavailable once it's unbound.
     async void!KeybindError next();
 }
 
@@ -61,23 +56,21 @@ namespace Input {
         string id;
         // What Settings lists it as
         string name;
-        // The default. Whoever plays can pick others in Settings, and theirs win.
+        // The default. The player's picks in Settings win.
         Chord chord;
-        // More that do the same by default, like a controller button. Up to 3.
+        // Up to 3 more defaults, like a controller button
         []Chord also;
         // The game sees the key too
         bool passthrough;
         // Still fires while typing in a text box
         bool while_typing;
-        // Where the key someone picks is kept
+        // Where the player's pick is kept
         Setting.Scope scope;
-        // Held, like a key to move with: it fires whatever modifiers are down too, and it can be a
-        // modifier itself, like Shift. Its chord has no modifiers.
+        // Held, like a move key: fires whatever modifiers are down, and can be a modifier itself. No chord modifiers.
         bool held;
     }
 
-    // Sticks go -1 to 1 with up and right positive, triggers 0 to 1, with no dead zone. Every controller
-    // that's connected, merged into one.
+    // Sticks -1 to 1 with up and right positive, triggers 0 to 1, no dead zone. All controllers merged.
     struct GamepadAxes {
         f32 left_x;
         f32 left_y;
@@ -89,13 +82,13 @@ namespace Input {
 }
 
 trait Input {
-    // Held now. Losing focus lets go of everything. Any thread.
+    // Held now. Losing focus releases everything. Any thread.
     bool keyDown(Key key);
     bool buttonDown(MouseButton button);
     // Null if it doesn't know yet. Any thread.
     ?Point mousePos();
     // A key setting listed under the plugin in Settings. Gone with the plugin.
     Keybind!KeybindError bind(Action action, keep Keybind.Fired fired);
-    // Sticks and triggers, or null without a controller. Any thread.
+    // Null without a controller. Any thread.
     ?GamepadAxes gamepad();
 }

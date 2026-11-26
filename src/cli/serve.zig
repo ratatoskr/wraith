@@ -275,7 +275,10 @@ const Call = struct {
                 self.reply(@as(struct {}, .{}));
             },
             .mod_update => self.reply(.{ .updated = try mods.updateAll(ctx, self.arena.allocator()) }),
-            .mod_essentials => self.reply(.{ .kept = try mods.keepEssentials(ctx, self.arena.allocator()) }),
+            .mod_essentials => {
+                const p = try self.params(mods.KeepOptions);
+                self.reply(.{ .kept = try mods.keepEssentials(ctx, self.arena.allocator(), p) });
+            },
             .dev_list, .dev_add, .dev_set, .dev_remove => self.reply(try self.dev()),
             // Handled on receive
             .cancel => unreachable,

@@ -81,8 +81,7 @@ test "fonts and themes" {
     const icons = @import("../icons.zig");
     for (fonts.Data[0..@intCast(fonts.Size)]) |font| {
         try testing.expect(c.ImFont_IsGlyphInFont(font, 'A'));
-        // Lucide's are all as wide as they're tall. Inter has narrower letters at some of the same
-        // codepoints, which mustn't win
+        // Lucide's are square. Inter's narrower letters at some of the same codepoints mustn't win
         const baked = c.ImFont_GetFontBaked(font, 15);
         try testing.expect(c.ImFontBaked_FindGlyphNoFallback(baked, codepoint(icons.puzzle)) != null);
         // And the logos

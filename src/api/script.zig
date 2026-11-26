@@ -12,7 +12,7 @@ pub const topics = struct {
     pub const sessions = "wraith.script.sessions";
     /// A `TweakState`, once a tweak is on.
     pub const tweak = "wraith.script.tweak";
-    /// A `TweakSwitched`, from the runtime, when a tweak's box goes on or off.
+    /// A `TweakSwitched` from the runtime.
     pub const switched = "wraith.tweak.switched";
 };
 
@@ -20,42 +20,38 @@ pub const Run = struct {
     session: u32,
     name: []const u8 = "",
     code: []const u8,
-    /// What it's in, `"js"` or `"lua"`. A tweak's file says its own.
+    /// `"js"` or `"lua"`. A tweak's file says its own.
     language: []const u8 = "js",
-    /// `code` is a `.rwt` tweak, not JS. The session's only run, or a group's, one for each `part`.
+    /// `code` is a `.rwt` tweak. The session's only run, or one per `part` for a group.
     tweak: bool = false,
     /// A tweak's data values from the UI, over its own.
     values: []const tweak.Value = &.{},
-    /// For a group's file, the path of the `@tweak` or nested `@group` to turn on, like
-    /// `Combat/Max bravery`, or empty for the file's group. Its session comes up with the file's
-    /// shared part first, a nested group's has to be on already, and each part gets a scope of
-    /// its own in its group's.
+    /// For a group's file, the path to turn on, like `Combat/Max bravery`, or empty for the file's group.
+    /// The shared part comes up first, and a nested group's must already be on.
     part: []const u8 = "",
     /// The file's shared part's values, for the run that brings it up.
     shared_values: []const tweak.Value = &.{},
-    /// The project it's for, whose schemas and names it starts with: empty for the open one, else
-    /// an installed mod's id. Only the run that starts its session counts.
+    /// Whose schemas and names it uses: empty for the open project, else a mod id. Only the first run counts.
     project: []const u8 = "",
-    /// Where its session runs. A different one than it's on starts it afresh, like a language.
+    /// Changing it restarts the session.
     thread: Thread = .game,
 };
 
-/// Where a session runs. With nothing driving ticks, the game thread's ticks run on the render
-/// thread too, so they're the same.
+/// Where a session runs. With nothing driving ticks, both are the render thread.
 pub const Thread = enum {
-    /// Its ticks, where game engines' objects can be used.
+    /// Ticks, where engine objects can be used.
     game,
-    /// Its frames, where ImGui can be drawn.
+    /// Frames, where ImGui can be drawn.
     render,
 };
 
 /// Where a tweak's data went, so the UI can show and change it.
 pub const TweakState = struct {
     session: u32,
-    /// The path of what in a group's file it's for, empty for its shared part or a lone tweak.
+    /// Path in a group's file, empty for its shared part or a lone tweak.
     part: []const u8 = "",
     fields: []const Field = &.{},
-    /// Its `@data` and `@sym` names, for the game's names while it's on.
+    /// Its `@data` and `@sym` names, added to the game's while it's on.
     names: []const Name = &.{},
 
     pub const Field = struct {
@@ -75,7 +71,7 @@ pub const TweakState = struct {
 
 pub const Target = struct {
     session: u32,
-    /// Just this part of a group's file by path, with everything in it, leaving the rest on.
+    /// Just this part of a group's file and what's in it, leaving the rest on.
     part: []const u8 = "",
 };
 
@@ -85,7 +81,7 @@ pub const Output = struct {
     session: u32,
     kind: Kind,
     text: []const u8,
-    /// The path of what in a group's file it came from, empty for its shared part.
+    /// Path in a group's file, empty for its shared part.
     part: []const u8 = "",
 };
 

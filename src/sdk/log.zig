@@ -11,8 +11,7 @@ pub const max_message_len = core.log.max_message_len;
 
 threadlocal var panicking: bool = false;
 
-/// Logs it and traps, so Wraith shows it as a crash. Std's own loads debug info from disk to print a
-/// trace, which needs more stack than game threads have. Use it with `pub const panic = sdk.panic;`.
+/// Logs and traps, since std's panic needs more stack than game threads have. `pub const panic = sdk.panic;`
 pub fn onPanic(msg: []const u8, _: ?usize) noreturn {
     @branchHint(.cold);
     if (!panicking) {

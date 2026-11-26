@@ -62,8 +62,7 @@ pub fn FnHook(comptime T: type) type {
         pub const Original = *const meta.FnType(T);
 
         object: HookObject,
-        /// Kept from when it was made, since asking the hook stops working once the plugin's
-        /// going, while a game thread can still be in the detour.
+        /// Cached, since a game thread can still be in the detour after the hook is gone.
         original_address: usize = 0,
 
         pub const enable = Common(Self).enable;
@@ -83,8 +82,7 @@ pub const MidHook = struct {
     pub const disable = Common(MidHook).disable;
     pub const destroy = Common(MidHook).destroy;
 
-    /// Setting the ip here in the callback runs the original instruction, or the code it
-    /// replaces, then carries on.
+    /// Setting ip to this runs the original code, then carries on.
     pub fn originalAddress(self: MidHook) usize {
         return self.object.original();
     }
@@ -97,11 +95,9 @@ pub const MidHook = struct {
 
 /// Like `Hooks.MidOptions` in hooks.sal.
 pub const MidOptions = struct {
-    /// The callback replaces code there, so returning carries on after it. Else it goes before
-    /// the instruction there, which runs after it.
+    /// The callback replaces the code there, rather than running before it.
     replace: bool = false,
-    /// Bytes it replaces, ending between instructions. 0 is what `expect` covers, or else the
-    /// instruction there.
+    /// Bytes replaced, on an instruction boundary. 0 means `expect`'s length, or one instruction.
     size: u32 = 0,
     /// What has to be there, a byte pattern like `89 83 ?? ??` or asm like `cmp ecx, eax`.
     expect: []const u8 = "",
@@ -125,10 +121,8 @@ pub fn Hook(comptime In: type, comptime name: @EnumLiteral()) type {
     return FnHook(@field(In.Fns, @tagName(name)));
 }
 
-/// Hooks a function the schemas declare, like `hook(GameStateManager, .spendMira, cb, self)`. `In` is
-/// the struct or namespace it's in. A [Virtual(n)] one swaps its vtable slot. `callback` takes the
-/// function's arguments, after the hook and the context if it wants them. `createFn` and
-/// `createSlot` do the same at an address of your own.
+/// Hooks a schema function, like `hook(GameStateManager, .spendMira, cb, self)`. [Virtual(n)] swaps
+/// the vtable slot. `callback` takes the args, optionally after the hook and context.
 pub fn hook(comptime In: type, comptime name: @EnumLiteral(), comptime callback: anytype, context: anytype) !Hook(In, name) {
     return hookWith(In, name, callback, context, .{});
 }

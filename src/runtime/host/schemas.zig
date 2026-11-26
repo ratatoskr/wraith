@@ -1,6 +1,5 @@
-//! A plugin's schemas: Wraith's, those of plugins it depends on and its own `schemas` folder, as one.
-//! What they say about the game, like `[Sig("..")] i32 spawn(u32 kind);`, is found by name the first
-//! time it's asked for, then kept. Plugins without schemas share one of Wraith's alone.
+//! A plugin's schemas: Wraith's, its dependencies' and its own, as one. What they declare is found
+//! by name when first asked for, then kept.
 
 const std = @import("std");
 
@@ -67,8 +66,7 @@ pub const Schemas = struct {
         return self;
     }
 
-    /// Names it's given as text, like `Player.heal`, are looked for in plugin `name`'s namespace
-    /// first, like names in its own files.
+    /// Names given as text, like `Player.heal`, are looked for in plugin `name`'s namespace first.
     pub fn setHome(self: *Schemas, name: []const u8) void {
         self.options.namespace = core.manifest.namespaceOf(&self.home_buf, name);
     }
@@ -92,8 +90,7 @@ pub const Schemas = struct {
         allocator.destroy(self);
     }
 
-    /// `text`, like `[Thiscall] fn i32 (usize self, f32 amount)` or a declared name like `Player.heal`,
-    /// with these types in scope. Says what's wrong with it if it can't be used.
+    /// `text`, like `[Thiscall] fn i32 (usize self)` or a declared name like `Player.heal`. Says what's wrong if unusable.
     pub fn typedOf(self: *Schemas, text: []const u8) error{ InvalidSignature, OutOfMemory }!Typed {
         {
             self.lock.lockShared();
@@ -126,8 +123,7 @@ pub const Schemas = struct {
 
     pub const Error = error{ Unknown, NotFound, NeedsObject };
 
-    /// Where a function, method or static is, or a struct's vtable. Kept once found. `written` is
-    /// looked for in the plugin's namespace first.
+    /// Where a function, method, static or vtable is. Kept once found. Looked for in its namespace first.
     pub fn address(self: *Schemas, written: []const u8) Error!usize {
         var buf: [512]u8 = undefined;
         const name = self.fullName(&buf, written);
@@ -212,8 +208,7 @@ pub const Schemas = struct {
     }
 };
 
-/// Each plugin's files, named like `kai/game.sal`, in its namespace like `Kai`, and every file
-/// using them all with Wraith's, like a plugin's build has it.
+/// Each plugin's files in its namespace, and every file using them all with Wraith's, like its build.
 fn optionsFor(arena: std.mem.Allocator, files: []const File) error{OutOfMemory}!salamander_schema.Options {
     var o = api.sal_options;
     var spaces: std.ArrayList(salamander_schema.FileNamespace) = .empty;
@@ -233,8 +228,7 @@ fn optionsFor(arena: std.mem.Allocator, files: []const File) error{OutOfMemory}!
     return o;
 }
 
-/// How a script parses `text`, a bundle like `Schemas.text`, so it matches `Schemas`: each plugin's
-/// files in its namespace, and names given as text looked for in namespace `home` first. In `arena`.
+/// How a script parses bundle `text`, matching `Schemas`, with namespace `home` first. In `arena`.
 pub fn scriptOptions(arena: std.mem.Allocator, text: []const u8, home: []const u8) error{OutOfMemory}!salamander_schema.Options {
     var files: std.ArrayList(File) = .empty;
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -263,9 +257,8 @@ const ManagedName = struct {
     icall: bool,
 };
 
-/// `[Managed]`, `[Managed("Name")]` or `[Managed("Ns.Class:Name")]`, the same for `[Icall]`, with
-/// the class from its struct's `[Managed("Ns.Class")]`, else the struct's name. Null if it has
-/// neither, or can't name a class, which `checkAnnotations` stops.
+/// `[Managed]`, `[Managed("Name")]` or `[Managed("Ns.Class:Name")]`, likewise `[Icall]`. Null if it has
+/// neither or can't name a class.
 fn managedOf(annotations: []const SalSchema.Annotation, owner: ?*const SalSchema.Type, own_name: []const u8, spaces: []const salamander_schema.FileNamespace) ?ManagedName {
     const icall = SalSchema.findAnnotation(annotations, "wraith", "Icall");
     const a = SalSchema.findAnnotation(annotations, "wraith", "Managed") orelse icall orelse return null;
@@ -275,8 +268,7 @@ fn managedOf(annotations: []const SalSchema.Annotation, owner: ?*const SalSchema
     return .{ .class = classOf(t, spaces), .member = given orelse own_name, .icall = icall != null };
 }
 
-/// The C# class a struct stands for, from `[Managed("Ns.Class")]`, else its own name. Without the
-/// plugin's namespace in front, since the game's C# doesn't have it.
+/// The C# class a struct stands for, from `[Managed("Ns.Class")]` else its name, without the plugin's namespace.
 fn classOf(t: *const SalSchema.Type, spaces: []const salamander_schema.FileNamespace) []const u8 {
     if (SalSchema.findAnnotation(t.annotations, "wraith", "Managed")) |a|
         if (a.args.len > 0 and a.args[0] == .string) return a.args[0].string;
@@ -305,8 +297,7 @@ fn findManaged(m: ManagedName, member: managed_area.Member, name: []const u8) Sc
     } });
 }
 
-/// Runs the `[Sig]` or `[VirtualTable]` in `annotations`, with any `[Module]` and `[Section]` next to it.
-/// Through `Names`, so an earlier scan of it is used and it's listed with the rest.
+/// Runs the `[Sig]` or `[VirtualTable]` with its `[Module]` and `[Section]`, through `Names` so it's cached and listed.
 fn locate(annotations: []const SalSchema.Annotation, which: []const u8, name: []const u8) Schemas.Error!usize {
     var steps: [sigs.max_steps]mem.Sig.Step = undefined;
     const sig = (sigs.of(annotations, "wraith", which, &steps) catch unreachable) orelse return sal.host().explain(error.NotFound, "{s} has no [{s}]", .{ name, which });
@@ -412,9 +403,8 @@ fn checkChoices(s: SalSchema, owner: []const u8, a: *const SalSchema.Annotation,
     if (s.findField(item, name) == null) return diag.fail(source, a.at, "{s} has no field {s}", .{ item.name, name });
 }
 
-/// `[Choices]` path `path` with its type's full name, in `buf` if that's longer, and where that
-/// name ends. It's found from the namespace `owner`, the struct it's in, is in, out to the top,
-/// like other names in schemas.
+/// `[Choices]` `path` with its type's full name, in `buf` if longer, and where that name ends. Resolved
+/// from namespace `owner` outward, like other schema names.
 pub fn choicesPath(s: SalSchema, buf: []u8, owner: []const u8, path: []const u8) ?struct { path: []const u8, dot: usize } {
     var at = owner[0 .. std.mem.lastIndexOfScalar(u8, owner, '.') orelse 0];
     while (at.len > 0) : (at = at[0 .. std.mem.lastIndexOfScalar(u8, at, '.') orelse 0]) {
@@ -512,8 +502,8 @@ pub fn fromFilesWhy(files: []const File, diag: *SalSchema.Diagnostic) error{ Out
 
 var adding: sync.RwLock = .{};
 
-/// A plugin's schemas with `text` as its file `name`, in place of one by that name, like a tweak's
-/// types. The ones before stay till it's unloaded, since what they found is still in use.
+/// Adds or replaces file `name` in a plugin's schemas, like a tweak's types. The old ones stay till
+/// it's unloaded, since what they found is in use.
 pub fn addFile(loaded: *Loaded, name: []const u8, text: []const u8) SchemaError!void {
     adding.lock();
     defer adding.unlock();
@@ -538,8 +528,7 @@ pub fn addFile(loaded: *Loaded, name: []const u8, text: []const u8) SchemaError!
 
 pub const SchemaError = error{ OutOfMemory, Invalid };
 
-/// The `.sal` files under `dir_path/schemas`, any folder down, named like `name/game.sal` and
-/// sorted by that, onto `files`. In `gpa`.
+/// The `.sal` files under `dir_path/schemas`, recursively, named like `name/game.sal`, sorted, onto `files`.
 pub fn readFolder(gpa: std.mem.Allocator, io: std.Io, name: []const u8, dir_path: []const u8, files: *std.ArrayList(File)) !void {
     const path = try std.fs.path.join(gpa, &.{ dir_path, "schemas" });
     defer gpa.free(path);
@@ -642,8 +631,8 @@ test "[Managed] and [Icall] are checked as the schemas load" {
     try testing.expectEqualStrings("UnityEngine.Time", delta.class);
     try testing.expectEqualStrings("get_deltaTime", delta.member);
     try testing.expect(delta.icall);
-    // Not running here. A method's function is there anyway, and finds the C# on its first call. An
-    // engine call's isn't, and not finding it isn't kept, so it's found once the game's started its runtime
+    // Not running here. A method's function exists anyway and finds the C# on first call. An engine
+    // call's doesn't, and a miss isn't kept
     try testing.expect(try good.address("Player.Update") != 0);
     try testing.expectError(error.NotFound, good.address("deltaTime"));
     try testing.expectEqual(1, good.found.count());

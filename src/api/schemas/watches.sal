@@ -1,5 +1,5 @@
-// Watching memory with the CPU's debug registers, like "find what writes to this". There are four
-// across every plugin. The game doesn't stop.
+// Memory watches on the CPU's debug registers, like "find what writes to this". Four across all
+// plugins. The game doesn't stop.
 
 namespace Wraith;
 
@@ -27,8 +27,7 @@ namespace Watch {
     struct Hit {
         // What's watched
         usize address;
-        // Where the instruction that hit starts, if it could be told, else `ip`. For `execute`, the one
-        // about to run.
+        // The instruction that hit if known, else `ip`. For `execute`, the one about to run.
         usize instruction;
         // Just past the instruction for `write` and `access`
         usize ip;

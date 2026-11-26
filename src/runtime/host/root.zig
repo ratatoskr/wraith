@@ -15,6 +15,7 @@ pub const settings = @import("settings.zig");
 pub const lists = @import("lists.zig");
 pub const messages = @import("messages.zig");
 pub const frame = @import("frame.zig");
+pub const leases = @import("leases.zig");
 pub const threads = @import("threads.zig");
 pub const capture = @import("capture.zig");
 pub const diagnostics = @import("diagnostics.zig");
@@ -73,6 +74,8 @@ test {
     _ = @import("files_area.zig");
     _ = @import("game_area.zig");
     _ = @import("photo_area.zig");
+    _ = @import("ranked.zig");
+    _ = leases;
     _ = @import("managed_area.zig");
     _ = @import("sync_area.zig");
     _ = @import("hooks_area.zig");

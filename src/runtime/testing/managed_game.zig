@@ -1,5 +1,4 @@
-//! A real game's C# runtime for tests, started outside the game in this process, once. Off unless
-//! `WRAITH_MANAGED_GAME` names a Unity game's folder, since a runtime can't be stopped again.
+//! A real game's C# runtime for tests, started once. Off unless `WRAITH_MANAGED_GAME` names a Unity game.
 
 const std = @import("std");
 

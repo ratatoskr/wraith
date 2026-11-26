@@ -1,6 +1,4 @@
-//! Named script libraries, source text that scripts load with `require(name)` and tweaks with
-//! `@use`. Each language's source is its own entry. The runtime's own come first and plugins can
-//! add more until they go. Any thread.
+//! Named script libraries for `require(name)` and `@use`, one entry per language. Any thread.
 
 const Libraries = @This();
 

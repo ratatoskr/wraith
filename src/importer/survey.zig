@@ -1,7 +1,5 @@
-//! `zig build ce-survey` imports every Cheat Engine table under a folder, `D:\Modding` unless
-//! one's given, and says how each game's went. Every file it makes goes through the tweak parser,
-//! and every Lua part through Lua 5.5's compiler, the way the runtime would load them. For
-//! working on the importer, not shipped. `--out <folder>` writes each project there too.
+//! `zig build ce-survey`: imports every CE table under a folder (default `D:\Modding`) and checks
+//! the output parses and compiles. Dev tool, not shipped. `--out <folder>` keeps the projects.
 
 const std = @import("std");
 const ce = @import("wraith_importer").ce;

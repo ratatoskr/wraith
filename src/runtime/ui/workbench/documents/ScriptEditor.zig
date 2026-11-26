@@ -1,5 +1,5 @@
-//! A Script document, JavaScript or Lua run in a session of its own. The project's
-//! `scripts/x.rws.js` or `scripts/x.rws.lua` once it's changed.
+//! A Script document, JavaScript or Lua run in a session of its own. Saved to the project's
+//! `scripts/x.rws.js` or `.rws.lua` once changed.
 
 const ScriptEditor = @This();
 

@@ -61,13 +61,12 @@ const Hub = struct {
         try self.tmp.dir.writeFile(io, .{ .sub_path = "site/" ++ registry.index_path, .data = try registry.sign(a, body, self.pair) });
     }
 
-    /// `hello`, a plugin, with these versions, newest first, all the one zip. `extra` goes in the
-    /// package and `version_extra` in each version.
+    /// Plugin `hello` with these versions, newest first, sharing one zip.
     fn hello(self: *Hub, versions: []const []const u8, extra: []const u8, version_extra: []const u8) ![]const u8 {
         const a = self.arena.allocator();
         var list: std.ArrayList(u8) = .empty;
         for (versions, 0..) |v, i| try list.print(a,
-            \\{s}{{ "version": "{s}", "apiVersion": 2, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true{s} }}
+            \\{s}{{ "version": "{s}", "apiVersion": 3, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1, "from_the_future": true{s} }}
         , .{ if (i == 0) "" else ", ", v, &helloSha256(), version_extra });
         return std.fmt.allocPrint(a,
             \\{{ "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{s}]{s} }}
@@ -82,7 +81,7 @@ const Hub = struct {
 /// A package with one version, 1.0.0, that isn't to install.
 fn entry(a: std.mem.Allocator, id: []const u8, extra: []const u8, version_extra: []const u8) ![]const u8 {
     return std.fmt.allocPrint(a,
-        \\{{ "id": "{s}", "kind": "plugin", "title": "{s}", "versions": [{{ "version": "1.0.0", "apiVersion": 2, "url": "", "sha256": "00"{s} }}]{s} }}
+        \\{{ "id": "{s}", "kind": "plugin", "title": "{s}", "versions": [{{ "version": "1.0.0", "apiVersion": 3, "url": "", "sha256": "00"{s} }}]{s} }}
     , .{ id, id, version_extra, extra });
 }
 
@@ -160,10 +159,10 @@ test "newest runnable version" {
     const pkg: registry.Package = .{
         .id = "p",
         .versions = &.{
-            .{ .version = "1.0.0", .apiVersion = 2, .url = "", .sha256 = "" },
-            .{ .version = "1.2.0", .apiVersion = 2, .wraith = "0.2.0", .url = "", .sha256 = "" },
-            .{ .version = "1.1.0", .apiVersion = 2, .arches = &.{.x86}, .url = "", .sha256 = "" },
-            .{ .version = "1.3.0", .apiVersion = 2, .yanked = true, .url = "", .sha256 = "" },
+            .{ .version = "1.0.0", .apiVersion = 3, .url = "", .sha256 = "" },
+            .{ .version = "1.2.0", .apiVersion = 3, .wraith = "0.2.0", .url = "", .sha256 = "" },
+            .{ .version = "1.1.0", .apiVersion = 3, .arches = &.{.x86}, .url = "", .sha256 = "" },
+            .{ .version = "1.3.0", .apiVersion = 3, .yanked = true, .url = "", .sha256 = "" },
             // Made before there were API versions, and for a newer Wraith's
             .{ .version = "1.4.0", .url = "", .sha256 = "" },
             .{ .version = "1.5.0", .apiVersion = core.manifest.api_version + 1, .url = "", .sha256 = "" },
@@ -392,6 +391,43 @@ test "locked plugin" {
     theirs.close(io);
 
     try registry.remove(a, io, plugins, "hello");
+}
+
+test "a game's essential mods, by its id or exe, but not in other games or for any game" {
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    const where: registry.mods.Where = .{ .source = hub.source(), .mods_dir = hub.path("mods"), .wraith = "1.0.0" };
+    const ffxiv = ", \"game\": { \"ids\": [\"steam-39210\"], \"exes\": [\"ffxiv_dx11.exe\"] }";
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, ", \"essential\": true", ffxiv)}, &.{});
+
+    const by_id = try registry.mods.essentials(a, io, try hub.index(), where, &.{.{ .game = "steam-39210", .here = .{} }}, null);
+    try testing.expectEqual(1, by_id.len);
+    try testing.expectEqual(null, by_id[0].game_engine);
+    const by_exe: []const registry.mods.MadeWith = &.{.{ .here = .{ .exe = "Games/FFXIV/ffxiv_dx11.exe" } }};
+    try testing.expectEqual(1, (try registry.mods.essentials(a, io, try hub.index(), where, by_exe, null)).len);
+    try testing.expectEqual(0, (try registry.mods.essentials(a, io, try hub.index(), where, &.{.{ .game = "steam-1", .here = .{ .game_engine = "unity" } }}, null)).len);
+
+    // One for any game would be in every game
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, ", \"essential\": true", "")}, &.{});
+    try testing.expectEqual(0, (try registry.mods.essentials(a, io, try hub.index(), where, &.{.{ .game = "steam-39210", .here = .{ .game_engine = "unity" } }}, null)).len);
+}
+
+test "an engine's essential plugin isn't fetched for a game whose own essential plugin stands in for it" {
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    const where: registry.mods.Where = .{ .source = hub.source(), .mods_dir = hub.path("mods"), .wraith = "1.0.0" };
+    const unity = try entry(a, "unity", ", \"essential\": true", ", \"gameEngine\": { \"id\": \"unity\" }");
+    const kai = try entry(a, "kai", ", \"essential\": true", ", \"game\": { \"ids\": [\"steam-1\"] }, \"supersedes\": [\"unity\"]");
+    try hub.publish(&.{ unity, kai }, &.{});
+    const kai_game: []const registry.mods.MadeWith = &.{.{ .game = "steam-1", .here = .{ .game_engine = "unity" } }};
+    const found = try registry.mods.essentials(a, io, try hub.index(), where, kai_game, null);
+    try testing.expectEqual(1, found.len);
+    try testing.expectEqualStrings("kai", found[0].id);
+    // Other Unity games still get it
+    const other: []const registry.mods.MadeWith = &.{.{ .game = "steam-2", .here = .{ .game_engine = "unity" } }};
+    try testing.expectEqualStrings("unity", (try registry.mods.essentials(a, io, try hub.index(), where, other, null))[0].id);
 }
 
 test "an engine's essential mods, missing or out of date, but never a pulled one or one put there by hand" {

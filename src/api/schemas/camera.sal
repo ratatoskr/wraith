@@ -1,11 +1,9 @@
-// The free camera. A game's plugin, or its engine's, hands Wraith the game's camera each frame from
-// wherever the game sets it, and Wraith does the rest: flying, orbiting, the keys and settings, and
-// Photo mode. Any thread.
+// The free camera. A game or engine plugin hands Wraith the game's camera each frame, and Wraith
+// does the rest, including Photo mode. Any thread.
 
 namespace Wraith;
 
 namespace FreeCamera {
-    // An axis and which way along it.
     enum Axis : u8 { pos_y, neg_y, pos_z, neg_z, pos_x, neg_x }
 
     // How the game's world is laid out, so moving and looking go the right way.
@@ -13,19 +11,18 @@ namespace FreeCamera {
         Axis up;
         Axis look;
         bool left_handed;
-        // How many of the game's units make a metre, like 100 in Unreal
+        // Game units per metre, like 100 in Unreal
         f32 metre;
     }
 
     // Which of the camera's fields say where it points.
     enum Aim : u8 {
-        // at `target`, a point in the world, tipped by `roll`
+        // At `target`, tipped by `roll`
         target,
-        // by `rotation`, a quaternion as x, y, z, w
+        // By `rotation`
         rotation,
     }
 
-    // The game's camera.
     struct State {
         Vec3 position;
         Aim aim;
@@ -39,37 +36,23 @@ namespace FreeCamera {
 }
 
 trait FreeCamera {
-    // Once, before the first `camera`.
+    // A lease on the game's camera, see `Lease`. Only the holder's `setWorld` and `camera` count.
+    Lease!LeaseError claim(keep ?Lease.Changed changed);
+    // Once, before the first `camera`. Kept till it gets the lease.
     void setWorld(World world);
-    // Every frame from where the game sets its camera, like a hook after its camera update. While
-    // the free camera's on, Wraith changes it to its own. Otherwise it's left as it is. `id` says
-    // which of the game's cameras it is: its id in `cameras` for games that list them, or else 0.
-    // When it changes, like the game cutting to another, the free camera carries on from this one,
-    // rather than putting it where the last one was.
+    // Every frame from where the game sets its camera; Wraith overrides it while the free camera's on.
+    // `id` is its id in `cameras`, or 0. A new id carries on from that camera. Lease holder only.
     void camera(u64 id, inout State camera);
-    // Turns the free camera on if it isn't, and orbits it round `point`, in the world.
+    // Turns the free camera on and orbits it round `point`.
     void focus(Vec3 point);
-    // Whether the free camera's on.
     bool active();
 
-    // For games with more than one camera, the plugin lists them, and the free camera always moves
-    // whichever's on screen:
-    //
-    // - `set` the game's cameras on `cameras`, with the one on screen current.
-    // - Each frame, put `wantedCamera` on screen, or the game's own for 0. That's the one picked
-    //   while the player's ticked Follow selection, which starts off.
-    // - Hand `camera` whichever's on screen, with its id.
-    // - When the free camera leaves one of the game's own, put back where the game had it. Ones the
-    //   player added stay where they were put.
-    //
-    // If more than one plugin lists cameras, Photo mode shows a game's plugin's, then a game
-    // engine's.
+    // For games with several cameras: `set` them on `cameras`, put `wantedCamera` on screen each
+    // frame, hand `camera` whichever's shown, and restore the game's own when the free camera leaves.
 
-    // The plugin's list of the game's cameras in Photo mode's Camera panel, made the first time.
-    // `add` and `rename` give it those buttons, if the plugin can make and rename cameras, and are
-    // only kept the first time. Its `add` makes one where the view is, and `select`s it.
+    // The plugin's camera list in Photo mode's Camera panel. `add` and `rename` give it those buttons,
+    // and only count the first time. `add` makes one at the view and `select`s it.
     ItemList cameras(keep ?ItemList.Add add, keep ?ItemList.Rename rename);
-    // The camera the player wants on screen, by its id in `cameras`, or 0 for whichever the game
-    // shows itself.
+    // The camera the player wants on screen, by its id in `cameras`, or 0 for the game's own. Lease holder only.
     u64 wantedCamera();
 }

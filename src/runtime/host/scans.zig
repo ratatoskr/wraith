@@ -1,5 +1,4 @@
-//! Value scans plugins start, like Cheat Engine's. Each search runs on a worker. A scan's freed when
-//! the plugin goes, or sooner by `destroy`.
+//! Value scans plugins start, like Cheat Engine's. Searches run on a worker. Freed with the plugin or by `destroy`.
 
 const std = @import("std");
 
@@ -149,8 +148,7 @@ pub fn run(scan_type: Type, search: *Search, step: Step) !void {
     }
 }
 
-/// One plugin's scan. The record stays till the plugin's freed, since its object can outlive its
-/// results.
+/// One plugin's scan. Kept till the plugin's freed, since its object can outlive its results.
 pub const Scan = struct {
     loaded: *Loaded,
     value_type: Type,
@@ -224,8 +222,7 @@ pub const Scan = struct {
         return s;
     }
 
-    /// After a worker's step, whether it worked or not. `drop` is for a first search that failed,
-    /// whose results nobody gets. Nothing of it can be touched after.
+    /// After a worker's step. `drop` discards a failed first search's results. Nothing of it can be touched after.
     pub fn land(self: *Scan, drop: bool) void {
         self.lock.lock();
         defer self.lock.unlock();

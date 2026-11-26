@@ -1,5 +1,5 @@
-//! Every name there is. Your addresses with ids, schema statics, what plugins and tweaks add, and
-//! signature scans. Shows where each is now, or why it isn't anywhere.
+//! Every name there is: addresses with ids, schema statics, plugins' and tweaks' names, and
+//! signature scans, with where each is now or why it isn't anywhere.
 
 const NamesPanel = @This();
 
@@ -553,8 +553,7 @@ fn addToAddresses(self: *NamesPanel, info: *const Info) void {
     wb.panels.addresses.addItem(item);
 }
 
-/// An entry at `(name)`, or `[name]` when it's a pointer to a struct like `Player*`, typed like the
-/// name is.
+/// An entry at `(name)`, or `[name]` for a pointer to a struct like `Player*`, typed like the name.
 /// Null if the name doesn't fit in `buf`.
 pub fn itemFor(info: *const Info, schemas: []const *const Schema, buf: []u8) ?AddressList.Item {
     const name = info.name.get();

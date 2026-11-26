@@ -3,7 +3,7 @@
 namespace Wraith;
 
 error ImageError {
-    // Not an image file it can read, or pixels that don't match the size
+    // Not an image it can read, or pixels that don't match the size
     InvalidImage = 1,
     // Wider or taller than 16384
     TooBig,
@@ -12,7 +12,7 @@ error ImageError {
     NotFound,
 }
 
-// ImGui's `ImTextureRef`, for `ImGui_Image` and co. A 0 `data` can't be drawn.
+// ImGui's `ImTextureRef`. A 0 `data` can't be drawn.
 struct TextureRef { usize data; u64 id; }
 
 namespace Image {
@@ -29,13 +29,12 @@ trait Image {
 }
 
 trait Images {
-    // RGBA pixels, 4 bytes each with rows packed, copied. Any thread.
+    // Packed RGBA pixels, copied. Any thread.
     Image!ImageError create(u32 width, u32 height, []u8 rgba);
     // A PNG, JPEG, BMP, TGA or GIF's first frame. Slow, so not on the render thread.
     Image!ImageError decode([]u8 bytes);
-    // A file, read and decoded on a worker. A path that isn't full is in the plugin's own folder,
-    // like `images/logo.png`. Fine from any thread.
+    // A file, decoded on a worker. Relative paths are in the plugin's folder. Any thread.
     async Image!ImageError load(string path);
-    // Draws it in the current window, in a draw callback. A zero size draws it at its own size.
+    // Draws it in the current window, in a draw callback. Zero size is its own size.
     void draw(Image image, ImVec2 size);
 }

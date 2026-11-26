@@ -1,6 +1,4 @@
-//! Works out which game engine a game's made with, like Unity or Unreal, from the files beside its
-//! exe. Not script engines or the hook engine. For the launcher to show, and for tools that only work
-//! with one, like a Unity plugin.
+//! Detects a game's engine, like Unity or Unreal, from the files beside its exe.
 
 const std = @import("std");
 
@@ -101,8 +99,7 @@ fn ofUnrealBinaries(arena: std.mem.Allocator, io: std.Io, dir: []const u8, exe_n
     return null;
 }
 
-/// What's in a folder that gives an engine away. Several can show, like NW.js under RPG Maker,
-/// so it's all looked at before picking.
+/// Engine markers in a folder. Several can show (NW.js under RPG Maker), so all are checked first.
 const Seen = struct {
     unity_player: bool = false,
     game_assembly: bool = false,
@@ -223,8 +220,7 @@ fn pick(arena: std.mem.Allocator, path: []const u8, seen: Seen) !?Found {
     return null;
 }
 
-/// IL2CPP compiles the game's C# to native code in GameAssembly.dll, Mono runs it from Managed.
-/// UnityPlayer.dll's version is Unity's. Before 2017.2 the engine was in the exe, so there's none.
+/// IL2CPP has GameAssembly.dll, Mono has Managed. No UnityPlayer.dll before 2017.2.
 fn unity(arena: std.mem.Allocator, path: []const u8, seen: Seen) !Found {
     var found: Found = .{ .game_engine = .unity, .file = if (seen.unity_player) "UnityPlayer.dll" else seen.data_dir.? };
     if (seen.game_assembly or seen.il2cpp_data) {

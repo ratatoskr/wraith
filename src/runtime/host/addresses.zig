@@ -1,5 +1,4 @@
-//! The game's named addresses for plugins and projects, see `Names`. Ids find entries. Each looks
-//! names up the same way, through `Scope`.
+//! The game's named addresses for plugins and projects, see `Names`. Lookups go through `Scope`.
 
 const std = @import("std");
 
@@ -82,9 +81,7 @@ pub fn setSources(loaded: *Loaded, sources: mem.Sources) void {
     loaded.address_sources.store(if (sources.none()) 0 else @bitCast(sources), .release);
 }
 
-/// How a plugin, a project or a tweak looks names up, before everyone's in `Names`: `names` first,
-/// then what its schemas declare, like `Player.instance`, then its own names without their
-/// prefix, like `hp` for `kai.hp`.
+/// How an owner looks names up: `names`, then its schemas' statics, then its own names unprefixed.
 pub const Scope = struct {
     loaded: ?*Loaded = null,
     names: []const api.Name = &.{},
@@ -113,8 +110,8 @@ pub const Scope = struct {
     }
 };
 
-/// The statics its own schemas declare, as names like `kai.Player.instance`, in place of what it
-/// had. Not ones from plugins it depends on, which are theirs. Sessions name nothing.
+/// Its own schemas' statics as names like `kai.Player.instance`, replacing its old ones. Not its
+/// dependencies'.
 pub fn publishStatics(loaded: *Loaded) void {
     if (loaded.session) return;
     const lease = cleanup.lease(&loaded.owner) orelse return;
@@ -177,8 +174,7 @@ pub fn ownFile(loaded: *const Loaded, file: []const u8) bool {
     return file.len > loaded.name.len and std.mem.startsWith(u8, file, loaded.name) and file[loaded.name.len] == '/';
 }
 
-/// An address list it has, like a project's, as its own names. The open project's are the user's,
-/// which come before everyone else's.
+/// An address list it has, like a project's, as its own names. The open project's come first.
 pub fn publishList(loaded: *Loaded, items: []const devtools.AddressList.Item) void {
     const lease = cleanup.lease(&loaded.owner) orelse return;
     defer lease.end();

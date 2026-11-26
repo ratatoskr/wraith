@@ -1,8 +1,5 @@
 /* A C plugin for the loader's tests, built like `Plugin.initC` builds them, with -Wpedantic too.
- *
- * It lists a tweak, `c_fixture:count`, that adds its `step` field to a count each time it runs, and
- * fails when the step's 0. Its own schema uses one of Wraith's types. It depends on the fixture
- * plugin, calls the service that offers, and offers its own with what it got. */
+ * Its tweak `c_fixture:count` fails when `step` is 0. */
 
 #include "schema.h"
 #include "wraith_plugin.h"

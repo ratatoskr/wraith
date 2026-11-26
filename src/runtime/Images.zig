@@ -1,5 +1,4 @@
-//! Images owners made to draw, see `tuft_imgui.Texture`. Handles are ids, so a stale one finds
-//! nothing. Any thread.
+//! Images owners made to draw. Handles are ids, so a stale one finds nothing. Any thread.
 
 const Images = @This();
 

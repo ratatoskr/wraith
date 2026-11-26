@@ -1,5 +1,4 @@
-//! A table like kai.CT imported, then run as tweaks in a workbench session with every one on, the
-//! way the game would. Its code changes go into this test's own code.
+//! A table like kai.CT imported, then run as tweaks with every one on.
 
 const std = @import("std");
 const builtin = @import("builtin");

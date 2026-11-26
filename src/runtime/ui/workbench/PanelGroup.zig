@@ -1,6 +1,5 @@
 //! A docked window of tabs: some of the Workbench's own panels, then plugins' panels from
-//! `host.workbench_panels`. The engine's group has Classes and engine plugins' panels, named after
-//! the game's engine. The plugins' group has the rest.
+//! `host.workbench_panels`. The engine's group is named after the game's engine.
 
 const PanelGroup = @This();
 
@@ -51,8 +50,8 @@ pub fn setName(self: *PanelGroup, name: []const u8) void {
     if (!std.mem.eql(u8, title, self.window.title)) self.window.title = title;
 }
 
-/// Each frame before drawing, whether it's open or not: picks up `focus` from plugins, and opens
-/// itself the first time there's something to show. Workbench thread.
+/// Each frame before drawing, open or not: picks up plugins' `focus` and opens itself the first time
+/// there's something to show. Workbench thread.
 pub fn poll(self: *PanelGroup, something_to_show: bool) void {
     var buf: [max_panels]*Panel = undefined;
     const taken = panels.take(self.engine, &buf);

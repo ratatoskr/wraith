@@ -26,8 +26,8 @@ pub const Choices = struct {
 
 const width = 480;
 
-/// What was picked, the frame Continue's clicked. The caller takes over its dim and input then,
-/// with `Dim.takeOver` and `UiHold.takeOver`, or calls `dismiss`.
+/// What was picked, the frame Continue's clicked. The caller then takes over its dim and input
+/// (`Dim.takeOver`, `UiHold.takeOver`), or calls `dismiss`.
 pub fn draw(self: *Welcome, overlay: *Overlay) ?Choices {
     if (!self.open) return null;
     // Covers any plugin windows too, so only this takes clicks

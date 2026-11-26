@@ -1,31 +1,29 @@
-// Locks to share between plugins and their threads, tasks and scripts. Waiting never blocks: `lock`
-// settles once the lock's yours, and a let go lock goes straight to whoever's waited longest. A
-// lock goes when the plugin that made it does, and what a plugin holds or waits for goes with it.
-// Any thread.
+// Locks shared between plugins, threads, tasks and scripts. `lock` never blocks, and a freed lock goes
+// to the longest waiter. Locks, holds and waits go with their plugin. Any thread.
 
 namespace Wraith;
 
 error SyncError {
-    // This plugin has it already. Locks aren't reentrant.
+    // This plugin has it already. Not reentrant.
     AlreadyHeld = 1,
     Failed,
 }
 
 namespace Sync {
-    // Hand it to other plugins through a service. They lock it through their own `sync`.
+    // Share through a service; other plugins lock it through their own `sync`.
     trait Lock {
-        // Whether anyone has it, for showing. It may change straight after.
+        // Whether anyone has it, for showing. May change straight after.
         bool held();
     }
 }
 
 trait Sync {
-    // A new lock, which goes when this plugin does.
+    // Goes when this plugin does.
     Lock newLock();
-    // Settles once it's this plugin's. Fails with `Gone` if the lock goes first.
+    // Settles once it's this plugin's. Fails with Salamander's built-in `Gone` if the lock goes first.
     async void!SyncError lock(Lock lock);
     // Takes it if nobody has it.
     bool tryLock(Lock lock);
-    // Hands it to whoever's waited longest. Nothing if this plugin doesn't have it.
+    // Hands it to the longest waiter. Nothing if this plugin doesn't have it.
     void unlock(Lock lock);
 }

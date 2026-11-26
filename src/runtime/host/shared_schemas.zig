@@ -1,5 +1,4 @@
-//! A plugin's or project's schemas, published: as `.sal` text for the address list, see
-//! `SharedSchemas`, their `[Tweak]` structs and their statics as names. Kept till it goes.
+//! A plugin's or project's schemas, published as `.sal` text (see `SharedSchemas`), tweaks and names.
 
 const std = @import("std");
 

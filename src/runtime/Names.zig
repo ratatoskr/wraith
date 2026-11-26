@@ -1,6 +1,4 @@
-//! Every named address in the game: the user's address list, what plugins add, tweaks' own names,
-//! schema statics and signature scans. Any thread. As `symbols`, address fields take these names
-//! and listings show them.
+//! Every named address in the game: address lists, plugins', tweaks', schema statics and scans. Any thread.
 
 const Names = @This();
 
@@ -42,8 +40,7 @@ pub const Origin = enum {
     scan,
 };
 
-/// Which copies of the game's code sigs are found in when the plugin looking hasn't said, see
-/// `setDefaultSources`. Wraith's setting.
+/// Which copies of the game's code sigs are searched when the plugin hasn't said. Wraith's setting.
 var default_sources: Atomic(u8) = .init(@bitCast(memory.Sources.all));
 /// What the plugin looking on this thread said, while it looks.
 threadlocal var plugin_sources: ?memory.Sources = null;
@@ -251,7 +248,6 @@ pub fn remove(self: *Names, origin: Origin, owner: ?*const Owner, name: []const 
     }{ .origin = origin, .owner = owner, .name = name });
 }
 
-/// Everything it owns.
 pub fn removeOwner(self: *Names, owner: *const Owner) void {
     self.removeIf(struct {
         owner: *const Owner,
@@ -305,11 +301,7 @@ fn removeIf(self: *Names, matcher: anytype) void {
     }
 }
 
-/// A project's address list, the open one's from the Addresses panel or an installed one's, in place
-/// of what `owner` had from `origin`. Ones without an id aren't names, nor are groups without an
-/// address. Each is published as location text with its groups and pointers folded in, so it's
-/// found without the list. `schemas` give typed ones their size. Each is named with `prefix` and a
-/// dot in front, if there's a prefix.
+/// A project's address list, in place of what `owner` had from `origin`. Ones without an id are skipped.
 pub fn setList(self: *Names, origin: Origin, owner: ?*const Owner, group: []const u8, prefix: []const u8, items: []const devtools.AddressList.Item, schemas: []const *const Schema) void {
     self.removeFrom(origin, owner);
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
@@ -342,7 +334,6 @@ pub fn generation(self: *Names) u32 {
 
 pub const GetError = error{ NotFound, Unreadable, InvalidAddress };
 
-/// Where the name is now.
 pub fn get(self: *Names, name: []const u8) GetError!usize {
     return (try self.find(name, .full)) orelse error.NotFound;
 }
@@ -357,8 +348,7 @@ pub fn eval(self: *Names, text: []const u8, scope: Symbols, problem: ?*Location.
     return Location.eval(text, .{ .symbols = self.symbols(), .memory = .local, .scope = scope }, problem);
 }
 
-/// Like `eval`, with which copy of the code it was worked out from. Disk if any sig in it was
-/// found on disk, else the snapshot if any was found there, else live.
+/// Like `eval`, also saying the furthest copy of the code (live, snapshot, disk) any sig was found in.
 pub fn evalFrom(self: *Names, text: []const u8, scope: Symbols, problem: ?*Location.Problem, source: *memory.AddressSource) Location.Error!usize {
     const outer = found_source;
     found_source = .live;
@@ -547,8 +537,7 @@ fn failName(self: *Names, name: []const u8, err: GetError, message: []const u8) 
     self.setFailed(id, err, message);
 }
 
-/// Why a name that's here wasn't found the last time it was looked for. Null if there's no such
-/// name. `buf` holds the message.
+/// Why a name wasn't found last time. Null if there's no such name. `buf` holds the message.
 pub fn why(self: *Names, name: []const u8, buf: []u8) ?Symbols.Miss {
     self.lock.lockShared();
     defer self.lock.unlockShared();
@@ -560,8 +549,7 @@ pub fn why(self: *Names, name: []const u8, buf: []u8) ?Symbols.Miss {
     return .{ .err = f.err, .message = buf[0..n] };
 }
 
-/// Needs `lock`.
-/// Typed ones are data, unless they said.
+/// Needs `lock`. Typed ones are data, unless they said.
 fn kindOf(e: *const Entry) Kind {
     if (e.kind == .other and e.type.len > 0) return .data;
     return e.kind;
@@ -627,8 +615,7 @@ fn placeOf(r: *const Record) ?usize {
     };
 }
 
-/// Works out where text entries are now without scanning, so `describe` keeps up. Every so often,
-/// from the workbench.
+/// Works out where text entries are now without scanning, so `describe` keeps up.
 pub fn refresh(self: *Names) void {
     var ids: [256]u64 = undefined;
     var names_buf: [256][96]u8 = undefined;
@@ -685,8 +672,7 @@ pub fn count(self: *Names) usize {
     return self.records.items.len;
 }
 
-/// Ids are names without spaces or brackets. Scans called other things, like their own text, are
-/// only listed.
+/// Ids are names without spaces or brackets; scans named otherwise are only listed.
 fn isId(name: []const u8) bool {
     if (name.len == 0) return false;
     for (name) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '.' and ch != '-') return false;
@@ -734,8 +720,7 @@ fn furthest(allowed: memory.Sources, range: memory.Range) memory.AddressSource {
     return .live;
 }
 
-/// From an earlier scan of the same pattern in the same place if there was one, else scanned now.
-/// Found in the copies `sourcesNow` allows, unless the sig says which.
+/// Reuses an earlier scan of the same pattern and place if there was one, else scans now.
 fn scanSig(self: *Names, sig: memory.Sig, name: []const u8, cost: Cost) memory.Address {
     const range = sig.range() catch |err| return .fail(err);
     var buf: [memory.Sig.max_len]?u8 = undefined;
@@ -846,9 +831,7 @@ pub const Progress = struct {
     cancel: Atomic(bool) = .init(false),
 };
 
-/// Scans every signature that was scanned before again, then looks up every name that isn't
-/// anywhere yet, which scans signatures nothing's used so far. Those look where their sigs and the
-/// default say, not in `sources`. Takes a while with a lot of them, so it's for a thread of its own.
+/// Rescans every sig, then looks up every unresolved name. Slow, so run it on a thread of its own.
 pub fn scanEverything(self: *Names, sources: memory.Sources, progress: *Progress) void {
     const gpa = self.allocator;
     const before = self.scanIds(gpa) catch return;

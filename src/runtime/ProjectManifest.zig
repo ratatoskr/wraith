@@ -1,6 +1,4 @@
-//! A project's `wraith.json`: what it's called on the hub, who made it and which game it's for.
-//! Projects are mods too, so it's the same file plugins have, with `"kind": "project"` and none of
-//! the fields only plugins can have.
+//! A project's `wraith.json`: the plugin manifest format with `"kind": "project"`.
 
 const std = @import("std");
 

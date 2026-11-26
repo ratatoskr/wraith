@@ -1,6 +1,5 @@
-//! The `managed` area: the game's Mono or IL2CPP, through `Managed`'s attached thread. Each call
-//! does its work there and builds what it gives back in the caller's scratch, which is safe since
-//! the caller waits.
+//! The `managed` area: the game's Mono or IL2CPP, through `Managed`'s attached thread. Results go in
+//! the caller's scratch, which is safe since the caller waits.
 
 const std = @import("std");
 
@@ -199,8 +198,7 @@ pub const Impl = struct {
 
 const RunningPromise = sal.Plain(Managed, "running");
 
-/// Waits off the caller's thread till the runtime's running. Gives up once the plugin's gone, or if
-/// the runtime can't be used, or Wraith stopped watching.
+/// Waits off the caller's thread till the runtime's running. Gives up if the plugin goes or it can't be used.
 const RunningWait = struct {
     owner: *sal.Owner,
     resolver: threads.Back(wraith.ResolverOf(RunningPromise)),
@@ -332,8 +330,7 @@ fn icallOf(rt: *const Runtime, class_name: []const u8, method_name: []const u8) 
     return (rt.icall(gpa, class_name, method_name) catch return error.Failed) orelse error.NotFound;
 }
 
-/// What a schema's `[Managed]` static or `[Icall]` is in the game's C#. Methods are called through
-/// `managed_calls` instead.
+/// What a schema's `[Managed]` static or `[Icall]` is. Methods go through `managed_calls`.
 pub const Member = enum { static, icall };
 
 /// Where a schema's `[Managed]` static or `[Icall]` is, through the attached thread.
@@ -372,8 +369,7 @@ fn invokeOn(rt: *const Runtime, a: Allocator, class_name: []const u8, method_nam
 /// What the runtime's class struct reads at most, comfortably, before we trust it.
 const class_bytes = 0x200;
 
-/// The class of the object at `address`, if it really is one. The runtime would crash on garbage,
-/// so the header and class have to be readable and the class has to be in a loaded image.
+/// The class of the object at `address`, if it really is one, since the runtime crashes on garbage.
 fn objectClass(rt: *const Runtime, address: usize) E!*Class {
     const word = @sizeOf(usize);
     if (address == 0 or !mem.isReadable(address, 2 * word)) return error.Unreadable;
@@ -398,9 +394,8 @@ fn objectClass(rt: *const Runtime, address: usize) E!*Class {
     return error.Unreadable;
 }
 
-/// Whether `at` looks like an object's CoreCLR MethodTable. Its size is at +4 and its parent's at
-/// +16, on 64 and 32-bit, and every object's parents end at `object`, System.Object's own. Only
-/// checking the size there let garbage through now and then.
+/// Whether `at` looks like a CoreCLR MethodTable: size at +4, parent at +16, parents ending at
+/// `object`. The size alone let garbage through.
 fn likeMethodTable(at: usize, object: usize) bool {
     const word = @sizeOf(usize);
     var mt = at;
@@ -543,8 +538,7 @@ test "a real game's C#, through the API" {
     try testing.expectError(error.NotFound, m.findMethod("System.String", "NoSuchMethod", -1));
     try m.running().wait();
 
-    // Schemas name C# members, and they're found by name. Methods are called through Wraith, which
-    // converts strings
+    // Schemas name C# members. Methods are called through Wraith, which converts strings
     const srt = @import("salamander_runtime");
     const schemas = try @import("schemas.zig").fromFiles(&.{.{ .name = "kai/cs.sal", .text =
         \\[Managed("System.String")]
@@ -760,8 +754,7 @@ test "CoreCLR's C#, through the API" {
     try testing.expectEqual(3.0, (try m.invoke("System.Math", "Sqrt", 0, &.{.{ .kind = .integer, .integer = 9 }})).number);
     try testing.expectError(error.Threw, m.invoke("System.Int32", "Parse", 0, &.{.{ .kind = .text, .text = "nope" }}));
 
-    // Schemas' [Managed] methods, called like any other declared function, with strings and objects
-    // converted, and overloads told apart by what they take
+    // Schemas' [Managed] methods, with strings and objects converted and overloads told apart
     const srt = @import("salamander_runtime");
     const schemas = try @import("schemas.zig").fromFiles(&.{.{ .name = "ffxiv/cs.sal", .text =
         \\[Managed("System.String")]
@@ -803,8 +796,7 @@ test "CoreCLR's C#, through the API" {
     // The same one, declared again, is the same function
     try testing.expectEqual(@intFromPtr(concat_of), try schemas.address("CsString.concat"));
 
-    // From a fiber, like a plugin's task, a call goes through Wraith's thread, since one from there
-    // has CoreCLR end the thread once the fiber's deleted
+    // From a fiber, calls go through Wraith's thread, since CoreCLR ends the thread once the fiber's deleted
     const InFiber = struct {
         fiber: sys.fiber.Fiber = undefined,
         parse: *const fn (srt.String) callconv(.c) i32,

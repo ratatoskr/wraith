@@ -1,5 +1,5 @@
-//! Loads and unloads plugins, each run by a `PluginKind`. What a plugin needs, and the plugin that
-//! made its kind, load first and unload last. Everything here runs with `op_lock` held.
+//! Loads and unloads plugins. Dependencies and the plugin that made its kind load first, unload last.
+//! Everything here runs with `op_lock` held.
 
 const std = @import("std");
 
@@ -82,6 +82,7 @@ pub fn loadNow(loader: *PluginLoader, name: []const u8) !*Loaded {
             else
                 log.info("Not loading plugin {s}: it's made for a newer Wraith's API (this has {d})", .{ known.name, core.manifest.api_version }),
             .revoked => log.warn("Not loading plugin {s}: the hub pulled this version. Update or remove it", .{known.name}),
+            .superseded => log.info("Not loading plugin {s}: {s} stands in for it in this game", .{ known.name, known.superseded_by.get() }),
             .outdated_api => log.warn("Not loading plugin {s}: its apiVersion is missing or older than {d}, so it needs updating for this Wraith", .{ known.name, core.manifest.min_api_version }),
         }
         return reason;
@@ -96,8 +97,10 @@ pub fn loadNow(loader: *PluginLoader, name: []const u8) !*Loaded {
         known.setState(&loader.known, .failed, err);
         return err;
     };
+    unloadSuperseded(loader, known);
     const loaded = instantiate(loader, known, runner) catch |err| {
         known.setState(&loader.known, .failed, err);
+        // What it stands in for stays off for a reason, but can be turned on by hand
         return err;
     };
     {
@@ -112,8 +115,7 @@ pub fn loadNow(loader: *PluginLoader, name: []const u8) !*Loaded {
     return loaded;
 }
 
-/// The `PluginKind` the runtime provides as `wraith.kind.<name>`. Only the runtime's, since the
-/// languages themselves are Salamander's.
+/// The `PluginKind` the runtime provides as `wraith.kind.<name>`.
 fn findRunner(loader: *PluginLoader, plugin: []const u8, name: []const u8) error{KindNotFound}!Loaded.Runner {
     var buf: [128]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "wraith.kind.{s}", .{name}) catch return error.KindNotFound;
@@ -141,7 +143,47 @@ fn pluginMade(loader: *PluginLoader, table: ?*const anyopaque) bool {
     return false;
 }
 
-pub const DependError = error{ MissingDependency, DependencyOff, DependencyFailed, DependencyTooOld, DependencyCycle };
+/// Unloads engine plugins a game plugin stands in for before it starts, so they never run together. Needs `op_lock`.
+fn unloadSuperseded(loader: *PluginLoader, known: *Known) void {
+    // Only scans change `supersedes`, and those need `op_lock`, which we hold
+    for (known.supersedes) |name| {
+        const k = blk: {
+            loader.known.lock.lockShared();
+            defer loader.known.lock.unlockShared();
+            const k = Known.find(&loader.known, name) orelse continue;
+            if (k.loaded == null or !k.for_engine or known.dependsOn(name)) continue;
+            break :blk k;
+        };
+        log.info("Unloading plugin {s}: {s} stands in for it in this game", .{ k.name, known.name });
+        unloadKnown(loader, k);
+        loader.known.lock.lock();
+        defer loader.known.lock.unlock();
+        k.state = .unsupported;
+        k.last_error = error.Superseded;
+        k.superseded_by.set(known.name);
+    }
+}
+
+/// Lets engine plugins a gone game plugin stood in for be turned on again. Doesn't load them.
+fn releaseSuperseded(loader: *PluginLoader, gone: *const Known) void {
+    loader.known.lock.lock();
+    defer loader.known.lock.unlock();
+    for (loader.known.items.items) |k| {
+        const superseded = if (k.last_error) |err| err == error.Superseded else false;
+        if (k.state != .unsupported or !superseded) continue;
+        if (!std.mem.eql(u8, k.superseded_by.get(), gone.name)) continue;
+        if (discovery.supersederLocked(loader, k)) |other| {
+            k.superseded_by.set(other.name);
+            continue;
+        }
+        k.state = .unloaded;
+        k.last_error = null;
+        k.superseded_by = .{};
+        log.info("Plugin {s} can be turned on again, now {s} is off", .{ k.name, gone.name });
+    }
+}
+
+pub const DependError = error{ MissingDependency, DependencyOff, DependencyFailed, DependencyTooOld, DependencyCycle, DependencySuperseded };
 
 /// Loads what `known` depends on that isn't already. Marks it failed if one can't be.
 fn loadDepends(loader: *PluginLoader, known: *Known) DependError!void {
@@ -162,6 +204,7 @@ fn loadDepends(loader: *PluginLoader, known: *Known) DependError!void {
                 error.DependencyFailed => log.err("Plugin {s} needs {s}, which couldn't be loaded", .{ known.name, dep.name }),
                 error.DependencyTooOld => log.err("Plugin {s} needs {s} {s} or newer", .{ known.name, dep.name, dep.min.? }),
                 error.DependencyCycle => log.err("Plugin {s} and {s} need each other, so neither can load first", .{ known.name, dep.name }),
+                error.DependencySuperseded => log.warn("Plugin {s} needs {s}, which this game's own plugin stands in for", .{ known.name, dep.name }),
             }
             return err;
         };
@@ -186,6 +229,7 @@ fn loadDependency(loader: *PluginLoader, known: *Known, dep: core.manifest.Depen
             _ = loadNow(loader, dep.name) catch |err| switch (err) {
                 error.AlreadyLoaded => {},
                 error.DependencyCycle => return error.DependencyCycle,
+                error.Superseded => return error.DependencySuperseded,
                 else => return error.DependencyFailed,
             };
         },
@@ -249,8 +293,7 @@ fn unloadNow(loader: *PluginLoader, name: []const u8) !void {
     unloadKnown(loader, known);
 }
 
-/// Fails if unloading `name` would unload a NativeAOT plugin, it or one that depends on it, since
-/// those stay till the game closes.
+/// Fails if unloading `name` would unload a NativeAOT plugin, since those stay till the game closes.
 fn refusePinned(loader: *PluginLoader, name: []const u8, what: []const u8) error{StaysLoaded}!void {
     loader.known.lock.lockShared();
     defer loader.known.lock.unlockShared();
@@ -289,6 +332,7 @@ pub fn unloadKnown(loader: *PluginLoader, known: *Known) void {
     };
     destroy(loader, loaded);
     known.setState(&loader.known, .unloaded, null);
+    if (known.supersedes.len > 0) releaseSuperseded(loader, known);
 }
 
 fn loadedDependentOf(loader: *PluginLoader, known: *const Known) ?*Known {
@@ -299,6 +343,9 @@ fn loadedDependentOf(loader: *PluginLoader, known: *const Known) ?*Known {
     }
     return null;
 }
+
+/// For `Loaded.load_order`. Never 0, which tests' plugins have. Under `op_lock`.
+var next_load_order: u64 = 1;
 
 fn instantiate(loader: *PluginLoader, known: *Known, runner: Loaded.Runner) !*Loaded {
     const allocator = loader.allocator;
@@ -340,6 +387,9 @@ fn instantiate(loader: *PluginLoader, known: *Known, runner: Loaded.Runner) !*Lo
         .schemas = schemas,
     };
     host.shared_schemas.publish(loaded);
+    // Before it starts, since that's when it asks for things
+    loaded.load_order = next_load_order;
+    next_load_order += 1;
 
     const started = core.timing.now();
     const result = startKind(loader, known, loaded);
@@ -369,7 +419,7 @@ fn dependencies(loader: *PluginLoader, known: *Known, out: *std.ArrayList(*Loade
     }
 }
 
-/// Wraith's, its own `schemas` folder's and those of the plugins it depends on, which are loaded already.
+/// Wraith's schemas, its own and its dependencies'.
 fn loadSchemas(loader: *PluginLoader, known: *Known, dir: []const u8) !?*host.schemas.Schemas {
     var depends: std.ArrayList(*Loaded) = .empty;
     defer depends.deinit(loader.allocator);
@@ -386,7 +436,6 @@ fn startKind(loader: *PluginLoader, known: *Known, loaded: *Loaded) anyerror!voi
     if (root.table == null) return error.PluginStartFailed;
     const schema = if (loaded.schemas) |s| s.text else api.wraith_sal;
 
-    // What the plugins it depends on offer, all of them in one list
     var depends: std.ArrayList(*Loaded) = .empty;
     defer depends.deinit(loader.allocator);
     try dependencies(loader, known, &depends);

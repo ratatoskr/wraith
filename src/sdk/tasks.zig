@@ -1,11 +1,5 @@
-//! Plugin tasks as fibers, over Wraith's own scheduling. A task starts on the render thread at the
-//! next frame. Waiting parks it on one of Wraith's promises, like `threads.nextDraw` or `threads.toGame`, and
-//! whichever thread Wraith carries that promise on resumes it there, at the same point: the render
-//! thread inside the plugin's frame, so it can still draw, the game thread at a tick, or a worker.
-//! `threads.toWorker` moves it to one of the plugin's own workers, so cancelling reaches its blocking
-//! calls. Code on the render and game threads holds up the game, so never block there.
-//!
-//! What's here is only the fibers. Other languages do the same with their own `await`.
+//! Plugin tasks as fibers over Wraith's promises. A wait parks the task and resumes it on whichever
+//! thread the promise settles on. Never block on the render or game thread.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -27,8 +21,7 @@ threadlocal var running: ?*Task = null;
 /// Set on the plugin's own workers, to their scheduler.
 threadlocal var own_worker: ?*Scheduler = null;
 
-/// The task running on this thread, if it's one of ours. Not inlined, since a task can move threads
-/// and a cached thread-local address would be the old thread's.
+/// The task on this thread. Not inlined: a task can move threads, staling a cached thread-local.
 pub noinline fn current() ?*Task {
     return running;
 }
@@ -77,8 +70,7 @@ pub const Task = struct {
     /// Set when it couldn't get to a worker.
     no_worker: bool = false,
 
-    /// From inside it. Comes back once it's on `where` again, woken by `wake`. The scheduler
-    /// stopping ends the wait.
+    /// From inside it. Returns once `wake` resumes it on `where`, or the scheduler stops.
     pub fn parkUntilWoken(self: *Task, where: Where) error{Canceled}!void {
         return self.yield(.signal, where);
     }
@@ -122,8 +114,8 @@ pub const Task = struct {
     }
 };
 
-/// Listens for the promise a task parked on. On the heap, since a queue may still run it after the
-/// task's gone. Whoever moves it from `parked` to `claimed` runs the task.
+/// Listens for a parked task's promise. Heap-allocated, since a queue may run it after the task's gone.
+/// Whoever moves it from `parked` to `claimed` runs the task.
 const Waiter = struct {
     task: *Task,
     state: Atomic(Phase) = .init(.registering),
@@ -187,8 +179,7 @@ pub const Scheduler = struct {
         self.tasks.deinit(self.allocator);
     }
 
-    /// Runs `func(args...)` as a task, from the next frame, or on a worker without frames. `func`
-    /// returns `void` or an error union, whose errors get logged.
+    /// Runs `func(args...)` as a task from the next frame, or on a worker without frames. Errors are logged.
     pub fn spawn(self: *Scheduler, comptime func: anytype, args: std.meta.ArgsTuple(@TypeOf(func))) SpawnError!void {
         if (self.canceled.load(.acquire)) return error.Canceled;
         const Args = @TypeOf(args);
@@ -327,8 +318,7 @@ pub const Scheduler = struct {
             if (ownWorker() == self) return true;
             return self.toOwnWorker(task);
         }
-        // A promise from Wraith carries on where it should. A wake can come from anywhere, so it
-        // goes there at the next frame or tick, like a frame wait.
+        // A wake can come from any thread, so it resumes at the next frame or tick
         if (task.park_on != .signal) return true;
         const f = self.owner.root.threads();
         const hop = if (task.where == .render) f.nextDraw() else f.nextTick();
@@ -374,8 +364,7 @@ pub const Scheduler = struct {
         task.free(task);
     }
 
-    /// Ends every task. Their waits fail with `error.Canceled` so their `defer`s run, here on this
-    /// thread. Call before the plugin's `stop`, and once nothing else will spawn.
+    /// Cancels every task, running their `defer`s on this thread. Call before `stop`, once nothing spawns.
     pub fn cancel(self: *Scheduler) void {
         if (self.canceled.swap(true, .acq_rel)) return;
         const acting = self.owner.enter();
@@ -455,9 +444,8 @@ pub fn Waited(comptime P: type) type {
     };
 }
 
-/// Waits for an `async` call into Wraith, like `try sdk.tasks.wait(w.images().load(path))`. A task
-/// parks and carries on where Wraith says, which for most calls is where it was. Elsewhere it
-/// blocks, so never on the render or game thread. A task that's cancelled lets go of it.
+/// Waits for an `async` Wraith call, like `try sdk.tasks.wait(w.images().load(path))`.
+/// Blocks outside a task, so never on the render or game thread.
 pub fn wait(promise: anytype) Waited(@TypeOf(promise)) {
     if (promise.table == null) return promise.take().?;
     const t = current() orelse {
@@ -469,8 +457,7 @@ pub fn wait(promise: anytype) Waited(@TypeOf(promise)) {
     return promise.take().?;
 }
 
-/// Parks `t` on `promise`, carrying on on `to`, like a hop in `threads.sal`. Even when it's settled,
-/// since it says where to go. `t` takes it after.
+/// Parks `t` on `promise`, resuming on `to`, even if settled. `t` takes ownership.
 pub fn park(t: *Task, promise: anytype, to: Where) error{Canceled}!void {
     const was = t.where;
     t.yield(.{ .promise = .{ .data = promise.data, .table = promise.table } }, to) catch |err| {

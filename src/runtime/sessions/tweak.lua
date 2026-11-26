@@ -1,15 +1,8 @@
--- Runs `.rwt` tweaks. A session compiles one into calls on `__t`, one line for each of the
--- tweak's, so whatever fails can say the tweak's own line. Code changes are made off and all
--- switched on in `done`, so a tweak that fails part way changes nothing, and `stop` undoes them.
--- Wraith's areas are globals here.
+-- Runs `.rwt` tweaks compiled into calls on `__t`, one per tweak line so errors say the tweak's line.
+-- Code changes all switch on in `done`, so a tweak that fails part way changes nothing.
 
 local sal = require("salamander")
---
--- A group's file runs its shared part like a lone tweak but in an env of its own, then each of
--- its tweaks in `part`, with an env and state of their own that fall back to the shared part's.
--- A nested group's shared part runs the same way, and what's in it falls back to its.
--- Under a group's `@globals shared`, plain global writes from what's in it go to that group's
--- env, but `off`, `tick` and the like stay in each part's own.
+-- Each part of a group's file gets an env that falls back to its group's.
 
 -- What a part owns. Its code changes, names, data and schema
 local function fresh(name, parent, env)
@@ -107,8 +100,7 @@ local function set_name(name, address)
   cur.own[#cur.own + 1] = name
 end
 
--- Location text like `game.exe+0x10`, `sig("48 8B ??", Rip)` or `[ptr]+8`, see
--- `addresses.resolve`. Names from @sym and @data come first
+-- Location text like `game.exe+0x10`; @sym and @data names come first
 local function scope()
   local list = {}
   for i, name in ipairs(cur.names) do list[i] = { name = name, address = cur.where[name] } end
@@ -239,8 +231,7 @@ local function later(line, target, src, options)
   cur.pending.code[#cur.pending.code + 1] = { line = line, src = src, slot = slot, request = options }
 end
 
--- A signature like `[Thiscall] f32 (Player* self, i32)`, in `.sal`'s way, with `fn` and a
--- name for each parameter
+-- A `.sal` signature like `[Thiscall] f32 (Player* self, i32)`
 local function signature_of(text)
   local open = text:find("(", 1, true)
   local close = text:match(".*()%)")
@@ -343,8 +334,7 @@ local function above_has(part, name)
   return false
 end
 
--- Reads and writes `part`'s cells, then whatever `parent` has. Its data gets placed first if
--- it's not yet
+-- Reads and writes `part`'s cells, then `parent`'s, placing its data first if needed
 local function data_of(part, parent)
   local function cell(name)
     if part.pending_names[name] then __t.flush(part) end
@@ -375,9 +365,7 @@ shared.data = data
 
 __t = {}
 
--- Gives the env a part's code runs in. The shared part's falls back to the globals, and each
--- of a group's tweaks or nested groups to its group's. `parent` is the nested group it's in.
--- `shares` is a group's `@globals shared`, and then plain writes from what's in it go to its env
+-- The env a part's code runs in, falling back to its group's. `shares` is `@globals shared`
 function __t.part(name, parent, shares)
   if name == "" then
     if shared.env == _G then shared.env = setmetatable({}, { __index = _G }) end
@@ -436,10 +424,7 @@ local bridge = {
   setOn = function(name, on) tweaks:setOn(absolute(name), on) end,
 }
 
--- `@use name`. A library with `install(env, options)` installs into this part's env, and the
--- name holds what it gave back. Else the name holds the library. Either way before the part's
--- own code. A handle with `toggled` hears every tweak switched, and its `stop` runs when the
--- part stops
+-- `@use name`. The name holds what `install` gave back, else the library. A handle's `stop` runs when the part stops
 function __t.use(line, name, title)
   local ok, lib = pcall(require, name)
   if not ok then fail(line, "@use " .. name .. ": " .. message_of(lib)) end
@@ -485,8 +470,7 @@ function __t.data(line, near, list)
   end
 end
 
--- Places the part's pending data and asm together, so the code always reaches it, then fills
--- in the data. Before anything needs it, or in `done`
+-- Places the part's pending data and asm together, so the code always reaches it
 function __t.flush(part)
   part = part or cur
   local p = part.pending

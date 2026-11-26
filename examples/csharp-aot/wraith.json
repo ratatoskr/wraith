@@ -3,7 +3,7 @@
   "id": "example_cs_aot",
   "kind": "plugin",
   "version": "0.1.0",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "provider": "cs",
   "title": "Example (C#, NativeAOT)",
   "summary": "Free shopping, Mira on demand and tailing without being seen, for Trails beyond the Horizon. Written in C#, compiled with NativeAOT.",

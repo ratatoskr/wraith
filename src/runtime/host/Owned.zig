@@ -1,6 +1,5 @@
-//! Things services made for owners that call into their code, cleaned up with the owner. Each is
-//! tagged with what its `Loaded` was `making`, so part of an owner, like one of a session's tweaks,
-//! can be stopped on its own.
+//! Things services made for owners that call into their code, cleaned up with the owner. Tagged with
+//! `Loaded.making`, so part of an owner, like a session's tweak, can be stopped alone.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -18,8 +17,7 @@ const List = struct {
     stop: *const fn (ctx: *anyopaque, owner: *const Owner, tag: u32) void,
 };
 
-/// Stops what `owner` made while its `Loaded` was making `tag`, in every list. Not 0, which is
-/// everything else.
+/// Stops what `owner` made while `making` was `tag`, in every list. Not 0, which is everything else.
 pub fn stopTagged(owner: *const Owner, tag: u32) void {
     std.debug.assert(tag != 0);
     var copy: [lists.len]List = undefined;
@@ -32,9 +30,8 @@ pub fn stopTagged(owner: *const Owner, tag: u32) void {
     for (copy[0..n]) |l| l.stop(l.ctx, owner, tag);
 }
 
-/// For things kept by owner somewhere else, like in `Names`: `gone` cleans an owner's up once
-/// `when` happens to it. Hold a lease while adding for one, which is null once it's going.
-/// `.closing` is for calls into its code, `.released` for data that's fine to read till then.
+/// Cleans up an owner's things kept elsewhere, like in `Names`, once `when` happens. Hold a lease while
+/// adding. `.closing` is for calls into its code, `.released` for data readable till then.
 pub fn OnGone(comptime when: enum { closing, released }, comptime gone: fn (*Owner) void) type {
     return struct {
         const Self = @This();
@@ -141,8 +138,7 @@ pub fn Owned(comptime Record: type) type {
             return null;
         }
 
-        /// Calls `call` on the first one still going that matches, whoever owns it, with its owner
-        /// kept from closing till it's done. False if there's none.
+        /// Calls `call` on the first live match, its owner kept from closing meanwhile. False if none.
         pub fn callAny(self: *Self, key: anytype, comptime match: fn (*Record, @TypeOf(key)) bool, comptime call: fn (*Record) void) bool {
             const record, const held = blk: {
                 self.lock.lockShared();

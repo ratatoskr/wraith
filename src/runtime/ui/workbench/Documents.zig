@@ -1,5 +1,5 @@
-//! The workbench's documents. Making, finding, drawing and closing them, and going places in them.
-//! All on its thread, or the test's, unless it says otherwise.
+//! The workbench's documents: making, finding, drawing and closing them, and going places in them.
+//! Its thread, or the test's, unless it says otherwise.
 
 const std = @import("std");
 const Names = @import("../../Names.zig");
@@ -65,8 +65,7 @@ pub fn go(self: *Workbench, request: Navigator.Request) void {
     }
 }
 
-/// Opening the workbench raises its window, and that can give the old tab focus back a frame or so
-/// after this one took it. So it's focused again once the window really has focus.
+/// Refocuses once the window really has focus, since raising it can hand focus back to the old tab.
 fn focusOnceActive(self: *Workbench, doc: *Document) void {
     self.focus_when_active = doc;
     self.focus_applied = false;
@@ -132,8 +131,7 @@ pub fn newDocument(self: *Workbench, kind: Kind) !*Document {
             .tweak => .{ .tweak = .{ .wb = self } },
         },
     };
-    // The part after ### is the ID, so a document keeps its spot in the layout. Ones made empty are
-    // new till they're saved somewhere, which renames them
+    // The part after ### is the ID, so a document keeps its spot. Empty ones are new till saved somewhere
     const label = switch (kind) {
         .code => "Disassembly",
         .memory => "Memory",

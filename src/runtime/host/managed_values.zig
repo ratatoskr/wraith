@@ -1,6 +1,5 @@
-//! Values going into and coming out of the game's C#, the same for Mono, IL2CPP and CoreCLR. The
-//! `managed` area's `invoke` and fields use these, and so do schemas' `[Managed]` functions. Only on
-//! a thread that can call in, like through `Managed.call`.
+//! Values going into and out of the game's C#, for Mono, IL2CPP and CoreCLR. Only on a thread that
+//! can call in, like through `Managed.call`.
 
 const std = @import("std");
 
@@ -61,8 +60,7 @@ pub fn fitsType(rt: *const Runtime, t: *Type, kind: W.Managed.ValueKind) bool {
     };
 }
 
-/// What `invoke` takes for one argument: a pointer to its value for value types, the object itself
-/// for the rest.
+/// What `invoke` takes for an argument: a pointer for value types, the object itself otherwise.
 pub fn argument(rt: *const Runtime, a: Allocator, t: *Type, arg: Value, slot: *u64) E!?*anyopaque {
     const whole: i64 = switch (arg.kind) {
         .integer => arg.integer,
@@ -158,9 +156,8 @@ pub fn call(rt: *const Runtime, a: Allocator, m: *Method, target: usize, args: [
     return .{ .value = try fromResult(rt, a, rt.returnType(m), result) };
 }
 
-/// A new object of `c` from its constructor `m`, which it gives back. CoreCLR's helper makes and
-/// constructs it in one go, as its garbage collector could move it in between. Mono's and IL2CPP's
-/// stay put, so it's made first and constructed after.
+/// A new object of `c` from constructor `m`. CoreCLR makes and constructs it in one go, since its GC
+/// could move it in between.
 pub fn construct(rt: *const Runtime, a: Allocator, c: *ManagedRuntime.Class, m: *Method, args: []const Value) E!Outcome {
     if (args.len > max_args) return error.Failed;
     var slots: [max_args]u64 = undefined;

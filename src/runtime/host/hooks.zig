@@ -132,8 +132,7 @@ pub fn createSlot(loaded: *Loaded, slot: usize, detour: usize, user_data: usize)
     return create(loaded, slot, .{ .slot = detour }, user_data);
 }
 
-/// Before the instruction at `target`, or in place of the code `options` says it replaces. Through
-/// `hooks.sal`, and `handler`'s released if it fails.
+/// Before the instruction at `target`, or replacing what `options` says. `handler`'s released if it fails.
 pub fn createMid(loaded: *Loaded, target: usize, handler: MidHandler, options: api.MidOptions) api.HookError!*api.Hook {
     return midWith(loaded, target, handler, options) catch |err| {
         handler.release();
@@ -522,8 +521,7 @@ const tests = struct {
         try testing.expectError(error.Gone, h.enable());
     }
 
-    /// What the named hook test's [Sig] finds, x times 3. It starts with bytes nothing else has, and the
-    /// nops leave room for a hook.
+    /// What the named hook test's [Sig] finds, x times 3. Unique bytes, and nops leave room for a hook.
     fn tripled() callconv(.naked) void {
         if (@sizeOf(usize) == 8) asm volatile (
             \\.intel_syntax noprefix

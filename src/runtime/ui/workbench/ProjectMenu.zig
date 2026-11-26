@@ -1,5 +1,4 @@
-//! The File menu. Saves the project to its folder, exports it as a mod, or opens, merges or starts
-//! another.
+//! The File menu: save, export as a mod, or open, merge or start another project.
 
 const ProjectMenu = @This();
 

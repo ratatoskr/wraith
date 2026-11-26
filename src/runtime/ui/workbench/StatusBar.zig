@@ -1,6 +1,5 @@
-//! Along the bottom of the Workbench, like an editor's. What's going on goes on the left, little
-//! things to glance at on the right. Hover an item for more, click it, or right-click it for its
-//! menu. Each frame, `begin` it after everything else in the window, then add `item`s.
+//! The Workbench's status bar: activity on the left, glanceable items on the right. Each frame,
+//! `begin` it after everything else in the window, then add `item`s.
 
 const StatusBar = @This();
 

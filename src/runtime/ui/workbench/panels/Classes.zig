@@ -1,5 +1,5 @@
-//! The game's C# classes, from its Mono or IL2CPP. Filter them by name, then see a class's fields
-//! and methods. Methods show as code, and `Class:Method` works anywhere an address does.
+//! The game's C# classes, from Mono or IL2CPP, with their fields and methods. `Class:Method` works
+//! anywhere an address does.
 
 const Classes = @This();
 

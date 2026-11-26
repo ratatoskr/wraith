@@ -1,5 +1,4 @@
-//! Cheat Engine's Lua layer, `ce`, in workbench sessions on the runtime's own areas. Tables the
-//! importer made run their Lua through it as tweaks.
+//! Tests for the `ce` Cheat Engine Lua layer in workbench sessions.
 
 const std = @import("std");
 const builtin = @import("builtin");

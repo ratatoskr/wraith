@@ -4,16 +4,16 @@ namespace Wraith;
 
 [Root] trait Api {
     Addresses addresses();
-    // The free camera, for game and engine plugins to hand it the game's camera
+    // The free camera, fed the game's camera by game and engine plugins
     FreeCamera camera();
     Clipboard clipboard();
     Code code();
     Config config();
-    // What Wraith's Timings and Signatures windows list, for native code
+    // The Timings and Signatures windows, for native code
     Diagnostics diagnostics();
-    // What the game shows: its camera's view, captures and frame times
+    // The game's view, captures and frame times
     Display display();
-    // Which game this is, its files and what it's made with
+    // Which game this is, its files and engine
     Game game();
     Schema schema();
     Hooks hooks();
@@ -21,23 +21,25 @@ namespace Wraith;
     ImGui imgui();
     Images images();
     Input input();
+    // Who holds the single-owner parts of the game, see `Lease`
+    Leases leases();
     Libraries libraries();
-    // Lists of the plugin's things that Wraith shows, for the player to pick from
+    // Pickable lists of the plugin's things
     Lists lists();
     Log log();
-    // The game's C# runtime, Mono or IL2CPP, for Unity games and others
+    // The game's C# runtime
     Managed managed();
     Memory memory();
-    // Posing characters, for game and engine plugins to hand it their skeletons
+    // Posing characters, fed skeletons by game and engine plugins
     Posing posing();
     Settings settings();
     Sound sound();
-    // Locks to share between plugins, threads and tasks
+    // Locks shared between plugins, threads and tasks
     Sync sync();
-    // Drawing and ticking each frame, and moving between the render thread, game thread and workers
+    // Per-frame draws and ticks, and hopping between threads
     Threads threads();
     Tweaks tweaks();
-    // The overlay: draw lists, toasts, the cursor and the game's input
+    // The overlay: draw lists, toasts, the cursor and game input
     Ui ui();
     Vfs vfs();
     Watches watches();

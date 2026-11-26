@@ -1,5 +1,5 @@
-//! The built-in `native` kind, for native plugins: a DLL that exports `wraith_plugin`. It's provided in
-//! Salamander's registry like any plugin's kind, so the loader finds every kind the same way.
+//! The built-in `native` kind: a DLL that exports `wraith_plugin`. Provided through Salamander's
+//! registry like any kind.
 
 const std = @import("std");
 

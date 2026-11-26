@@ -1,5 +1,4 @@
-//! Finds the plugins a plugin depends on, for its typings and its editor, as `core.deps` does, or
-//! else downloads the hub's into the cache.
+//! Finds a plugin's dependencies for typings and editors, like `core.deps`, else fetches the hub's.
 
 const std = @import("std");
 
@@ -103,7 +102,7 @@ test "downloads from the hub once, then uses the cache" {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(zip, &digest, .{});
     const index = try std.fmt.allocPrint(a,
-        \\{{ "format": 2, "generated": "now", "packages": [{{ "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{{ "version": "1.0.0", "apiVersion": 2, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1 }}] }}] }}
+        \\{{ "format": 2, "generated": "now", "packages": [{{ "id": "hello", "kind": "plugin", "author": "me", "title": "Hello", "versions": [{{ "version": "1.0.0", "apiVersion": 3, "url": "p/hello/1.0.0.zip", "sha256": "{s}", "size": 1 }}] }}] }}
     , .{&std.fmt.bytesToHex(digest, .lower)});
     try tmp.dir.createDirPath(io, "site/p/hello");
     try tmp.dir.createDirPath(io, "site/v2");

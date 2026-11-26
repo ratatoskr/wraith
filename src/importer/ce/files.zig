@@ -1,5 +1,4 @@
-//! The files a CE table carries in its `<Files>`, like sounds for `playSound`. CE deflates each
-//! one and writes it in its own base85, with its size first, or as hex in old tables.
+//! Decodes a CE table's `<Files>`: deflated, in CE's base85 with a size prefix, or hex in old tables.
 
 const std = @import("std");
 

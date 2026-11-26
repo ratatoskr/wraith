@@ -1,11 +1,8 @@
-// Wraith's SDK for C# plugins, next to the API that `wraith sdk cs types` generates. A plugin is a
-// class from WraithPlugin, which Entry.Create makes:
+// Wraith's SDK for C# plugins. Derive from WraithPlugin and return it from Entry.Create:
 //
 //     namespace Wraith { static partial class Entry { internal static partial WraithPlugin Create() => new MyPlugin(); } }
 //
-// Entry's `wraith_plugin` is the same one native plugins export, so the plugin runs the same JIT'd by the
-// `cs` kind or compiled with NativeAOT as a native one. Wraith's areas are each one's Instance, like
-// Wraith.Tweaks.Instance, once it's started.
+// Runs the same JIT'd or NativeAOT. Areas are each one's Instance, like Wraith.Tweaks.Instance.
 
 #nullable enable
 
@@ -25,10 +22,7 @@ public abstract class WraithPlugin
     /// <summary>As it unloads. What it gave Wraith, like hooks and settings, goes after this by itself.</summary>
     public virtual void Stop() { }
 
-    /// <summary>
-    /// What it offers for one of its schemas' [Service] traits, by the trait's name, like
-    /// Freecam.Camera.From(new MyCamera()).Raw.AsObject(). Default for none.
-    /// </summary>
+    /// <summary>Its object for a [Service] trait by name, like Freecam.Camera.From(new MyCamera()).Raw.AsObject().</summary>
     public virtual AnyObject Service(string trait) => default;
 }
 
@@ -42,10 +36,7 @@ public sealed class Context
         this.services = services;
     }
 
-    /// <summary>
-    /// What plugin, one this plugin depends on, offers as T, a [Service] trait in its schemas, or null
-    /// if it doesn't. T.Instance gives the same, throwing if there's none.
-    /// </summary>
+    /// <summary>What a dependency offers as [Service] trait T, or null. T.Instance throws instead.</summary>
     public T? Service<T>(string plugin) where T : class, ITrait<T>
     {
         foreach (var s in services)
@@ -59,10 +50,7 @@ public sealed class Context
 /// <summary>Typed hooks on what the schemas declare, like the other languages have.</summary>
 public partial class Hooks
 {
-    /// <summary>
-    /// Hooks a function the schemas declare, like GameStateManager.Fns.SpendMira. The handler takes its
-    /// arguments, and the hook's details first if it wants them, like (hook, self, amount) => ...
-    /// </summary>
+    /// <summary>Hooks a schema function, like GameStateManager.Fns.SpendMira, with (hook, self, amount) => ...</summary>
     public Hook Hook<H, W>(DeclaredFunction<H, W> target, H handler, Hook.Options? options = null) where H : Delegate where W : Delegate =>
         Named(target.Name, target.Lower(handler), options ?? new())!;
 

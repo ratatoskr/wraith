@@ -1,5 +1,4 @@
-//! The workbench's command keys, the same in every view. These are their defaults. The shell
-//! registers each as a setting, so they're picked in Settings like any other key.
+//! The workbench's command keys and their defaults. The shell registers each as a setting.
 
 const wraith_platform = @import("wraith_platform");
 

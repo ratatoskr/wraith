@@ -1,5 +1,5 @@
-// A thread's registers, as hooks and watches see them, laid out like tuft's CpuContext. Each kind of
-// code has its own, so 64-bit plugins see rax and 32-bit ones see eax.
+// A thread's registers as hooks and watches see them, laid out like tuft's CpuContext. 64-bit
+// plugins see rax, 32-bit ones eax.
 
 namespace Wraith;
 
@@ -46,7 +46,7 @@ struct Cpu {
     u64 rcx;
     u64 rax;
     u64 rflags;
-    // Where it runs next. A mid hook can change it to carry on somewhere else.
+    // Where it runs next. A mid hook can change it.
     u64 rip;
 }
 
@@ -69,6 +69,6 @@ struct Cpu {
     u32 ecx;
     u32 eax;
     u32 eflags;
-    // Where it runs next. A mid hook can change it to carry on somewhere else.
+    // Where it runs next. A mid hook can change it.
     u32 eip;
 }

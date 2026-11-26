@@ -1,5 +1,4 @@
-//! Plugins you're building, listed in `settings\dev_plugins.zon`. Switched off ones move to
-//! `dev_plugins_off.zon` beside it, so they can go back on. Older Wraiths just don't see those.
+//! Plugins you're building, in `settings\dev_plugins.zon`. Disabled ones go in `dev_plugins_off.zon`.
 
 const std = @import("std");
 
@@ -168,9 +167,7 @@ pub const Followed = struct {
 /// Where a build of a plugin's source folder is, by these names inside it, or the folder itself.
 const build_folders = [_][]const u8{ "zig-out", "dist" };
 
-/// The plugins `folders`' devDepends name, and theirs in turn, that aren't in `folders`. Each is in its
-/// build folder, like zig-out, if it has one. A dev plugin's own wraith.json can leave devDepends
-/// out, as builds do, so the source one beside it counts too.
+/// Plugins reachable through `folders`' devDepends that aren't in `folders`, at their build folder if any.
 pub fn followed(arena: std.mem.Allocator, io: std.Io, folders: []const []const u8) ![]const Followed {
     var names: std.ArrayList([]const u8) = .empty;
     var dirs: std.ArrayList([]const u8) = .empty;
@@ -197,8 +194,7 @@ pub fn followed(arena: std.mem.Allocator, io: std.Io, folders: []const []const u
     return out.items;
 }
 
-/// The folder with `name`'s wraith.json whose devDepends count: `dir` if it has some, or the one
-/// it was built from just above it.
+/// `dir` if its wraith.json has devDepends, else the source folder it was built from.
 fn sourceOf(arena: std.mem.Allocator, io: std.Io, dir: []const u8, name: []const u8) ?[]const u8 {
     const own = deps.listed(arena, io, dir) catch return null;
     if (own.paths.map.count() > 0) return dir;

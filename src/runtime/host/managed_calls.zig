@@ -1,11 +1,6 @@
-//! Schemas' `[Managed]` methods, called like any other function a schema declares. Each is a native
-//! function of its schema type, from salamander's `bind.function`, that converts what it's given, calls
-//! the C# method on a thread that can, and converts what comes back. The same for Mono, IL2CPP and
-//! CoreCLR, and for every language, since they all call it like native code.
-//!
-//! Strings it gives back are good till the thread's next call. Objects go both ways as their
-//! addresses, which the garbage collector can move, so `hold` ones to keep. A method that throws, or
-//! a call before the game's C# is running, says so in the log and gives zero.
+//! Schemas' `[Managed]` methods: native functions that convert, call the C# method on a thread that
+//! can, and convert back. Returned strings last till the thread's next call. Objects can move, so
+//! `hold` ones to keep. A throw, or no C# running yet, logs and gives zero.
 
 const std = @import("std");
 
@@ -135,8 +130,8 @@ var made: std.StringHashMapUnmanaged(usize) = .empty;
 
 pub const Error = error{ NotFound, OutOfMemory };
 
-/// The native function for `name`, a `[Managed]` method `class` has as `member`, of type `function`.
-/// If the game's C# is running, it has to have the method now. Else it's looked for on first call.
+/// The native function for `name`, `class`'s `[Managed]` `member`. Must exist now if C# is running,
+/// else it's looked up on first call.
 pub fn entry(name: []const u8, class: []const u8, member: []const u8, s: Schema, f: Schema.Function, function: *const bind.Function) Error!usize {
     const key = try std.fmt.allocPrint(gpa, "{s}:{s}#{x}", .{ class, member, function.hash });
     lock.lock();

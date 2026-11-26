@@ -1,5 +1,5 @@
-//! Keybinds service. Each is a key setting in the registry, its id the owner's name then the
-//! action's, so it's listed in Wraith's settings and the key picked there wins.
+//! Keybinds service. Each is a registry key setting named after its owner and action, so the
+//! player can rebind it in Wraith's settings.
 
 const std = @import("std");
 

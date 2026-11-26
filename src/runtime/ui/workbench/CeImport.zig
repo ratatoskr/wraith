@@ -1,5 +1,5 @@
-//! File > Import Cheat Engine table. The table's read and converted on a thread of its own, and
-//! the render thread only takes the finished files as the project.
+//! File > Import Cheat Engine table. Read and converted on its own thread; the render thread only
+//! takes the finished files as the project.
 
 const CeImport = @This();
 
@@ -110,8 +110,7 @@ fn convert(io: std.Io, gpa: std.mem.Allocator, result: *Result, path: []const u8
     result.stats = project.stats;
 }
 
-/// Render thread, every frame, inside the workbench's window. Takes a finished import as the
-/// project, then says how it went. True when it became the project.
+/// Render thread, every frame, inside the workbench's window. True when an import became the project.
 pub fn poll(self: *CeImport, wb: *Workbench) bool {
     const result = blk: {
         self.lock.lock();

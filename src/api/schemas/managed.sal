@@ -1,17 +1,10 @@
-// The game's C# runtime, Mono or IL2CPP, which Unity games and some others run their code on, or
-// .NET's CoreCLR. Classes go by their C# names, like `Game.Player`, `Player` with no namespace, or
-// `Game.Player/Stats` for one nested in another.
+// The game's C# runtime: Mono, IL2CPP or CoreCLR. Classes go by C# name, like `Game.Player` or
+// `Game.Player/Stats` for nested ones. Address text takes `Class:Method+0x3a` too.
 //
-// The first image with it wins. Any thread, but each call waits its turn on Wraith's one thread that's
-// attached to the runtime, so look things up once rather than every frame. Classes, fields and
-// methods it finds don't move. Text and slices it gives are good till the thread's next call into
-// Wraith.
+// Any thread, but calls queue on Wraith's one runtime thread, so look things up once. Classes, fields
+// and methods don't move. Returned text and slices are good till the thread's next call into Wraith.
 //
-// Objects are their addresses. Mono's and IL2CPP's stay put, but CoreCLR's garbage collector moves
-// them, so there an object's address is only good till it next runs. `hold` one you keep, and get
-// where it is now from `heldAt` before each use.
-//
-// Address text takes `Class:Method` too, like `Game.Player:Update+0x3a`, for the method's code.
+// Objects are addresses. CoreCLR's GC moves them, so `hold` ones you keep and use `heldAt` before each use.
 
 namespace Wraith;
 
@@ -22,7 +15,7 @@ error ManagedError {
     // Not an object or a string
     Unreadable,
     Failed,
-    // `invoke`'s method threw, and what it says is the error's message
+    // `invoke`'s method threw, and the message says what
     Threw,
 }
 
@@ -32,9 +25,8 @@ namespace Managed {
     // Which of `Value`'s fields it is.
     enum ValueKind : u8 { none, flag, integer, number, text, object }
 
-    // An argument to `invoke`, or what it gives back. Integers go for any whole number type or enum,
-    // numbers for floats, text for strings, and objects for everything else, as their address. A struct
-    // or a `ref` parameter is an object too, the address of its bytes.
+    // An `invoke` argument or result. Integers cover whole numbers and enums, numbers floats, text
+    // strings, and objects the rest by address, structs and `ref` parameters included.
     struct Value {
         ValueKind kind;
         bool flag;
@@ -51,9 +43,9 @@ namespace Managed {
         string name;
         // Like `Assembly-CSharp.dll`
         string image;
-        // Its parent's full name. Empty for none.
+        // Its parent's full name, or empty
         string parent;
-        // Bytes in one, object header and all
+        // Bytes in one, header included
         u32 size;
         bool value_type;
     }
@@ -62,8 +54,8 @@ namespace Managed {
         string name;
         // Like `System.Int32` or `System.Collections.Generic.List<Game.Item>`
         string type;
-        // From the start of the object, header and all, even in value types. For statics, from where
-        // the class keeps them, which `staticAddress` adds in.
+        // From the object's start, header included, even in value types. Statics: from the class's
+        // static data, which `staticAddress` adds in.
         usize offset;
         bool is_static;
         // A `const`, with no storage
@@ -80,10 +72,9 @@ namespace Managed {
 }
 
 trait Managed {
-    // Which runtime it is, `none` till it's running
+    // `none` till it's running
     Kind runtimeKind();
-    // Waits till the game's started its runtime, which is after plugins load. Fails with
-    // `NotRunning` if this game has none Wraith can use.
+    // Waits till the game's started its runtime, after plugins load. `NotRunning` if it has none.
     async void!ManagedError running();
     // Loaded images, like `Assembly-CSharp.dll`
     []string!ManagedError images();
@@ -96,51 +87,37 @@ trait Managed {
     []Method!ManagedError methods(string class_name);
     // Looks in parents too
     usize!ManagedError fieldOffset(string class_name, string field);
-    // Where a static field is now. May run its class's static constructor. `Unsupported` for
-    // thread statics, which each thread has its own of, and IL2CPP before Unity 2019 or so.
+    // Where a static is now. May run the static constructor. Salamander's built-in `Unsupported` for
+    // thread statics and IL2CPP before Unity 2019 or so.
     usize!ManagedError staticAddress(string class_name, string field);
-    // A method's code, to hook or call, with `params` parameters or any number if it's -1. Looks in
-    // parents too. Under Mono this compiles it if nothing's run it yet.
+    // A method's code, with `params` parameters or any if -1. Looks in parents too. Mono compiles it if needed.
     usize!ManagedError findMethod(string class_name, string name, i32 params);
-    // The native function behind an `extern` method, like Unity's engine calls such as
-    // `UnityEngine.Transform` `get_position_Injected`. They're the same functions under both
-    // runtimes, so a plugin can call them directly with their C signature, `this` first. Only on the
-    // game's main thread for Unity's.
+    // The native function behind an `extern` method, callable with its C signature, `this` first.
+    // Unity's only on the game's main thread.
     usize!ManagedError icall(string class_name, string method);
-    // The `System.Type` object for a class, for C# that takes one, like Unity's `FindObjectsOfType`.
+    // The `System.Type` object for a class.
     usize!ManagedError typeObject(string class_name);
-    // Calls the native function at `function`, which takes nothing and gives a pointer-sized value,
-    // on Wraith's thread attached to the runtime. For engine calls that make C# objects, which
-    // need a thread the runtime knows. Not for Unity's main-thread ones.
+    // Calls `function`, taking nothing and giving a pointer-sized value, on Wraith's runtime thread.
+    // Not for Unity's main-thread calls.
     usize!ManagedError callNative(usize function);
-    // Calls a C# method by name, like `invoke("System.Int32", "Parse", 0, [text "42"])`, picking
-    // the overload with as many parameters whose types fit the arguments best. `target` is the
-    // object for an instance method, or 0 for a static one. It runs right here on a thread the
-    // runtime knows, like Unity's main thread in `frame.onTick` with the `unity` plugin, which
-    // Unity's own methods need. Anywhere else it runs on Wraith's own thread. If it throws, it fails
-    // with `Threw`, saying what. Structs come back as their boxed object. `.ctor` with a `target`
-    // of 0 makes a new object, like `invoke("UnityEngine.GameObject", ".ctor", 0, [text "Cam"])`,
-    // and gives it back.
+    // Calls a C# method by name, picking the best fitting overload. `target` is 0 for statics. Runs
+    // here if the runtime knows this thread, else on Wraith's. Structs come back boxed. `.ctor` with
+    // a 0 `target` makes a new object.
     Value!ManagedError invoke(string class_name, string method, usize target, []Value args);
-    // Keeps the C# object at `object` from being collected till `release`. The garbage collector
-    // doesn't see what a plugin keeps in its own memory, so hold anything kept past the call it came
-    // from, like Unity objects kept between frames. Any thread, straight away. They're released
-    // when the plugin goes.
+    // Keeps the object from being collected till `release`. Hold anything kept past the call it came
+    // from. Released when the plugin goes. Any thread, straight away.
     u32!ManagedError hold(usize object);
-    // Lets go of a `hold`. Fine to call twice.
+    // Fine to call twice.
     void release(u32 handle);
-    // Where a `hold`'s object is now, which only changes under CoreCLR. Any thread, straight away.
+    // Where a held object is now, which only changes under CoreCLR. Any thread, straight away.
     usize!ManagedError heldAt(u32 handle);
-    // The full name of the class of the object at `object`
+    // The object's class's full name
     string!ManagedError classOf(usize object);
     // The `System.String` at `address`, as UTF-8
     string!ManagedError readString(usize address);
-    // An instance field of the object at `object`, by name, looking in its parents too. Whole
-    // numbers, enums, floats, bools and strings come back as themselves. A struct comes back as the
-    // address of its bytes inside the object, and anything else as its object. Any thread.
+    // An instance field by name, parents included. Primitives and strings as themselves, structs as
+    // the address of their bytes, the rest as objects. Any thread.
     Value!ManagedError getField(usize object, string field);
-    // Sets one, through the runtime so the garbage collector sees new references. Text makes a new
-    // string, and an object or a struct's address is copied in. Any thread, but a Unity object's
-    // own fields want Unity's main thread.
+    // Sets one through the runtime so the GC sees it. Any thread, but Unity objects want the main thread.
     void!ManagedError setField(usize object, string field, Value value);
 }

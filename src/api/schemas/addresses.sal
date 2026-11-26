@@ -1,5 +1,4 @@
-// The game's address list. Entries are found by id, like `player.health`. A plugin's own are listed
-// under its name, like `kai.health`. Errors say what's wrong. Any thread.
+// The game's address list, by id like `player.health`. A plugin's own go under its name. Any thread.
 
 namespace Wraith;
 
@@ -15,24 +14,23 @@ error AddressError {
 }
 
 namespace Addresses {
-    // A name for an address, like a tweak's `@data`, that location text and asm can use.
+    // A name for an address, like a tweak's `@data`, for location text and asm.
     struct Name {
         string name;
         usize address;
     }
 
-    // Which copy of the game's code an address was worked out from. `snapshot` is copied as Wraith
-    // starts, `disk` is the game's exe file, for code that something hooked before then
+    // Which copy of the game's code an address came from: `snapshot` is taken at startup, `disk` is the exe.
     enum Source : u8 { live, snapshot, disk }
 
-    // Which copies lookups may use, tried live first, then the snapshot, then disk
+    // Which copies lookups may use, tried live, then snapshot, then disk.
     struct Sources {
         bool live;
         bool snapshot;
         bool disk;
     }
 
-    // Where something is, and which copy of the code it was worked out from
+    // An address and which copy of the code it came from.
     struct Found {
         usize address;
         Source source;
@@ -41,9 +39,9 @@ namespace Addresses {
     struct Entry {
         // Unique for the plugin
         string id;
-        // Location text, like `0x7FF6A0001000`, `game.exe+0x1234` or `sig("48 8B ??", Rip)`
+        // Location text, like `game.exe+0x1234` or `sig("48 8B ??", Rip)`
         string address;
-        // Pointers to follow from there, each one's offset added after
+        // Pointers to follow, each one's offset added after
         []i64 offsets;
         string name;
         // What's there, like `u32` or a schema type's name
@@ -60,13 +58,11 @@ trait Addresses {
     usize!AddressError resolve(string text, []Name names);
     // Until it's removed or the plugin goes. Not saved.
     void!AddressError add(Entry entry);
-    // Only the plugin's own, by the id it added.
+    // Only the plugin's own.
     void remove(string id);
-    // Like `resolve`, saying which copy of the code it was found in. Something hooked code found in
-    // the snapshot or on disk, so its bytes are different now.
+    // Like `resolve`, saying which copy it was found in. Non-live means the code's hooked now.
     Found!AddressError find(string text, []Name names);
-    // Which copies this plugin's lookups may use: sigs in its schemas, `resolve` and `find`. Till
-    // it's called, Wraith's setting says. A sig's own `Sources(..)` wins over both.
+    // Which copies this plugin's lookups may use. Defaults to Wraith's setting; a sig's `Sources(..)` wins.
     void setSources(Sources sources);
     // What this plugin's lookups may use now.
     Sources activeSources();

@@ -1,5 +1,4 @@
-//! A dropdown of choices with a filter box when there are lots, and Shift+click to type a value
-//! that isn't listed. Tweak fields, the struct editor and plugins share it.
+//! A dropdown with a filter for long lists, and Shift+click to type an unlisted value.
 
 const std = @import("std");
 
@@ -24,8 +23,7 @@ pub fn choiceText(buf: []u8, hex: bool, value: f64, label: ?[]const u8) [:0]cons
     return (if (hex) std.fmt.bufPrintSentinel(buf, "{s} (0x{X})", .{ l, id }, 0) else std.fmt.bufPrintSentinel(buf, "{s} ({d})", .{ l, id }, 0)) catch "";
 }
 
-/// The number box a Shift+clicked dropdown turns into. Enter or clicking away sets it, Escape
-/// doesn't, and either way it's a dropdown again.
+/// The number box a Shift+clicked dropdown becomes. Enter or click away sets it, Escape cancels.
 fn typeIn(label: [:0]const u8, hex: bool) ?f64 {
     if (settling > 0) ui.focusNext();
     const fmt: [:0]const u8 = if (hex) "%llX" else "%lld";
@@ -42,8 +40,7 @@ fn typeIn(label: [:0]const u8, hex: bool) ?f64 {
     return null;
 }
 
-/// `choices` is a slice of anything with `value: f64` and `label: []const u8`, shown like
-/// `Van (1)`. The one picked if it changed.
+/// `choices` items have `value: f64` and `label`. Returns the pick if it changed.
 pub fn choose(label: [:0]const u8, choices: anytype, value: f64, hex: bool) ?f64 {
     const id = ui.getId(label);
     if (typing == id) return typeIn(label, hex);

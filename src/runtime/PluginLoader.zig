@@ -1,5 +1,4 @@
-//! Loads plugins, one folder each, each run by a `PluginKind`. Finding them is in `plugins/discovery.zig`,
-//! loading and unloading in `plugins/lifecycle.zig`, and the worker that runs jobs in `plugins/Jobs.zig`.
+//! Loads plugins, one folder each, each run by a `PluginKind`. The parts live in `plugins/`.
 
 const PluginLoader = @This();
 
@@ -48,6 +47,8 @@ op_lock: tuft_sys.sync.RwLock = .{},
 jobs: Jobs = .{},
 /// Turned off by the user, while `start` runs. A plugin that needs one fails instead of loading it.
 skipping: []const []const u8 = &.{},
+/// While `start` runs, when plugins that'll load haven't yet, for `supersedes`.
+starting: bool = false,
 
 /// The game, for which plugins and projects are for it.
 pub fn here(self: *const PluginLoader) core.manifest.Here {
@@ -127,6 +128,10 @@ pub fn start(self: *PluginLoader, skip: []const []const u8) !void {
     Managed.global.listen(self, coreClrReady);
     self.op_lock.lock();
     defer self.op_lock.unlock();
+    self.skipping = skip;
+    defer self.skipping = &.{};
+    self.starting = true;
+    defer self.starting = false;
     try discovery.scan(self);
 
     var names: std.ArrayList([]const u8) = .empty;
@@ -143,8 +148,6 @@ pub fn start(self: *PluginLoader, skip: []const []const u8) !void {
             try names.append(self.allocator, k.name);
         }
     }
-    self.skipping = skip;
-    defer self.skipping = &.{};
     for (names.items) |name| {
         if (discovery.isListed(skip, name)) {
             log.info("Skipping disabled plugin {s}", .{name});
@@ -154,8 +157,8 @@ pub fn start(self: *PluginLoader, skip: []const []const u8) !void {
             // Something that needed it loaded it already
             error.AlreadyLoaded => {},
             // Already logged by `loadNow`
-            error.UnsupportedGame, error.UnsupportedArch, error.NeedsNewerWraith, error.Revoked, error.OutdatedApi, error.KindNotFound, error.WaitingForDotnet => {},
-            error.MissingDependency, error.DependencyOff, error.DependencyFailed, error.DependencyTooOld, error.DependencyCycle => {},
+            error.UnsupportedGame, error.UnsupportedArch, error.NeedsNewerWraith, error.Revoked, error.OutdatedApi, error.Superseded, error.KindNotFound, error.WaitingForDotnet => {},
+            error.MissingDependency, error.DependencyOff, error.DependencyFailed, error.DependencyTooOld, error.DependencyCycle, error.DependencySuperseded => {},
             else => log.err("Couldn't load plugin {s}: {t}", .{ name, err }),
         };
     }
@@ -500,8 +503,7 @@ const tests = struct {
         try testing.expectEqual(6, luaTarget(2, 3));
     }
 
-    /// x times `n`, found by the named hook test's schema from the bytes it starts with. The nops leave
-    /// room for a hook.
+    /// x times `n`, found by its leading bytes. The nops leave room for a hook.
     fn Planted(comptime n: u8) type {
         const x64 = std.fmt.comptimePrint(
             \\.intel_syntax noprefix
@@ -769,18 +771,18 @@ const tests = struct {
         var driving: Loaded = undefined;
         driving.initForTest(testing.allocator, "driver");
         defer driving.deinitForTest();
-        const driver = try host.frame.driveTicks(&driving);
-        defer driver.release();
+        const ticks = try host.leases.claim(&driving, .ticks, null, null);
+        defer ticks.release();
         const Game = struct {
-            fn tick(d: *host.frame.Driver, stopping: *std.atomic.Value(bool)) void {
+            fn tick(d: *Loaded, stopping: *std.atomic.Value(bool)) void {
                 while (!stopping.load(.acquire)) {
-                    d.tick();
+                    host.frame.tickFrom(d);
                     sys.thread.sleepMs(1);
                 }
             }
         };
         var stopping: std.atomic.Value(bool) = .init(false);
-        const game = try std.Thread.spawn(.{}, Game.tick, .{ driver, &stopping });
+        const game = try std.Thread.spawn(.{}, Game.tick, .{ &driving, &stopping });
         defer {
             stopping.store(true, .release);
             game.join();
@@ -1083,6 +1085,62 @@ const tests = struct {
         try testing.expectEqual(.unloaded, install.info("fixture").?.state);
         try (try loader.load("fixture")).wait();
         try testing.expectEqual(1, loader.count());
+    }
+
+    /// `fixture` as a Unity plugin, and `kai`, the game's, which stands in for it.
+    fn standIn(install: *Install) !void {
+        const options = @import("test_options");
+        try install.init(.{ .plugins = &.{ .{ "fixture", options.fixture_plugin }, .{ "kai", options.c_plugin } } });
+        try install.pluginManifest("fixture", "\"gameEngine\": { \"id\": \"unity\" }");
+        // Read before `fixture`, or after, it still stands in for it
+        try install.pluginManifest("kai", "\"game\": { \"ids\": [\"kai\"] }, \"supersedes\": [\"fixture\"]");
+        install.loader.game_id.set("kai");
+        install.loader.game_engine.set("unity");
+    }
+
+    test "a game's plugin stands in for the engine plugin it supersedes" {
+        var install: Install = undefined;
+        try standIn(&install);
+        defer install.deinit();
+        const loader = &install.loader;
+
+        try loader.start(&.{});
+        const info = install.info("fixture").?;
+        try testing.expectEqual(.unsupported, info.state);
+        try testing.expectEqual(error.Superseded, info.last_error.?);
+        try testing.expectEqualStrings("kai", info.superseded_by.get());
+        try testing.expectEqual(null, loader.find("fixture"));
+    }
+
+    test "a game's plugin loaded later takes the engine plugin it stands in for off, till it goes" {
+        var install: Install = undefined;
+        try standIn(&install);
+        defer install.deinit();
+        const loader = &install.loader;
+        try loader.start(&.{"kai"});
+        try testing.expectEqual(.loaded, install.info("fixture").?.state);
+        try (try loader.load("kai")).wait();
+        try testing.expectEqual(.loaded, install.info("kai").?.state);
+        const off = install.info("fixture").?;
+        try testing.expectEqual(.unsupported, off.state);
+        try testing.expectEqual(error.Superseded, off.last_error.?);
+        try testing.expectError(error.Superseded, (try loader.load("fixture")).wait());
+
+        // Back to off, not on, since it was kept off for a reason
+        try (try loader.unload("kai")).wait();
+        try testing.expectEqual(.unloaded, install.info("fixture").?.state);
+        try (try loader.load("fixture")).wait();
+        try testing.expectEqual(.loaded, install.info("fixture").?.state);
+    }
+
+    test "the engine plugin loads once the game's plugin that stands in for it is off" {
+        var install: Install = undefined;
+        try standIn(&install);
+        defer install.deinit();
+        const loader = &install.loader;
+
+        try loader.start(&.{"kai"});
+        try testing.expectEqual(.loaded, install.info("fixture").?.state);
     }
 };
 

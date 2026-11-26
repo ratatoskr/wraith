@@ -1,6 +1,5 @@
-//! Mods from the hub alongside what's installed: what the CLI, the app and the overlay list,
-//! install and update. Mods are plugins and projects, and both go in the same folder. Each takes the
-//! hub's index, so an operation asks the hub once.
+//! Hub mods alongside installed ones: listing, installing and updating for the CLI, app and overlay.
+//! Each call takes the hub index, so an operation fetches it once.
 
 const std = @import("std");
 
@@ -29,17 +28,14 @@ pub const Listed = struct {
     why: ?[]const u8,
     /// Newest version this Wraith can run. Null if it can't.
     latest: ?[]const u8,
-    /// The Wraith it needs, if that's why `latest` is null. Empty when it's for a newer Wraith's
-    /// API, without saying which.
+    /// The Wraith it needs, if that's why `latest` is null. Empty if unknown.
     needs_wraith: ?[]const u8,
-    /// Its newest isn't made for this Wraith's API, see `core.manifest.api_version`, so it's
-    /// waiting on its author to update it.
+    /// Its newest targets another API version, so it's waiting on its author.
     outdated: bool = false,
     installed: ?[]const u8,
     /// The installed copy was pulled. `update` takes it out, and Wraith won't load it.
     revoked: bool,
-    /// Other mods use it and it comes with them, so it's not one to offer on its own. It's still
-    /// here when installed, so it gets updated.
+    /// Only installed as a dependency, so not offered on its own. Still listed when installed.
     library: bool = false,
     /// Wraith keeps it installed for games made with its engine, so it's not one to uninstall.
     essential: bool = false,
@@ -77,12 +73,11 @@ pub const Listing = struct {
 pub const MadeWith = struct {
     /// Its id, which the mods for its engine are listed under. Null for one Wraith has no id for.
     game: ?[]const u8 = null,
-    /// Its `game_engine` and `game_engine_variant`.
+    /// Engine, variant and exe (if known), for finding the game's essentials.
     here: core.manifest.Here,
 };
 
-/// Our picks, ones for any game, ones for `games`, by any id Wraith knows them by, and ones for the
-/// game engines in `made_with`, plus what's installed. `wraith` is the running Wraith's version.
+/// Picks, any-game mods, mods for `games` and their engines, plus what's installed.
 pub fn list(arena: std.mem.Allocator, io: std.Io, index: Index, mods_dir: []const u8, wraith: []const u8, games: []const []const u8, made_with: []const MadeWith) !Listing {
     var listed: std.ArrayList(Listed) = .empty;
     for (index.packages) |*p| {
@@ -116,8 +111,7 @@ fn forEngine(p: registry.Package, made_with: []const MadeWith) bool {
     return false;
 }
 
-/// By its newest version this Wraith runs, else its newest, to say why not. Null with nothing out
-/// but yanked ones.
+/// Its newest version this Wraith runs, else its newest. Null if all are yanked.
 fn listedOf(arena: std.mem.Allocator, p: registry.Package, wraith: []const u8, games: []const []const u8, made_with: []const MadeWith) !?Listed {
     const runs = registry.latest(p, wraith, null);
     const v = runs orelse p.newest() orelse return null;
@@ -190,8 +184,7 @@ pub const Where = struct {
     }
 };
 
-/// Null `version` means the newest this Wraith runs. What it depends on gets installed too, unless
-/// it's there already. Returns the version installed.
+/// Installs with missing dependencies; null `version` means newest compatible. Returns the version.
 pub fn install(arena: std.mem.Allocator, io: std.Io, index: Index, where: Where, id: []const u8, version: ?[]const u8) ![]const u8 {
     var seen: std.ArrayList([]const u8) = .empty;
     return installWith(arena, io, index, where, id, version, &seen);
@@ -273,8 +266,7 @@ pub const Updated = struct {
     version: ?[]const u8,
 };
 
-/// Every installed one with a newer version, and takes out any the hub pulled. Failures get
-/// logged and the rest still update. Null `only` means all of them.
+/// Updates installed mods and removes pulled ones; failures are logged. Null `only` means all.
 pub fn update(arena: std.mem.Allocator, io: std.Io, index: Index, where: Where, only: ?[]const u8) ![]const Updated {
     var updated: std.ArrayList(Updated) = .empty;
     for (try registry.installedAll(arena, io, where.mods_dir)) |have| {
@@ -294,33 +286,63 @@ pub fn update(arena: std.mem.Allocator, io: std.Io, index: Index, where: Where, 
     return updated.items;
 }
 
-/// A game engine's official plugin that's missing or has a newer version.
+/// A missing or outdated essential: an engine's official plugin, or a game's replacement for it.
 pub const Essential = struct {
     id: []const u8,
     title: []const u8,
     /// Null if it's not installed yet.
     installed: ?[]const u8,
     latest: []const u8,
+    /// The game engine it's for, like `unity`. Null for one that's for a game.
+    game_engine: ?[]const u8,
 };
 
-/// The essential mods for `made_with`'s game engines that need installing or updating. Only
-/// versions this Wraith loads that the hub hasn't pulled, and a copy put there by hand is left
-/// alone. Null `arch` means either.
+/// Essentials for `made_with` that need installing or updating; hand-placed copies are left alone.
 pub fn essentials(arena: std.mem.Allocator, io: std.Io, index: Index, where: Where, made_with: []const MadeWith, arch: ?registry.Arch) ![]const Essential {
     var out: std.ArrayList(Essential) = .empty;
     for (index.packages) |p| {
         if (!p.essential) continue;
         const newest = registry.latest(p, where.wraith, arch) orelse continue;
-        const target = newest.gameEngine orelse continue;
         const wanted = for (made_with) |m| {
-            if (target.matches(m.here)) break true;
+            if (essentialIn(newest, m) and !supersededIn(index, p.id, newest, m, where.wraith, arch)) break true;
         } else false;
         if (!wanted or index.isRevoked(newest.sha256)) continue;
         const have = try registry.installed(arena, io, where.mods_dir, p.id);
         if (have) |h| {
             if (registry.compareVersions(newest.version, h.version) != .gt) continue;
         } else if (try putThere(arena, io, where.mods_dir, p.id)) continue;
-        try out.append(arena, .{ .id = p.id, .title = if (p.title.len > 0) p.title else p.id, .installed = if (have) |h| h.version else null, .latest = newest.version });
+        try out.append(arena, .{
+            .id = p.id,
+            .title = if (p.title.len > 0) p.title else p.id,
+            .installed = if (have) |h| h.version else null,
+            .latest = newest.version,
+            .game_engine = if (newest.gameEngine) |e| e.id else null,
+        });
     }
     return out.items;
+}
+
+/// Whether `m`'s game has its own essential that supersedes engine plugin `id`.
+fn supersededIn(index: Index, id: []const u8, v: registry.Version, m: MadeWith, wraith: []const u8, arch: ?registry.Arch) bool {
+    if (v.gameEngine == null) return false;
+    packages: for (index.packages) |q| {
+        if (!q.essential) continue;
+        const qv = registry.latest(q, wraith, arch) orelse continue;
+        if (qv.game == null or !essentialIn(qv, m)) continue;
+        // Built on it, so it can't stand in for it
+        for (qv.depends) |d| if (std.mem.eql(u8, core.manifest.Dependency.parse(d).name, id)) continue :packages;
+        for (qv.supersedes) |s| if (std.mem.eql(u8, s, id)) return true;
+    }
+    return false;
+}
+
+/// Whether `v` targets `m`'s game or its engine. Any-game mods don't count.
+fn essentialIn(v: registry.Version, m: MadeWith) bool {
+    if (v.game) |game| {
+        var here = m.here;
+        if (here.id == null) here.id = m.game;
+        return game.matches(here);
+    }
+    const target = v.gameEngine orelse return false;
+    return target.matches(m.here);
 }

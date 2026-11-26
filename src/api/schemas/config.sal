@@ -7,7 +7,6 @@ trait Config {
     string directory();
     // Just for this game.
     string gameDirectory();
-    // The plugin's own files, as it was installed, like its images. A copy that's deleted once it's
-    // unloaded, so keep what you write in `directory`.
+    // A copy of the plugin's installed files, deleted on unload, so write to `directory` instead.
     string pluginDirectory();
 }

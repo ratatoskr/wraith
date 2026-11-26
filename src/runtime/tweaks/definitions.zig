@@ -1,6 +1,5 @@
-//! Which tweaks there are and what they say: the project's files, parsed again when they change,
-//! and what plugins added. A group's file is an entry of its own, for its shared part, with an
-//! entry after it for each of its tweaks and nested groups, in the file's order.
+//! Which tweaks there are: the project's files, reparsed when they change, and plugins'.
+//! A group's file is an entry, followed by one for each tweak and nested group in it.
 
 const std = @import("std");
 
@@ -35,8 +34,7 @@ fn sameMod(a: ?[]const u8, b: ?[]const u8) bool {
     return std.mem.eql(u8, a.?, b.?);
 }
 
-/// Matches the list to the project's files and reads any that changed. New ones start as the
-/// settings say.
+/// Matches the list to the project's files and reads any that changed.
 pub fn refresh(tw: *Tweaks) void {
     tw.seen_version = tw.project.version();
     var paths = tw.project.list(tw.allocator, "tweaks", Project.ext.tweak) catch return;
@@ -96,8 +94,7 @@ pub fn refresh(tw: *Tweaks) void {
         if (fresh) startIfWanted(tw, t);
     }
     syncPlugins(tw);
-    // The project's, then mods', then plugins', each grouped by where it's from, and what's in a
-    // group's file after it in the file's order
+    // The project's, then mods', then plugins', each group's file followed by what's in it
     std.mem.sort(*Tweak, tw.list.items, {}, struct {
         fn before(_: void, a: *Tweak, b: *Tweak) bool {
             if (a.source.kind != b.source.kind) return @backingInt(a.source.kind) < @backingInt(b.source.kind);
@@ -125,8 +122,7 @@ fn readSchemas(tw: *Tweaks, arena: std.mem.Allocator) []const projects.File {
     return out.items;
 }
 
-/// Under the lock. Each project as it is now, the open one's and the mods'. Which ones' schemas
-/// changed, by key, in `arena`.
+/// Under the lock. Returns which projects' schemas changed, by key, in `arena`.
 fn syncProjects(tw: *Tweaks, arena: std.mem.Allocator, own_schemas: []const projects.File, own_addresses: []const u8, mods_changed: bool) []const []const u8 {
     var changed: std.ArrayList([]const u8) = .empty;
     if (projects.set(.{ .key = "", .title = "Your project", .schemas = own_schemas, .addresses = own_addresses })) changed.append(arena, "") catch {};
@@ -157,8 +153,7 @@ fn republishStructs(tw: *Tweaks, t: *Tweak) void {
     publishStructs(tw, t, text, file);
 }
 
-/// Under the lock. On if the settings say it was, for one that just showed up. Actions only run
-/// when asked.
+/// Under the lock. On if the settings say it was. Actions only run when asked.
 fn startIfWanted(tw: *Tweaks, t: *Tweak) void {
     if (!tw.kept.wasOn(t.name)) return;
     if (t.is_group or t.def.mode == .toggle) running.request(t);
@@ -263,10 +258,7 @@ pub const Edited = enum {
     restart,
 };
 
-/// Under the lock. If its file changed, which for anything in a group's file is the file's. An
-/// edit turns it off with `.turn_off`, since what's running isn't what's written anymore. `.keep`
-/// is for running it as it is now, which starts a group's file again if it's up. True if it
-/// changed. What's in a group's file can come and go, so look one up again after.
+/// Under the lock. Rereads its file if it changed; true if so. Look group members up again after.
 pub fn reparse(tw: *Tweaks, t: *Tweak, edited: Edited) bool {
     if (t.byPlugin()) return false;
     if (t.file) |f| return reparse(tw, f, edited);
@@ -346,8 +338,7 @@ pub fn reparse(tw: *Tweaks, t: *Tweak, edited: Edited) bool {
     return true;
 }
 
-/// The file's `[Tweak]` structs, for the Tweaks window. Each of its tweaks sees its groups' shared
-/// `@schema` and its own, so each is read that way. Only ones that mention a `Tweak` are.
+/// The file's `[Tweak]` structs, for the Tweaks window, each read with its groups' shared `@schema`.
 fn publishStructs(tw: *Tweaks, t: *Tweak, text: []const u8, file: format.File) void {
     var arena: std.heap.ArenaAllocator = .init(tw.allocator);
     defer arena.deinit();
@@ -417,8 +408,7 @@ fn ungroup(tw: *Tweaks, g: *Tweak) void {
     g.children = .{};
 }
 
-/// Under the lock. An entry for each of the file's `@tweak`s and nested `@group`s, by path, so
-/// one that's still there keeps its state. `before` is their fields' hashes before, in list order.
+/// Under the lock. An entry per `@tweak` and nested `@group`, by path so state is kept.
 fn syncChildren(tw: *Tweaks, root: *Tweak, file: format.File, before: []const u64) void {
     const a = root.parsed.allocator();
     var k: usize = 0;
@@ -427,8 +417,7 @@ fn syncChildren(tw: *Tweaks, root: *Tweak, file: format.File, before: []const u6
         const still = define(c, file, a);
         if (!still or (k < before.len and before[k] != fieldsHash(c.def.fields))) c.live = &.{};
     };
-    // Gone from the file, or not the same kind anymore. All are off before any goes, since
-    // turning off looks through the groups they're in
+    // All off before any goes, since turning off looks through their groups
     for (tw.list.items) |c| if (c.file == root and !matches(c, file)) running.turnOff(tw, c);
     var i: usize = 0;
     while (i < tw.list.items.len) {

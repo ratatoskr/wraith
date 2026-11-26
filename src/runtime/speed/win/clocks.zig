@@ -1,7 +1,4 @@
-//! The Windows clocks games time their frames with, hooked for `speed`. The performance counter's
-//! hooked in ntdll, which kernel32's and kernelbase's jump straight to, so whoever called them is
-//! still who the detour returns to. `GetTickCount` and `GetTickCount64` have their own copies in
-//! kernel32 and kernelbase, and `timeGetTime` is winmm's, hooked once it's loaded.
+//! The Windows clocks games time frames with, hooked for `speed`.
 
 const std = @import("std");
 
@@ -13,8 +10,7 @@ const speed = @import("../root.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
-/// `RtlQueryPerformanceCounter` gives a BOOLEAN, but kernel32's callers read a BOOL. Whatever's in
-/// the whole register goes back as it was.
+/// Returns BOOLEAN, but kernel32's callers read a BOOL, so the whole register passes through.
 const Counter = fn (*i64) callconv(.winapi) u32;
 const Ticks64 = fn () callconv(.winapi) u64;
 
@@ -27,8 +23,7 @@ var real_ticks: ?*const Ticks64 = null;
 var multimedia: ?*Hook = null;
 var winmm_watch: ?*module.WhenLoaded = null;
 
-/// What `T` gives, worked out from the real clock. Calls from Wraith's own code get the real one.
-/// `site` keeps each hooked copy's apart.
+/// Scaled `T`; Wraith's own calls get the real one. `site` keeps each hooked copy apart.
 fn Detour(comptime T: type, comptime clock: speed.Clock, comptime site: u8) type {
     return struct {
         comptime {

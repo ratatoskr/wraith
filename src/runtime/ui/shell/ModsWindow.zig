@@ -1,6 +1,5 @@
-//! The overlay's Mods window. What's installed, dev plugins included, and what the
-//! Wraith Hub has for this game or any game, to install, update, load and unload. The hub, files
-//! and the loader are only touched on a worker. Render thread.
+//! The overlay's Mods window: installed and dev plugins, and what the hub has, to install, update,
+//! load and unload. The hub, files and loader are only touched on a worker. Render thread.
 
 const ModsWindow = @This();
 
@@ -310,7 +309,11 @@ fn drawTags(row: Row) void {
         .loading => tag(amber, "Loading"),
         .unloading => tag(amber, "Unloading"),
         .failed => tag(red, "Failed"),
-        .unsupported => tag(amber, if (p.last_error != null and p.last_error.? == error.OutdatedApi) "Outdated" else "Can't run here"),
+        .unsupported => tag(amber, if (p.last_error) |err| switch (err) {
+            error.OutdatedApi => "Outdated",
+            error.Superseded => "Stood in for",
+            else => "Can't run here",
+        } else "Can't run here"),
         .waiting => tag(amber, "Waiting for .NET"),
         .unloaded => tag(.{ 0.6, 0.6, 0.6, 1 }, "Off"),
     };
@@ -336,6 +339,8 @@ fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
         if (p.last_error) |err| {
             if (err == error.OutdatedApi) {
                 ui.textColored(amber, "Made for an older Wraith, so it's off until its author updates it", .{});
+            } else if (err == error.Superseded) {
+                ui.textColored(amber, "{s} stands in for it in this game, so it's off while that's on", .{p.superseded_by.get()});
             } else if (p.needs.len() > 0) ui.textColored(red, "{t}: needs {s}", .{ err, p.needs.get() }) else ui.textColored(red, "{t}", .{err});
         }
     }
@@ -482,13 +487,9 @@ fn start(self: *ModsWindow, shell: *Shell, kind: Kind) void {
     self.begin(shell, .{ .kind = kind });
 }
 
-/// Installs or updates this game's engine's official plugin in the background, with a toast for
-/// each. Once plugins have started.
+/// Installs or updates this game's essential mods in the background, for when the launcher wasn't used.
 pub fn keepEssentials(self: *ModsWindow, shell: *Shell) void {
-    const loader = shell.acquireLoader() orelse return;
-    const engine = loader.here().game_engine;
-    shell.releaseLoader();
-    if (engine != null) self.start(shell, .essentials);
+    self.start(shell, .essentials);
 }
 
 pub fn startOn(self: *ModsWindow, shell: *Shell, kind: Kind, id: []const u8) void {
@@ -618,15 +619,24 @@ const Fetched = struct {
     }
 };
 
-/// The engine's official plugin, installed and turned on, or updated and back on if it was. A
-/// toast says so.
+/// The game's or engine's essential mods, installed and on, or updated and back on if they were.
 fn essentials(self: *ModsWindow, shell: *Shell, io: std.Io, loader: *PluginLoader, scratch: std.mem.Allocator, hub: Hub) void {
     const here = loader.here();
-    const engine = scratch.dupe(u8, here.game_engine orelse return) catch return;
-    const variant: ?[]const u8 = if (here.game_engine_variant) |v| scratch.dupe(u8, v) catch return else null;
-    const made_with: []const registry.mods.MadeWith = &.{.{ .here = .{ .game_engine = engine, .game_engine_variant = variant } }};
+    if (here.id == null and here.exe == null and here.game_engine == null) return;
+    const copy = struct {
+        fn of(a: std.mem.Allocator, text: ?[]const u8) error{OutOfMemory}!?[]const u8 {
+            return if (text) |t| try a.dupe(u8, t) else null;
+        }
+    }.of;
+    // The loader's change under it
+    const made_with: []const registry.mods.MadeWith = &.{.{ .here = .{
+        .id = copy(scratch, here.id) catch return,
+        .exe = copy(scratch, here.exe) catch return,
+        .game_engine = copy(scratch, here.game_engine) catch return,
+        .game_engine_variant = copy(scratch, here.game_engine_variant) catch return,
+    } }};
     const found = registry.mods.essentials(scratch, io, hub.index, hub.where, made_with, Manifest.native_arch) catch |err| {
-        return log.warn("Couldn't check the hub for {s}'s plugin: {t}", .{ engine, err });
+        return log.warn("Couldn't check the hub for this game's essential mods: {t}", .{err});
     };
     const toasts = &shell.overlay.host.toasts;
     var buf: [160]u8 = undefined;
@@ -645,7 +655,10 @@ fn essentials(self: *ModsWindow, shell: *Shell, io: std.Io, loader: *PluginLoade
         rescan(loader);
         if ((adding or was_on) and isState(loader, e.id, .unloaded)) loadNow(self, io, loader, e.id);
         const text = if (adding)
-            std.fmt.bufPrint(&buf, "Added {s} {s}, which Wraith needs in {s} games.", .{ e.title, e.latest, e.title }) catch ""
+            (if (e.game_engine != null)
+                std.fmt.bufPrint(&buf, "Added {s} {s}, which Wraith needs in {s} games.", .{ e.title, e.latest, e.title })
+            else
+                std.fmt.bufPrint(&buf, "Added {s} {s}, which Wraith needs in this game.", .{ e.title, e.latest })) catch ""
         else
             std.fmt.bufPrint(&buf, "Updated {s} to {s}.", .{ e.title, e.latest }) catch "";
         _ = toasts.push(.{ .kind = .success, .title = "Mods", .text = text, .seconds = 6 });

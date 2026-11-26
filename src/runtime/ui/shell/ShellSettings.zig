@@ -1,6 +1,4 @@
-//! The shell's own settings in the registry, applied as they change. That's the theme, where the
-//! overlay's bar goes, frame stats, whether the overlay takes controllers, the workbench's command
-//! keys, the pinned tweaks list and toasts, the game speed key, and whether the welcome's been seen.
+//! The shell's own settings in the registry, applied as they change.
 
 const ShellSettings = @This();
 

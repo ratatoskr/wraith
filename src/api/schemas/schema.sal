@@ -1,12 +1,12 @@
-// The game's code and globals the plugin's schemas declare, by name like `spawn`, `Player.heal` or
-// `Player.instance`. A struct's methods come from it or its bases. Errors say what's wrong.
+// Code and globals the plugin's schemas declare, by name like `Player.heal`. Methods come from a
+// struct or its bases.
 
 namespace Wraith;
 
 error SchemaError {
     // Nothing by that name in the plugin's schemas
     Unknown = 1,
-    // It's declared, but wasn't found, like a signature that didn't match once
+    // Declared, but not found, like a signature that didn't match once
     NotFound,
     // A [Virtual(n)] method of a struct with no [VirtualTable], so it needs an object
     NeedsObject,
@@ -16,12 +16,10 @@ error SchemaError {
 }
 
 trait Schema {
-    // Where a function, method or static is, found once then kept. A struct's name gives its vtable,
-    // from its [VirtualTable].
+    // Where a function, method or static is, found once then kept. A struct's name gives its [VirtualTable].
     usize!SchemaError address(string name);
     // Where `object` has a method, through its own vtable for [Virtual(n)] ones.
     usize!SchemaError method(usize object, string name);
-    // Adds `text` as the plugin's schema file `name`, or replaces the one by that name, like a tweak's
-    // types. What it declares can be found from then on.
+    // Adds or replaces the plugin's schema file `name`.
     void!SchemaError add(string name, string text);
 }

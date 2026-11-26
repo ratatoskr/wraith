@@ -1,8 +1,5 @@
-//! The open project and installed project mods, each like a plugin: a `Loaded` with what its
-//! `schemas/*.sal` declare, checked the same way. That publishes them like a plugin's, so their
-//! `[Tweak]` structs list in the Tweaks window and their statics and address lists are names. A
-//! project's tweaks and the workbench's sessions start from its schemas. `Tweaks` keeps them up
-//! to date. Any thread.
+//! The open project and installed project mods, each a `Loaded` published like a plugin from its
+//! `schemas/*.sal`, so its tweaks, statics and address lists show up. Any thread.
 
 const std = @import("std");
 
@@ -49,8 +46,7 @@ fn nameOf(key: []const u8) []const u8 {
     return if (key.len == 0) "project" else key;
 }
 
-/// What `c.key`'s project has now. The same again does nothing. Schemas that don't check out are
-/// logged, and the ones before stay. True if its schemas changed.
+/// Sets what `c.key`'s project has. Bad schemas are logged and the old ones stay. True if its schemas changed.
 pub fn set(c: Content) bool {
     var h = std.hash.Wyhash.init(0);
     h.update(c.title);

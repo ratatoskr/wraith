@@ -1,6 +1,5 @@
-// Lists of things a plugin has, like the game's cameras, that Wraith shows and the player picks
-// from. The plugin says what's in them and which is current, and Wraith keeps the rest: what's picked,
-// keeping that for next time, and the buttons, which go back to the plugin. Any thread.
+// Lists of a plugin's things, like the game's cameras, that Wraith shows for the player to pick from.
+// The plugin supplies items; Wraith keeps the picks and sends button presses back. Any thread.
 
 namespace Wraith;
 
@@ -8,14 +7,13 @@ error ListError { InvalidId = 1, AlreadyOpen, Failed }
 
 namespace ItemList {
     struct Item {
-        // Anything that stays the same for it while it's around, like its address. Not 0
+        // Stable while it's around, like its address. Not 0
         u64 id;
-        // Shown in the list. What's picked is kept by it too, so a pick carries over when its id
-        // changes, like when the game loads the scene again or starts next time
+        // Picks are kept by name too, so they carry over when the id changes
         string name;
-        // Shown when it's hovered, like "Renders to a texture". Can be empty
+        // Shown on hover. Can be empty
         string detail;
-        // The one in use now, like the camera on screen. Marked in the list
+        // The one in use now, like the camera on screen
         bool current;
     }
 
@@ -23,45 +21,41 @@ namespace ItemList {
     enum Pick : u8 { none, one, many }
 
     struct Options {
-        // Shown over it. Defaults to the id
+        // Defaults to the id
         string title;
         Pick pick;
-        // While nothing that's picked is listed, the current one counts as picked, or else the first
+        // While nothing picked is listed, the current one counts as picked, else the first
         bool current_by_default;
-        // Keeps what's picked for next time the game starts
+        // Keeps picks for next time the game starts
         bool remember;
         // Beside the current one, like "On screen". Defaults to "Current"
         string current_label;
     }
 
-    // The player pressed add. Put the new one in the list, and `select` it if it should be picked.
-    // Render thread.
+    // The player pressed add. List the new one, and `select` it if it should be picked. Render thread.
     fn void Add();
-    // The player pressed remove on `id`. Take it out of the list. Render thread.
+    // The player pressed remove on `id`. Render thread.
     fn void Remove(u64 id);
     // The player renamed `id`. List it again with its new name. Render thread.
     fn void Rename(u64 id, string name);
 }
 
 trait ItemList {
-    // Everything in it, whenever that changes. The first is the primary, like the game's main
-    // camera.
+    // Everything in it, whenever that changes. The first is the primary.
     void set([]Item items);
-    // What's picked of what's listed now, in the order it was picked, with the default if nothing
-    // is. Good till the thread's next call into Wraith.
+    // What's picked of what's listed, in pick order, or the default. Good till the thread's next call into Wraith.
     []u64 selected();
-    // Picks `id` as if the player had. With `one` it replaces what was picked, and 0 picks nothing.
+    // Picks `id` as the player would. With `one` it replaces the pick, and 0 picks nothing.
     void select(u64 id);
     void deselect(u64 id);
-    // Draws it as Wraith does, for a window of the plugin's own. Render thread, inside a frame
-    // callback.
+    // Draws it in a window of the plugin's own. Render thread, inside a frame callback.
     void draw();
-    // Gone from Wraith. What's picked is still kept for next time. Fine to call twice.
+    // Gone from Wraith; picks are still kept. Fine to call twice.
     void close();
 }
 
 trait Lists {
-    // `id` is unique for the plugin: letters, digits, `_`, `-` and `.`. Each of `add`, `remove` and
-    // `rename` that's passed gives it that button. Gone with the plugin.
+    // `id` is unique for the plugin: letters, digits, `_`, `-` and `.`. Each callback passed adds its
+    // button. Gone with the plugin.
     ItemList!ListError open(string id, ItemList.Options options, keep ?ItemList.Add add, keep ?ItemList.Remove remove, keep ?ItemList.Rename rename);
 }

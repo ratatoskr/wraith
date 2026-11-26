@@ -1,5 +1,4 @@
-//! The `Addresses` and `Code` areas, from `addresses.sal` and `code.sal`. Patches and injects are
-//! the runtime's own, guarded like any other host object, so they go with the plugin.
+//! The `Addresses` and `Code` areas. Patches and injects are host objects, so they go with the plugin.
 
 const std = @import("std");
 

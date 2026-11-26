@@ -1,5 +1,4 @@
-//! Debug register watches for owners. Hits queue up from the exception, then go out at the start of
-//! each frame on the render thread.
+//! Debug register watches for owners. Hits queue in the exception, then go out each frame on the render thread.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -133,8 +132,7 @@ fn start() api.WatchError!void {
     started = true;
 }
 
-/// Hits from Wraith's own code count too, for tests, where that's what's watched. After a watch's
-/// been added.
+/// Hits from Wraith's own code count too, for tests. After a watch's been added.
 pub fn hearOwnCode() void {
     own = .{ .start = 0, .len = 0 };
 }

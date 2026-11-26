@@ -66,8 +66,7 @@ pub fn addDll(self: *Install, folder: []const u8, name: []const u8, path: []cons
     try self.writeManifest(dir, name, "");
 }
 
-/// `dir/wraith.json`, with `id` and `fields`, JSON with no braces like `"autoLoad": false`. It's
-/// made for this Wraith's API unless `fields` gives an `apiVersion`.
+/// `dir/wraith.json`, `fields` being brace-less JSON like `"autoLoad": false`.
 pub fn writeManifest(self: *Install, dir: []const u8, id: []const u8, fields: []const u8) !void {
     const a = testing.allocator;
     const path = try std.fmt.allocPrint(a, "{s}/{s}", .{ dir, core.manifest.file_name });

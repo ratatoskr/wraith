@@ -235,8 +235,7 @@ var mask: Atomic(u32) = .init(encode(.{}));
 var sink: Atomic(*const Sink) = .init(&default_sink);
 var stderr_on: Atomic(bool) = .init(true);
 
-/// Off keeps the default sink off stderr till there's a console. Std keeps the first stderr it
-/// sees, so writing before one opens would lose everything after too. Each DLL has its own.
+/// Keeps the default sink off stderr until a console opens, since std caches the first stderr. Per DLL.
 pub fn setStderr(on: bool) void {
     stderr_on.store(on, .release);
 }

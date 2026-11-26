@@ -9,17 +9,14 @@ const tuft_text = @import("tuft_text");
 /// Salamander's runtime, for traits shared between plugins in any language.
 pub const salamander = @import("salamander_runtime");
 
-/// Wraith's API as Salamander traits, from every file in `schemas`, bundled. Every plugin and
-/// script sees the same.
+/// Wraith's API as Salamander traits, every file in `schemas` bundled.
 pub const wraith_sal = @embedFile("wraith.sal");
-/// Made from `schemas` as the build runs, with real methods like `root.threads().toGame()`. It's all in
-/// `namespace Wraith`.
+/// Generated from `schemas` at build time, with real methods like `root.threads().toGame()`.
 pub const wraith = @import("wraith_api_zig").Wraith;
 /// Every type as it crosses, for passing tables around.
 pub const wraith_raw = @import("wraith_api_zig").raw;
-/// How every schema wraith reads is parsed. Plugins' write `[Sig]` and the rest without a `use`, and
-/// name Wraith's types like `Vec3` without `Wraith.`.
-/// `[Instance("..")] struct Player` is `static Player* instance` with that sig, so it's found the same.
+/// How every schema Wraith reads is parsed: `[Sig]` and co. need no `use`, and Wraith's types no `Wraith.`.
+/// `[Instance("..")] struct Player` means `static Player* instance` with that sig.
 pub const sal_options: @import("salamander_schema").Options = .{
     .namespaces = &.{.{ .name = "wraith", .annotations = &.{ "Sig", "Module", "Section", "VirtualTable", "Instance", "Service", "Tweak", "Label", "Range", "ReadOnly", "Hidden", "Flatten", "Choices", "Managed", "Icall" } }},
     .uses = &.{"wraith"},
@@ -49,16 +46,13 @@ pub const HookError = error{
 };
 
 pub const MidOptions = struct {
-    /// The callback replaces code there, so returning carries on after it. Else it goes before
-    /// the instruction there, which runs after it.
+    /// Replaces code there, so returning carries on after it. Else it runs before the instruction.
     replace: bool = false,
-    /// Bytes it replaces, ending between instructions. 0 is what `expect` covers, or else the
-    /// instruction there.
+    /// Bytes replaced, ending between instructions. 0 is what `expect` covers, or the one instruction.
     size: u32 = 0,
-    /// What has to be there, a byte pattern like `89 83 ?? ??` or asm like `cmp ecx, eax; jl 0x1234`.
-    /// Empty skips the check.
+    /// Bytes like `89 83 ?? ??` or asm like `cmp ecx, eax` that must be there. Empty skips the check.
     expect: []const u8 = "",
-    /// Says what was there instead, or what's wrong with `expect`.
+    /// What was there instead, or what's wrong with `expect`.
     problem: ?*AsmProblem = null,
     /// More names asm in `expect` can use, before the address list's.
     names: []const Name = &.{},
@@ -69,7 +63,7 @@ pub const HookCall = struct {
     /// The original function, or for a slot hook the old pointer.
     trampoline: usize,
     user_data: usize,
-    /// False if the hook is being destroyed. Then call the trampoline and skip `hook_leave`.
+    /// False while it's being destroyed: call the trampoline and skip `hook_leave`.
     entered: bool,
 };
 
@@ -88,21 +82,20 @@ pub const InputDevice = enum {
 
 pub const ToastKind = enum(u8) { info, success, warning, @"error" };
 
-/// Crosses by value, so it can never get fields. Add a new fn instead.
+/// Crosses by value, so never add fields; add a new fn.
 pub const Toast = struct {
     kind: ToastKind = .info,
     /// Empty shows the plugin's name.
     title: []const u8 = "",
     text: []const u8 = "",
-    /// Not counting while hovered. 0 keeps it up until it's clicked or dismissed.
+    /// Paused while hovered. 0 stays till clicked or dismissed.
     seconds: f32 = 4,
 };
 
 /// 0 is none.
 pub const ToastId = u32;
 
-/// Frame times from one present to the next, over the window the user picked.
-/// Crosses by value, so it can never get fields. Add a new fn instead.
+/// Present-to-present frame times over the user's window. Crosses by value, so never add fields.
 pub const FrameStats = struct {
     /// What these cover. Less than the window early on or after a reset.
     window_seconds: f32 = 0,
@@ -147,20 +140,19 @@ pub const Scope = enum { global, game };
 pub const Action = struct {
     id: []const u8,
     name: []const u8,
-    /// The default. Whoever plays can change it in Wraith's settings, and theirs wins.
+    /// The default. The player's pick in Settings wins.
     chord: input.Chord,
     /// More that do the same by default, like a controller button.
     also: []const input.Chord = &.{},
     consume: bool = true,
     while_typing: bool = false,
-    /// Held, like a key to move with: it fires with any modifiers down and can be one, like Shift.
+    /// Held, like a move key: fires with any modifiers down, and can be a modifier itself.
     held: bool = false,
     /// Where the key someone picks is kept.
     scope: Scope = .global,
 };
 
-/// A setting a plugin registers. Wraith keeps its value, saves it and lists it in its Settings,
-/// and the plugin can show it on its own screen too. Keys are keybinds, not settings.
+/// A setting a plugin registers, which Wraith stores and lists in its Settings.
 pub const Setting = opaque {};
 
 pub const SettingError = error{
@@ -176,8 +168,7 @@ pub const SettingError = error{
 
 pub const SettingKind = enum { toggle, number, choice, text, colour };
 
-/// What `setting_add` takes, as JSON, so it can grow. Values cross as JSON too: `true`, `1.5`,
-/// `"fast"` or `[r, g, b, a]`.
+/// `setting_add`'s JSON. Values are JSON too: `true`, `1.5`, `"fast"` or `[r, g, b, a]`.
 pub const SettingDefinition = struct {
     /// Unique for the plugin. Letters, digits, `_`, `-` and `.`.
     id: []const u8,
@@ -324,8 +315,7 @@ pub const TweakSwitchError = error{
     OutOfMemory,
 };
 
-/// What the runtime publishes on `script.topics.switched` when a tweak's box changes, however it
-/// changed.
+/// Published on `script.topics.switched` whenever a tweak's box changes.
 pub const TweakSwitched = struct {
     /// Its saved id, like `kai/Combat/Max bravery` or `plugin:speed`.
     name: []const u8,
@@ -455,11 +445,9 @@ pub const PatchOptions = struct {
 };
 
 pub const AsmPatchOptions = struct {
-    /// Bytes it replaces, ending between instructions. 0 is what `expect` covers, or else the
-    /// instruction there.
+    /// Bytes replaced, ending between instructions. 0 is what `expect` covers, or the one instruction.
     size: u32 = 0,
-    /// What has to be there, a byte pattern like `89 83 ?? ??` or asm like `cmp ecx, eax; jl 0x1234`.
-    /// Empty skips the check.
+    /// Bytes like `89 83 ?? ??` or asm like `cmp ecx, eax` that must be there. Empty skips the check.
     expect: []const u8 = "",
     /// More names the asm can use, before the address list's.
     names: []const Name = &.{},
@@ -492,8 +480,7 @@ pub const PlaceCode = extern struct {
     address: usize,
     source_ptr: [*]const u8,
     source_len: usize,
-    /// Goes before the instruction there like `code_inject`, else replaces code like
-    /// `code_patch_asm`.
+    /// Goes before the instruction like `code_inject`, else replaces code like `code_patch_asm`.
     inject: bool = false,
     /// Like `AsmPatchOptions`.
     size: u32 = 0,
@@ -636,12 +623,11 @@ pub const WatchError = error{
     OwnerGone,
 };
 
-/// Crosses by value, so it can never get fields. Add a new fn instead.
+/// Crosses by value, so never add fields; add a new fn.
 pub const WatchHit = struct {
     /// What's watched.
     address: usize,
-    /// Where the instruction that hit starts, if it could be told, else `ip`. For `execute`, the
-    /// one about to run.
+    /// The instruction that hit if known, else `ip`. For `execute`, the one about to run.
     instruction: usize,
     /// The CPU's ip, just past the instruction for `write` and `access`.
     ip: usize,
@@ -755,11 +741,9 @@ pub const VfsKinds = bitpack struct(u8) {
 
 pub const VfsWatchOptions = struct {
     kinds: VfsKinds,
-    /// Paths it's called for, like `C:/Game/data/*.pak`. `*` matches anything, slashes too, and
-    /// `?` any one character. Case doesn't matter. Empty is every path.
+    /// Like `C:/Game/data/*.pak`: `*` matches anything, slashes too, `?` one character. Case-insensitive. Empty is all.
     pattern: []const u8 = "",
-    /// Also while the loader opens a DLL. It holds a lock then, so the callback mustn't wait on
-    /// other threads.
+    /// Also while the loader opens a DLL. It holds a lock then, so don't wait on other threads.
     loader: bool = false,
     /// Also existence checks like `GetFileAttributes`, as `open`s with `query` set.
     queries: bool = false,
@@ -858,8 +842,7 @@ test "vfs patterns" {
     try std.testing.expect(!vfsMatches("C:/a", "C:/ab"));
 }
 
-/// What a native plugin's `start` gets with Salamander's host: its `Wraith` root, its Salamander
-/// owner, and the queue the render thread polls.
+/// What a native plugin's `start` gets with Salamander's host.
 pub const NativeGuest = extern struct {
     wraith: salamander.AnyObject,
     owner: ?*salamander.Owner,
@@ -868,8 +851,7 @@ pub const NativeGuest = extern struct {
     services: salamander.Slice(wraith_raw.Wraith_Plugin_Service),
 };
 
-/// What a native plugin's `wraith_plugin` export gives. Everything else goes through `wraith.sal`, so
-/// this only changes when `version` does.
+/// A native plugin's `wraith_plugin` export. Only changes with `version`; the rest is `wraith.sal`.
 pub const NativeEntry = extern struct {
     version: u32 = native_version,
     /// False if it didn't start. `stop` gets called either way.

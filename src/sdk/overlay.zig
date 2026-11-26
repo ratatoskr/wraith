@@ -1,5 +1,4 @@
-//! Dear ImGui through the runtime's, for `sdk.ui`. Draw from `sdk.threads.onDraw`. Toasts, the cursor,
-//! the game's input and menu items are `wraith.sal`'s `ui` area.
+//! Dear ImGui through the runtime, as `sdk.ui`. Draw from `sdk.threads.onDraw`.
 
 const std = @import("std");
 
@@ -36,9 +35,7 @@ pub fn available() bool {
     return bound;
 }
 
-/// Handles over the game for moving, turning or scaling something of yours, drawn by Wraith with
-/// the camera the game's plugin sets. One shows at a time, whichever was shown last. Every call's
-/// fine from any thread, so a game tick can do it all:
+/// A move/rotate/scale gizmo. One shows at a time (the latest). Any thread, so a tick can do it all:
 ///
 ///     if (self.gizmo.moved()) |m| moveTo(picked, m);
 ///     self.gizmo.place(worldOf(picked));

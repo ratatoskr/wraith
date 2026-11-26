@@ -51,8 +51,7 @@ pub const Limits = struct {
     hex: bool = false,
 };
 
-/// Ranges wider than this get a number box, not a slider, since a slider's no good for picking one
-/// of millions.
+/// Ranges wider than this get a number box, since a slider's no good for picking one of millions.
 const max_slider = 1000;
 
 /// The new value if it changed, kept inside its limits. Tweak fields and the struct editor's.

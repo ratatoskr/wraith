@@ -90,8 +90,7 @@ ini_text: ?[]u8 = null,
 ini_saver: core.files.Saver,
 /// Render thread, inside the overlay's ImGui frame.
 draw: DrawEvent,
-/// Render thread, once a frame after `draw`. Inside the overlay's ImGui frame, or a headless one
-/// nobody sees when the overlay can't draw, so UI there always has somewhere to go.
+/// Render thread, once a frame after `draw`. In a headless frame when the overlay can't draw.
 update: DrawEvent,
 subscriptions: core.Scope,
 window: *Window,
@@ -109,12 +108,10 @@ holds: Atomic(u32) = .init(0),
 holding: Atomic(bool) = .init(false),
 /// Off leaves a device with the game, whoever takes it and whatever ImGui wants.
 enabled: std.EnumArray(Device, Atomic(bool)) = .initFill(.init(true)),
-/// The game leaves its cursor free while it shows, like FFXIV, so Wraith's windows don't take the
-/// mouse and keyboard from it. What plugins say, then the player's setting over it.
+/// The game leaves its cursor free while it shows (like FFXIV), so our windows don't take input from it.
 mouse_free_hint: Atomic(bool) = .init(false),
 mouse_free_choice: Atomic(MouseFree) = .init(.auto),
-/// Mouse buttons whose presses are hidden from the game while the rest stays its, counted per
-/// button. See `consumeButton`.
+/// Mouse buttons whose presses are hidden from the game, counted per button. See `consumeButton`.
 consumes: std.EnumArray(tuft_input.MouseButton, Atomic(u32)) = .initFill(.init(0)),
 consumes_wheel: Atomic(u32) = .init(0),
 /// What ImGui is using right now. Written after each frame, read on the window thread.
@@ -145,8 +142,7 @@ headless: ?*c.ImGuiContext = null,
 headless_failed: bool = false,
 /// Set before frames start.
 captures: ?Captures = null,
-/// While the cursor's held: where it goes back to each frame, and where it was before, both in
-/// screen coords.
+/// While the cursor's held: where it's pulled back to each frame, and where it was before. Screen coords.
 held: ?struct { anchor: input.Point, home: input.Point } = null,
 /// How far it was pushed since last frame, while held.
 mouse_motion: input.Point = .{ .x = 0, .y = 0 },
@@ -267,14 +263,12 @@ pub fn setCursorHint(self: *Overlay, hint: CursorHint) void {
     self.cursor_hint.store(hint, .release);
 }
 
-/// Counted, so the cursor stays until every request is dropped. It doesn't take the mouse, see
-/// `take`. Any thread.
+/// Counted, so the cursor stays until every request is dropped. Doesn't take the mouse. Any thread.
 pub fn requestCursor(self: *Overlay, on: bool) void {
     count(&self.cursor_requests, on);
 }
 
-/// Hides `device` from the game and lets the overlay navigate with it. Counted like
-/// `requestCursor`. Any thread.
+/// Hides `device` from the game and lets the overlay navigate with it. Counted. Any thread.
 pub fn take(self: *Overlay, device: Device, on: bool) void {
     count(self.takes.getPtr(device), on);
     self.updateCapture();
@@ -285,8 +279,7 @@ pub fn taken(self: *const Overlay, device: Device) bool {
     return self.enabled.getPtrConst(device).load(.acquire) and self.takes.getPtrConst(device).load(.acquire) != 0;
 }
 
-/// Keeps the cursor still and hidden while the game window's in front, from the next frame, so
-/// the mouse can turn something forever. `mouseMotion` says how far. Counted like `take`. Any thread.
+/// Keeps the cursor still and hidden from the next frame, so the mouse can turn something forever. Counted. Any thread.
 pub fn holdMouse(self: *Overlay, on: bool) void {
     count(&self.holds, on);
 }
@@ -321,8 +314,7 @@ pub fn setMouseFreeChoice(self: *Overlay, choice: MouseFree) void {
     self.mouse_free_choice.store(choice, .release);
 }
 
-/// The game leaves its cursor free, so Wraith's windows leave the mouse and keyboard with it and
-/// only take what's over them or typed into them. Any thread.
+/// Whether our windows leave the mouse and keyboard with the game, taking only what's over or typed into them. Any thread.
 pub fn mouseFree(self: *const Overlay) bool {
     return switch (self.mouse_free_choice.load(.acquire)) {
         .auto => self.mouse_free_hint.load(.acquire),
@@ -331,8 +323,7 @@ pub fn mouseFree(self: *const Overlay) bool {
     };
 }
 
-/// Hides `button`'s presses from the game, each till it's let go, while the rest of the mouse stays
-/// the game's. Counted like `take`. Any thread.
+/// Hides `button`'s presses from the game till let go; the rest of the mouse stays the game's. Counted. Any thread.
 pub fn consumeButton(self: *Overlay, button: tuft_input.MouseButton, on: bool) void {
     count(self.consumes.getPtr(button), on);
     self.updateConsumed();
@@ -390,8 +381,7 @@ fn mouseIsOurs(self: *const Overlay) bool {
     };
 }
 
-/// Each device on its own: what's taken, plus what ImGui wants right now. ImGui wanting the mouse
-/// only takes clicks, so the game still sees it move.
+/// Per device: what's taken plus what ImGui wants. ImGui wanting the mouse only takes clicks, so the game still sees it move.
 fn updateCapture(self: *Overlay) void {
     var channels: Blocker.Channels = .empty;
     if (self.taken(.keyboard) or self.wanted(.keyboard)) channels.insert(.keyboard);
@@ -434,8 +424,7 @@ fn onFrame(self: *Overlay, frame: *const Graphics.Frame) void {
     if (self.theme_request.swap(null, .acq_rel)) |theme| self.applyTheme(theme);
 
     const io = c.ImGui_GetIO();
-    // Over one of ImGui's own windows the mouse is ImGui's. Never while it's held, as it's pulled
-    // back to the middle every frame
+    // Over ImGui's own windows the mouse is ImGui's, but never while held, since it's recentred every frame
     const mouse_ours = self.held == null and (self.mouseIsOurs() or (if (self.host.platform) |p| p.hoveringViewport() else false));
     var pending: [InputQueue.capacity]Queued = undefined;
     if (self.queue_overflowed.swap(false, .monotonic)) log.warn("Overlay input queue full; dropped events", .{});
@@ -500,8 +489,7 @@ fn setFlag(io: *c.ImGuiIO, flag: c.ImGuiConfigFlags, on: bool) void {
     }
 }
 
-/// Measures how far the held cursor went and puts it back in the middle of the window. Lets go
-/// where it was held from. Inside a `Blocker.Bypass`, so these are the real cursor's moves.
+/// Measures how far the held cursor went and recentres it. Call inside a `Blocker.Bypass`.
 fn moveHeldMouse(self: *Overlay, window: tuft_window.Handle) void {
     const hold = self.holds.load(.acquire) != 0 and tuft_window.isForeground(window);
     if (!hold) {
@@ -544,8 +532,7 @@ fn onCaptured(self: *Overlay, event: tuft_imgui.capture.Event) void {
     captures.event(event, @fromBackingInt(@intCast(self.api.load(.acquire))));
 }
 
-/// The gizmo in front, with the game's camera. Draggable only while the overlay has the mouse, so
-/// clicks go to the game otherwise.
+/// The gizmo in front. Draggable only while the overlay has the mouse, so clicks go to the game otherwise.
 fn drawGizmos(self: *Overlay) void {
     const v = host_frame.view();
     Gizmos.draw(if (v.known) .{ .view = v.viewMatrix, .projection = v.projection } else null, self.taken(.mouse));
@@ -739,8 +726,7 @@ fn onMessage(self: *Overlay, m: *const Window.Message) ?isize {
     return null;
 }
 
-/// Gamepad poll thread. ImGui always gets them so its state stays right, but only navigates with
-/// them while they're taken.
+/// Gamepad poll thread. ImGui always gets them so its state stays right, but only navigates while taken.
 fn onGamepads(self: *Overlay, update: *const Gamepads.Update) void {
     for (update.changes) |change| {
         self.queue.push(.{ .event = .{ .key = .{ .key = change.key, .down = change.down } } }) catch self.queue_overflowed.store(true, .monotonic);

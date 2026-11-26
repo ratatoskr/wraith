@@ -1,15 +1,5 @@
-//! `.rwt` tweaks. A line starting with `@kind` opens a section that runs to the next one, and
-//! each kind has its own language: asm, `.sal`, the tweak's script or nothing. A tweak's script
-//! is JS or Lua, never both. `compile` and `compileLua` turn a tweak into that script for its
-//! provider, line for line, so errors point at the tweak's own lines.
-//!
-//! A file with a `@group` or more than one `@tweak` is a group. Everything before its first
-//! `@tweak` is the shared part, there while any of its tweaks is on. A file with one `@tweak` and
-//! no `@group` is one tweak, whatever comes before it.
-//!
-//! Groups nest. A `@group` past the top opens one that runs to its `@end`, with a shared part of
-//! its own up to its first `@tweak` or `@group`. Each part has a path from the file's group down,
-//! like `Combat/Max bravery`, which is what providers and the runtime know it by.
+//! `.rwt` tweaks: `@kind` sections in asm, `.sal` or the tweak's JS or Lua, compiled line for line.
+//! A `@group` or several `@tweak`s make a group; groups nest, and parts go by path like `Combat/Max bravery`.
 
 const std = @import("std");
 
@@ -21,11 +11,9 @@ pub const Kind = enum {
     group,
     /// `@children on off`, right after a `@group`. What its box does to what's in it.
     children,
-    /// `@use ce`, a named script library put in a group's shared part or a lone tweak before its
-    /// code. Its `install(env, options)` runs if it has one.
+    /// `@use ce`, a script library before a shared part's or lone tweak's code. Runs its `install(env, options)`.
     use,
-    /// `@globals shared`, in a group's shared part before its code. Plain global writes from
-    /// anything in the group land in its top level, where everything in it sees them.
+    /// `@globals shared`, in a group's shared part: plain global writes in the group land in its top level.
     globals,
     /// Closes the innermost `@group` that isn't the file's.
     end,
@@ -272,8 +260,7 @@ pub const File = struct {
     script: Script = .js,
     /// A group's part before its first `@tweak`, the same as `groups[0].shared`.
     shared: Tweak = .{},
-    /// Just the one for a file that isn't a group, which is the whole file. All of a group's, in
-    /// the file's order.
+    /// The whole file for a lone tweak, else all of a group's in file order.
     tweaks: []const Tweak = &.{},
     /// A group's, the file's own first, then nested ones in the order they open.
     groups: []const Group = &.{},
@@ -364,8 +351,7 @@ pub fn parse(arena: std.mem.Allocator, source: []const u8, problem: *Problem) Er
     return tweak;
 }
 
-/// The file, a group if it has a `@group` or more than one `@tweak`. Everything points into
-/// `source` or `arena`.
+/// The file, a group or one tweak. Everything points into `source` or `arena`.
 pub fn parseFile(arena: std.mem.Allocator, source: []const u8, problem: *Problem) Error!File {
     const lines = try splitLines(arena, source);
     var tweak_count: usize = 0;
@@ -381,7 +367,7 @@ pub fn parseFile(arena: std.mem.Allocator, source: []const u8, problem: *Problem
         return .{ .script = one[0].script, .tweaks = one };
     }
 
-    // Where each part's lines are, in the file's order. A group's runs to its first child
+    // Where each part's lines are, in file order. A group's runs to its first child
     const Span = struct { from: usize, to: usize = 0, group: bool, index: u32 };
     var groups: std.ArrayList(Group) = .empty;
     var spans: std.ArrayList(Span) = .empty;
@@ -491,8 +477,7 @@ pub fn parseFile(arena: std.mem.Allocator, source: []const u8, problem: *Problem
     };
 }
 
-/// `source` without the group's tweak or nested group at `path`, its whole `@group` to `@end` for a
-/// group. Fails if there's no such part or what's left isn't a valid file, like an empty group.
+/// `source` without the tweak or nested group (`@group` to `@end`) at `path`. Fails if what's left isn't valid.
 pub fn removePart(gpa: std.mem.Allocator, source: []const u8, path: []const u8, problem: *Problem) Error![]u8 {
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
@@ -778,8 +763,7 @@ fn isEmptyCode(lines: []const []const u8) bool {
     return true;
 }
 
-/// An `@asm`, `@js` or `@lua` first line says what a `patch`, `inject` or `hook` is. Asm if not,
-/// and a `hook`'s is the tweak's script.
+/// A `patch`, `inject` or `hook`'s language from an `@asm`, `@js` or `@lua` first line, else asm (script for `hook`).
 fn findMarker(section: *Section, lines: []const []const u8, problem: *Problem) error{Invalid}!void {
     var seen_code = false;
     for (lines[section.first..][0..section.count], section.first..) |l, at| {
@@ -817,8 +801,7 @@ fn findWord(args: []const u8, word: []const u8) ?usize {
     return null;
 }
 
-/// What a hook's code calls its params, like `a` and `b` in `i32 (i32 a, f32 b)`. Unnamed ones are
-/// `arg1` and on, and `this` is `self` since JS has its own.
+/// A hook's param names. Unnamed ones are `arg1` and on, and `this` is `self` since JS has its own.
 fn paramNames(arena: std.mem.Allocator, signature: []const u8, line: u32, problem: *Problem) Error![]const []const u8 {
     const usage = "a signature has its params in ( ), like i32 (i32 a, f32 b)";
     const close = std.mem.lastIndexOfScalar(u8, signature, ')') orelse return problem.fail(line, usage, .{});
@@ -1119,18 +1102,13 @@ pub const Value = struct {
     value: f64,
 };
 
-/// JS that runs `tweak` with the provider's `__t` helper, one line per line of `source` plus
-/// a last one that turns its code on. For a JS tweak, see `compileLua` for Lua's.
+/// A JS tweak as JS using the provider's `__t`, line for line plus a last line that turns it on.
 pub fn compile(gpa: std.mem.Allocator, source: []const u8, tweak: Tweak, values: []const Value) ![]u8 {
     return compileJs(gpa, source, tweak, values, .{ .done = "__t.done();\n", .title = tweak.title orelse "" });
 }
 
-/// What of a file to run, like `compile` or `compileLua` for its language. A group's tweak runs
-/// in a function of its own, so its top level is its own, with `data`, `sym` and `types` that
-/// fall back to its group's. A nested group's shared part runs the same way. In JS what's in a
-/// nested group runs `with` its group's scope, so it sees what every group above it has. Under
-/// `@globals shared` plain writes go to the sharing group's globals, and in JS so do a part's
-/// top-level `var` and `function` names.
+/// One part of a file, compiled for its language. Nested parts run in their own function, with
+/// `data`, `sym` and `types` falling back to their group's, and see their groups' scopes.
 pub fn compilePart(gpa: std.mem.Allocator, source: []const u8, file: File, part: Part, values: []const Value) ![]u8 {
     if (part == .whole) return if (file.script == .lua) compileLua(gpa, source, file.tweaks[0], values) else compile(gpa, source, file.tweaks[0], values);
     const top_shares = file.groups[0].shares_globals;
@@ -1165,8 +1143,7 @@ pub fn compilePart(gpa: std.mem.Allocator, source: []const u8, file: File, part:
     if (sharer) |k| if (k != 0) try prefix.writer.print("with (__t.shared({f})) ", .{json(file.groups[k].path)});
     if (parent != 0) try prefix.writer.print("with (__t.scope({f})) ", .{json(parent_path)});
     try prefix.writer.print("__t.part({f}, function (data, sym, types) {{ ", .{json(path)});
-    // `eval` there sees its own functions, for `Choices`, `tick` and `off`. A group's also sets
-    // them, for what's in it
+    // `eval` there sees its own functions, for `Choices`, `tick` and `off`. A group's also sets them
     const assign = if (is_group) ", (__n, __v) => eval(__n + \" = __v\")" else "";
     const js_parent = if (parent == 0) try gpa.dupe(u8, "undefined") else try std.fmt.allocPrint(gpa, "{f}", .{json(parent_path)});
     defer gpa.free(js_parent);
@@ -1211,8 +1188,7 @@ fn writeUses(w: *std.Io.Writer, tweak: Tweak, wrap: Wrap, script: Script) !void 
 /// A top-level `var` or `function` in a part's JS.
 const Declared = struct { name: []const u8, is_var: bool };
 
-/// Hands a part's top-level `var` and `function` names to the shared globals, as a getter and
-/// setter each so they stay live. It's before the code, where functions are already up.
+/// Shares a part's top-level `var` and `function` names as live getter/setter pairs, before its code.
 fn writeShares(gpa: std.mem.Allocator, w: *std.Io.Writer, source: []const u8, lines: []const []const u8, tweak: Tweak) !void {
     var list: std.ArrayList(Declared) = .empty;
     defer list.deinit(gpa);
@@ -1231,8 +1207,7 @@ fn writeShares(gpa: std.mem.Allocator, w: *std.Io.Writer, source: []const u8, li
     try w.writeAll("]);");
 }
 
-/// Top-level `var` and `function` names in JS, near enough. It skips strings, comments,
-/// templates and regexes, and only counts what starts a statement.
+/// Top-level `var` and `function` names in JS, near enough: skips strings, comments and regexes.
 fn jsDeclared(gpa: std.mem.Allocator, text: []const u8, list: *std.ArrayList(Declared)) !void {
     var depth: usize = 0;
     // The last thing that wasn't a space or a comment, 0 at the start and `a` for a word
@@ -1469,8 +1444,7 @@ fn compileJs(gpa: std.mem.Allocator, source: []const u8, tweak: Tweak, values: [
     return out.toOwnedSlice();
 }
 
-/// Lua that runs `tweak` with the provider's `__t` helper, like `compile` does for JS. It returns
-/// what `__t.done()` gives.
+/// Like `compile` for Lua. Returns what `__t.done()` gives.
 pub fn compileLua(gpa: std.mem.Allocator, source: []const u8, tweak: Tweak, values: []const Value) ![]u8 {
     return compileLuaWith(gpa, source, tweak, values, .{ .title = tweak.title orelse "" });
 }

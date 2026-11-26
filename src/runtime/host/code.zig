@@ -16,8 +16,7 @@ const addresses = @import("addresses.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
-/// Names asm can use besides labels: the caller's own, then what its owner sees through
-/// `addresses.Scope`, then the game's from `Names`, modules and their exports.
+/// Names asm can use besides labels: the caller's, its owner's `addresses.Scope`, then the game's.
 pub const Names = struct {
     loaded: ?*Loaded = null,
     original: ?usize = null,
@@ -312,9 +311,7 @@ const Block = struct {
 
 var blocks: host.Owned(Block) = .{};
 
-/// Placed like code, see `mem.Placement`. Near `near`'s whole module if there's room, else in
-/// padding in its code, else its far zone, else anywhere. Code that reads it later goes in reach
-/// of it, beside it if there's room.
+/// Placed like code, see `mem.Placement`, near `near`'s module if it can. Code reading it goes in reach.
 pub fn alloc(loaded: *Loaded, len: usize, near: usize) api.AllocError!usize {
     if (len == 0) return error.OutOfMemory;
     var place_ = mem.Placement.place(.{ .target = near, .data = len }) catch |err| return switch (err) {
@@ -351,8 +348,7 @@ pub fn free(loaded: *Loaded, address: usize) void {
     block.release();
 }
 
-/// Data and the code that reads it, placed as one by `engine.Batch`. Data's kept like `alloc`'s,
-/// and each code like `patchAsm`'s.
+/// Data and the code that reads it, placed as one by `engine.Batch`.
 pub fn place(loaded: *Loaded, request: api.PlaceRequest, data_out: []usize, code_out: []*api.Patch, problem: *api.PlaceProblem) api.PlaceError!void {
     if (data_out.len != request.data.len or code_out.len != request.code.len) return error.PatchFailed;
     const gpa = loaded.allocator;

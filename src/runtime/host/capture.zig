@@ -31,14 +31,12 @@ var wanted: [2]Atomic(u32) = @splat(.init(0));
 
 pub const Subscription = Bus.Subscription;
 
-/// For Wraith's own captures, like screenshots, which aren't a plugin's. `fire` gets every event,
-/// on the render thread.
+/// For Wraith's own captures, like screenshots. `fire` gets every event, on the render thread.
 pub fn watch(ctx: anytype, comptime fire: fn (@TypeOf(ctx), *const Event) void) !Subscription {
     return bus.subscribeUnscoped(ctx, fire);
 }
 
-/// Has the overlay copy the next frame at `point`, for a watcher. Take it back with `unwant` once
-/// it's `started`, or if it's not wanted after all.
+/// Has the overlay copy the next frame at `point`. `unwant` once it's `started` or not wanted.
 pub fn want(point: Point) void {
     _ = wanted[@backingInt(point)].fetchAdd(1, .acq_rel);
 }

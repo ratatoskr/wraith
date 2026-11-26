@@ -16,7 +16,6 @@ const log = core.log.scoped(.wraith_ui);
 
 const AboutWindow = @This();
 
-/// Which part's showing.
 window: ui.Window = .{ .title = "About Wraith###wraith.about", .size = .{ 680, 520 } },
 section: Section = .about,
 

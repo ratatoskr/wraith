@@ -1,5 +1,4 @@
-//! Settings service. Each is a setting in the registry, its id the plugin's name then its own,
-//! listed under the plugin in Wraith's Settings.
+//! Settings service. Each is a registry setting named after the plugin, listed under it in Wraith's Settings.
 
 const std = @import("std");
 

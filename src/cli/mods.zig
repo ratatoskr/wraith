@@ -1,5 +1,4 @@
-//! `wraith mods`: list and install mods from the Wraith Hub. Mods are plugins and projects, and
-//! both go in the same folder. Wraith loads the plugins and leaves projects to the Workbench.
+//! `wraith mods`: list and install mods (plugins and projects) from the Wraith Hub.
 
 const std = @import("std");
 
@@ -65,7 +64,7 @@ pub fn catalog(ctx: ops.Context, arena: std.mem.Allocator) !Catalog {
 
 const Yours = struct {
     ids: []const []const u8,
-    /// Each game's engine, so mods for every game made with it are listed under it too.
+    /// Each game by id, exe and engine, so engine-wide mods and essentials are found too.
     made_with: []const registry.mods.MadeWith,
 };
 
@@ -73,11 +72,19 @@ fn yourGames(ctx: ops.Context, arena: std.mem.Allocator) !Yours {
     const found = ops.discover(ctx, arena) catch &.{};
     const ids = try arena.alloc([]const u8, found.len);
     for (ids, found) |*id, g| id.* = g.id;
-    var made_with: std.ArrayList(registry.mods.MadeWith) = .empty;
-    for (found) |g| if (games.game_engine.ofInstall(arena, ctx.io, g.dir) catch null) |e| {
-        try made_with.append(arena, .{ .game = g.id, .here = .{ .game_engine = @tagName(e.game_engine), .game_engine_variant = e.variant } });
-    };
-    return .{ .ids = ids, .made_with = made_with.items };
+    const made_with = try arena.alloc(registry.mods.MadeWith, found.len);
+    for (made_with, found) |*m, g| m.* = try gameMadeWith(ctx, arena, g);
+    return .{ .ids = ids, .made_with = made_with };
+}
+
+fn gameMadeWith(ctx: ops.Context, arena: std.mem.Allocator, g: games.Game) !registry.mods.MadeWith {
+    const engine = games.game_engine.ofInstall(arena, ctx.io, g.dir) catch null;
+    return .{ .game = g.id, .here = .{
+        .id = g.id,
+        .exe = g.launch.game_exe,
+        .game_engine = if (engine) |e| @tagName(e.game_engine) else null,
+        .game_engine_variant = if (engine) |e| e.variant else null,
+    } };
 }
 
 pub const Kept = struct {
@@ -86,21 +93,35 @@ pub const Kept = struct {
     /// Null if it was just added.
     was: ?[]const u8,
     version: []const u8,
+    /// The game engine it's for, like `unity`. Null for one that's for a game.
+    game_engine: ?[]const u8,
 };
 
-/// Installs or updates the official plugin of each of your games' engines. Failures get logged
-/// and the rest still go.
-pub fn keepEssentials(ctx: ops.Context, arena: std.mem.Allocator) ![]const Kept {
+pub const KeepOptions = struct {
+    /// Only this game's, by its id, like right before it's played. Null is every game's.
+    game: ?[]const u8 = null,
+    /// Only update ones that are installed, adding none.
+    installed_only: bool = false,
+};
+
+/// Installs or updates essential mods for your games and engines. Failures are logged, not fatal.
+pub fn keepEssentials(ctx: ops.Context, arena: std.mem.Allocator, options: KeepOptions) ![]const Kept {
     const w = try where(ctx, arena);
-    const yours = try yourGames(ctx, arena);
+    const made_with = if (options.game) |id| blk: {
+        const g = for (ops.discover(ctx, arena) catch &.{}) |g| {
+            if (std.mem.eql(u8, g.id, id)) break g;
+        } else return error.GameNotFound;
+        break :blk try arena.dupe(registry.mods.MadeWith, &.{try gameMadeWith(ctx, arena, g)});
+    } else (try yourGames(ctx, arena)).made_with;
     const index = try w.index(arena, ctx.io);
     var kept: std.ArrayList(Kept) = .empty;
-    for (try registry.mods.essentials(arena, ctx.io, index, w, yours.made_with, null)) |e| {
+    for (try registry.mods.essentials(arena, ctx.io, index, w, made_with, null)) |e| {
+        if (options.installed_only and e.installed == null) continue;
         _ = registry.mods.install(arena, ctx.io, index, w, e.id, e.latest) catch |err| {
             log.err("Couldn't {s} {s}: {t}", .{ if (e.installed == null) "add" else "update", e.id, err });
             continue;
         };
-        try kept.append(arena, .{ .id = e.id, .title = e.title, .was = e.installed, .version = e.latest });
+        try kept.append(arena, .{ .id = e.id, .title = e.title, .was = e.installed, .version = e.latest, .game_engine = e.game_engine });
     }
     return kept.items;
 }

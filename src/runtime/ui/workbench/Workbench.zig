@@ -141,8 +141,7 @@ pub const Panels = struct {
 
 /// Docked on their own, not in a `Group`.
 const alone = .{ "search", "addresses", "names", "schemas", "tweaks", "log" };
-/// `alone` and `Groups` in View menu order, which is also the order they're docked in. These need a
-/// spot in `defaultLayout`.
+/// `alone` and `Groups` in View menu and dock order. Each needs a spot in `defaultLayout`.
 const docked = .{ "search", "addresses", "names", "schemas", "tweaks", "diagnostics", "debug", "scripts", "log", "engine", "plugins" };
 
 /// So the dock's a few tabs and not a row of them.
@@ -189,8 +188,7 @@ overlay: ?*Overlay,
 shell: ?*Shell,
 /// The project's tweaks, set by the shell. Null without a project.
 tweaks: ?*Tweaks = null,
-/// How tweak lists are laid out, shared with the overlay's Tweaks window. The Tweaks panel keeps
-/// its own without it.
+/// Shared with the overlay's Tweaks window. Without it the Tweaks panel keeps its own.
 tweak_layout: ?*@import("../TweakLayout.zig") = null,
 /// The open project. Null without files.
 project: ?*Project = null,
@@ -216,16 +214,13 @@ debugger: Debugger,
 seen_stops: u32 = 0,
 /// Brings the Debug group's tab to the front next frame, without taking focus from the code.
 debug_to_front: bool = false,
-/// Where a stop or a trip somewhere went, focused again once the workbench's window has OS focus.
-/// Windows giving it focus makes ImGui hand focus back to what had it before, a frame or so later,
-/// which would put that tab back over this one.
+/// Focused again once the window has OS focus, since ImGui hands focus back to the old tab a frame later.
 focus_when_active: ?*Document = null,
 /// `focus_when_active` was focused once already, after the raise.
 focus_applied: bool = false,
 /// `focus_when_active` is for a stop, so it's dropped once nothing's stopped.
 focus_for_stop: bool = false,
-/// The code document stops go to had its tab in front last frame, in a window that's really there.
-/// For checking from other threads.
+/// The stop's code document had its tab in front last frame. For checking from other threads.
 code_in_front: tuft_arch.atomic.Value(bool) = .init(false),
 /// Same for the memory document.
 memory_in_front: tuft_arch.atomic.Value(bool) = .init(false),
@@ -641,8 +636,7 @@ fn topmost(self: *const Workbench) bool {
 /// Its OS window is made after the frame it first shows in, so the first try can be too early.
 const raise_tries = 30;
 
-/// ImGui only focuses inside itself, so a new or reshown window would stay behind the game.
-/// Windows can refuse, so it tries a few times, but only once there's a window to raise.
+/// ImGui only focuses inside itself, so a new window would stay behind the game. Windows can refuse, so it retries.
 fn bringWindowToFront(self: *Workbench) void {
     if (self.raise_frames == 0) return;
     const viewport = c.ImGui_GetWindowViewport();

@@ -1,5 +1,4 @@
-//! The `game` area: what Wraith knows about the game it's in, from `GameInfo`, the overlay and the
-//! build, and how fast it runs. Nothing here reads files, so it's cheap from any thread.
+//! The `game` area: game and build info, and speed. Reads no files, so it's cheap from any thread.
 
 const std = @import("std");
 
@@ -16,6 +15,8 @@ const scratch = @import("scratch.zig");
 const wraith = @import("wraith.zig");
 const threads = @import("threads.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
+const ranked = @import("ranked.zig");
+const leases = @import("leases.zig");
 
 const sal = api.salamander;
 const W = api.wraith;
@@ -31,23 +32,34 @@ const HashResolver = threads.Back(wraith.ResolverOf(HashPromise));
 var wanted: f64 = 1;
 /// Who set the speed last, so it goes back to 1 when they go. Null for the player.
 var setter: ?*Owner = null;
-/// A plugin's own way of changing the speed, asked first.
-const Provider = struct { owner: *Owner, handler: W.Game.SpeedHandler };
-var provider: ?Provider = null;
+/// The lease holding the game's speed, see `leases`. Set under `speed_lock` as it changes hands.
+var holder: ?*leases.Lease = null;
 var speed_lock: tuft_sys.sync.RwLock = .{};
 var speed_cleanup: OnGone(.closing, speedOwnerGone) = .{};
+
+/// Needs `speed_lock`.
+fn provider() ?W.Game.SpeedHandler {
+    const h = holder orelse return null;
+    return h.speed;
+}
+
+/// As the speed changes hands, from `leases`. The old one restores the game's own, so they never both change it.
+pub fn speedHandedOver(before: ?*leases.Lease, after: ?*leases.Lease) void {
+    speed_lock.lock();
+    defer speed_lock.unlock();
+    if (before) |b| if (b.speed) |s| {
+        _ = s.invoke(.{1});
+    };
+    holder = after;
+    // The clocks only speed up, so a pause or slow motion ends with the plugin
+    if (after == null and wanted < 1) wanted = 1;
+    apply() catch {};
+}
 
 fn speedOwnerGone(owner: *Owner) void {
     speed_lock.lock();
     defer speed_lock.unlock();
     var changed = false;
-    if (provider) |p| if (p.owner == owner) {
-        p.handler.release();
-        provider = null;
-        changed = true;
-        // The clocks can only speed it up, so a pause or slow motion ends with the plugin
-        if (wanted < 1) wanted = 1;
-    };
     if (setter == owner) {
         setter = null;
         wanted = 1;
@@ -59,24 +71,20 @@ fn speedOwnerGone(owner: *Owner) void {
     if (changed) apply() catch {};
 }
 
-/// Plugins' say on whether the game's speed can be changed, the newest last. With none it can.
+/// Plugins' say on whether the speed can be changed, see `ranked`. With none it can.
 const Vote = struct { owner: *Owner, on: bool };
-var votes: [32]Vote = undefined;
-var votes_len: usize = 0;
+fn voteOwner(v: Vote) usize {
+    return @intFromPtr(v.owner);
+}
+var votes: ranked.Ranked(Vote, voteOwner) = .{};
 
 fn dropVote(owner: *Owner) void {
-    var i: usize = 0;
-    while (i < votes_len) {
-        if (votes[i].owner == owner) {
-            std.mem.copyForwards(Vote, votes[i .. votes_len - 1], votes[i + 1 .. votes_len]);
-            votes_len -= 1;
-        } else i += 1;
-    }
+    _ = votes.take(@intFromPtr(owner));
 }
 
 /// Needs `speed_lock`.
 fn controlLocked() bool {
-    return if (votes_len == 0) true else votes[votes_len - 1].on;
+    return if (votes.best()) |v| v.on else true;
 }
 
 /// Back to normal, and stays there. Needs `speed_lock`.
@@ -87,32 +95,24 @@ fn offLocked() void {
     apply() catch {};
 }
 
-/// `owner`'s say, which beats older ones till it goes.
-fn voteLocked(owner: *Owner, on: bool) void {
+/// `loaded`'s say, which beats older ones from its kind of plugin till it goes.
+fn voteLocked(loaded: *Loaded, on: bool) void {
     const was_on = controlLocked();
-    dropVote(owner);
-    if (votes_len == votes.len) {
-        std.mem.copyForwards(Vote, votes[0 .. votes_len - 1], votes[1..votes_len]);
-        votes_len -= 1;
-    }
-    votes[votes_len] = .{ .owner = owner, .on = on };
-    votes_len += 1;
+    _ = votes.put(allocator, .{ .owner = &loaded.owner, .on = on }, .sayOf(loaded)) catch return;
     if (was_on and !controlLocked()) offLocked();
 }
 
-/// Whether the game's speed can be changed now. A game's plugin can keep it as it is, and turn it
-/// on only where it works, like a photo mode.
+/// Whether the game's speed can be changed now. A game's plugin can allow it only where it works.
 pub fn controllable() bool {
     speed_lock.lockShared();
     defer speed_lock.unlockShared();
     return controlLocked();
 }
 
-/// The provider if it takes it, else the clocks. Those only ever speed the game up, since games
-/// cap their frame rate with the same clocks, so slowing them slows the frame rate and Wraith's
-/// windows drawn with it. Needs `speed_lock`.
+/// The provider if it takes it, else the clocks, which only speed up: games cap their frame rate
+/// with them, so slowing them slows Wraith's windows too. Needs `speed_lock`.
 fn apply() !void {
-    if (provider) |p| if (p.handler.invoke(.{wanted})) {
+    if (provider()) |p| if (p.invoke(.{wanted})) {
         try speed_.set(1);
         return;
     };
@@ -121,7 +121,7 @@ fn apply() !void {
 
 /// Below 1 needs a plugin that handles the game's speed. Needs `speed_lock`.
 fn lowest() f64 {
-    return if (provider != null) 0 else 1;
+    return if (provider() != null) 0 else 1;
 }
 
 fn setLocked(s: f64, owner: ?*Owner) !void {
@@ -146,14 +146,13 @@ pub fn setSpeedForPlayer(s: f64) !void {
     try setLocked(s, null);
 }
 
-/// Pausing is speed 0, and unpausing goes back to the speed from before. Pausing needs a plugin
-/// that handles the game's speed.
+/// Pausing is speed 0, unpausing restores the speed before. Pausing needs a plugin that handles speed.
 pub fn setPausedForPlayer(on: bool) !void {
     speed_lock.lock();
     defer speed_lock.unlock();
     if (on == (wanted == 0)) return;
     if (!controlLocked()) return error.SpeedOff;
-    if (on and provider == null) return error.NeedsPlugin;
+    if (on and provider() == null) return error.NeedsPlugin;
     try setLocked(if (on) 0 else resume_to, null);
 }
 
@@ -161,12 +160,11 @@ pub fn paused() bool {
     return currentSpeed() == 0;
 }
 
-/// Whether it can go below 1 and pause, which takes a plugin that handles the game's speed, like
-/// one for its engine.
+/// Whether it can go below 1 and pause, which takes a plugin that handles the game's speed.
 pub fn canSlow() bool {
     speed_lock.lockShared();
     defer speed_lock.unlockShared();
-    return provider != null and controlLocked();
+    return provider() != null and controlLocked();
 }
 
 /// What it's at, as asked for.
@@ -222,21 +220,21 @@ pub const Impl = struct {
         defer lease.end();
         speed_lock.lock();
         defer speed_lock.unlock();
-        voteLocked(&loaded.owner, on);
+        voteLocked(loaded, on);
     }
 
     pub fn speedControl(_: *Loaded) bool {
         return controllable();
     }
 
-    pub fn provideSpeed(loaded: *Loaded, handler: W.Game.SpeedHandler) void {
-        const lease = speed_cleanup.lease(&loaded.owner) orelse return handler.release();
-        defer lease.end();
-        speed_lock.lock();
-        defer speed_lock.unlock();
-        if (provider) |old| old.handler.release();
-        provider = .{ .owner = &loaded.owner, .handler = handler };
-        apply() catch {};
+    pub fn claimSpeed(loaded: *Loaded, handler: W.Game.SpeedHandler, changed: ?W.Lease.Changed) sal.Plain(Game, "claimSpeed") {
+        const t = wraith.tablesOf(loaded) orelse {
+            handler.release();
+            if (changed) |c| c.release();
+            return error.Failed;
+        };
+        const l = leases.claim(loaded, .speed, changed, handler) catch return error.Failed;
+        return .init(l, t.lease);
     }
 
     pub fn sha512(loaded: *Loaded) HashPromise {
@@ -323,7 +321,7 @@ test "a plugin asks about the game" {
     wraith.forget(&loaded);
 }
 
-test "a plugin that provides speed gets it first, and the clocks carry on once it's gone" {
+test "a plugin holding the speed gets it first, and the clocks carry on once it's gone" {
     const testing = std.testing;
     const sdk = @import("wraith_sdk");
     const tuft_hook = @import("tuft_hook");
@@ -345,7 +343,7 @@ test "a plugin that provides speed gets it first, and the clocks carry on once i
     };
     var state: State = .{};
     const game = sdk.wraith.root().?.game();
-    game.provideSpeed(W.Game.SpeedHandler.init(&state, State.handle));
+    _ = try game.claimSpeed(W.Game.SpeedHandler.init(&state, State.handle), null);
     // Told straight away
     try testing.expectEqual(1, state.got);
 
@@ -375,6 +373,73 @@ test "a plugin that provides speed gets it first, and the clocks carry on once i
     try setSpeedForPlayer(3);
     try testing.expectEqual(3, speed_.get());
     try setSpeedForPlayer(1);
+}
+
+test "a game's plugin gets the speed over its engine's, whichever came first, and hands it back as it goes" {
+    const testing = std.testing;
+    const sdk = @import("wraith_sdk");
+    const tuft_hook = @import("tuft_hook");
+    try tuft_hook.init(testing.allocator);
+    defer tuft_hook.deinit();
+    defer speed_.stop();
+    defer setSpeedForPlayer(1) catch {};
+    const State = struct {
+        got: f64 = -1,
+        fn handle(self: *@This(), s: f64) bool {
+            self.got = s;
+            return true;
+        }
+    };
+
+    var game_plugin: Loaded = undefined;
+    game_plugin.initForTest(testing.allocator, "kai");
+    game_plugin.manifest.value.game = .{ .ids = &.{"kai"} };
+    var game_state: State = .{};
+    sdk.Owner.attach(game_plugin.root());
+    _ = try sdk.wraith.root().?.game().claimSpeed(W.Game.SpeedHandler.init(&game_state, State.handle), null);
+    sdk.Owner.detach();
+    try setSpeedForPlayer(0.5);
+    try testing.expectEqual(0.5, game_state.got);
+
+    // Newer, but an engine's
+    var engine_plugin: Loaded = undefined;
+    engine_plugin.initForTest(testing.allocator, "unity");
+    engine_plugin.manifest.value.gameEngine = .{ .id = "unity" };
+    defer {
+        engine_plugin.deinitForTest();
+        wraith.forget(&engine_plugin);
+    }
+    var engine_state: State = .{};
+    sdk.Owner.attach(engine_plugin.root());
+    const Told = struct {
+        held: ?bool = null,
+        fn changed(self: *@This(), held: bool) void {
+            self.held = held;
+        }
+    };
+    var engine_told: Told = .{};
+    const engine_lease = try sdk.wraith.root().?.game().claimSpeed(W.Game.SpeedHandler.init(&engine_state, State.handle), W.Lease.Changed.init(&engine_told, Told.changed));
+    sdk.Owner.detach();
+    // Waiting, so it's not asked
+    try testing.expect(!engine_lease.held());
+    try testing.expectEqual(-1, engine_state.got);
+    try setSpeedForPlayer(0.25);
+    try testing.expectEqual(0.25, game_state.got);
+    try testing.expectEqual(-1, engine_state.got);
+    try testing.expectEqual(null, engine_told.held);
+
+    // The engine's takes over, at the same speed, and is told
+    game_plugin.deinitForTest();
+    wraith.forget(&game_plugin);
+    try testing.expectEqual(0.25, engine_state.got);
+    try testing.expect(engine_lease.held());
+    try testing.expectEqual(true, engine_told.held);
+    try testing.expect(canSlow());
+
+    // Letting go puts the game's own speed back
+    engine_lease.release();
+    try testing.expectEqual(1, engine_state.got);
+    try testing.expect(!canSlow());
 }
 
 test "without a plugin for its speed, the game only speeds up, and can't pause" {
@@ -410,7 +475,7 @@ test "pausing with a plugin goes back to the speed from before" {
         }
     };
     var takes: Takes = .{};
-    sdk.wraith.root().?.game().provideSpeed(W.Game.SpeedHandler.init(&takes, Takes.handle));
+    _ = try sdk.wraith.root().?.game().claimSpeed(W.Game.SpeedHandler.init(&takes, Takes.handle), null);
     defer setSpeedForPlayer(1) catch {};
 
     try setSpeedForPlayer(0.5);
@@ -440,7 +505,7 @@ test "a game's plugin keeps the speed off, and another turns it on where it work
     game_plugin.initForTest(testing.allocator, "ffxiv");
     sdk.Owner.attach(game_plugin.root());
     const game = sdk.wraith.root().?.game();
-    game.provideSpeed(W.Game.SpeedHandler.init(&takes, Takes.handle));
+    _ = try game.claimSpeed(W.Game.SpeedHandler.init(&takes, Takes.handle), null);
     game.setSpeedControl(false);
     sdk.Owner.detach();
     try testing.expect(!game.speedControl());
@@ -465,8 +530,7 @@ test "a game's plugin keeps the speed off, and another turns it on where it work
     try testing.expectEqual(1, currentSpeed());
     try testing.expectEqual(1, takes.got);
 
-    // When the plugin that turned it on goes, the game plugin's say is back, and when that goes too
-    // it's on, as it is in other games
+    // Once the plugin that turned it on goes, the game plugin's say is back, and once that goes it's on
     sdk.Owner.attach(gpose.root());
     posing.setSpeedControl(true);
     sdk.Owner.detach();

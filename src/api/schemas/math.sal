@@ -1,6 +1,4 @@
-// Maths types, shared by every plugin's schemas and the same as tuft's in Zig, where they have methods.
-// Matrices are row-major for row vectors, like D3D and most games: a point goes `p * m`. Angles are
-// radians.
+// Maths types shared by every schema, tuft's in Zig. Row-major for row vectors (`p * m`). Radians.
 
 namespace Wraith;
 
@@ -10,8 +8,8 @@ struct Vec3 { f32 x; f32 y; f32 z; }
 
 struct Vec4 { f32 x; f32 y; f32 z; f32 w; }
 
-// A rotation. `w` is the real part.
+// `w` is the real part.
 struct Quat { f32 x; f32 y; f32 z; f32 w; }
 
-// `m[row * 4 + column]`, with the translation in the last row.
+// `m[row * 4 + column]`, translation in the last row.
 struct Mat4 { f32[16] m; }

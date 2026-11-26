@@ -1,7 +1,4 @@
-//! Photo mode: the free camera, posing, pausing and screenshots, together. Camera and Posing are
-//! always there for game and engine plugins to hand things to, and their keys always work. The Photo
-//! mode window puts them in one place: tools along the top, the scene down the left, which is the
-//! world, the camera and the actors, and whatever's picked in it on the right.
+//! Photo mode: the free camera, posing, pausing and screenshots in one window.
 
 const Photo = @This();
 

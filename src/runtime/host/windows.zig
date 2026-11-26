@@ -1,6 +1,5 @@
-//! Plugins' windows on the overlay, through `ui.sal`. Wraith draws each one every frame it's open,
-//! with the plugin's draw inside. Its menu entry and the Settings button share its open flag. Removed
-//! ones stay till the plugin goes, so a handle's always safe to call.
+//! Plugins' overlay windows, through `ui.sal`, drawn each frame they're open. Removed ones stay till
+//! the plugin goes, so a handle's always safe to call.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;

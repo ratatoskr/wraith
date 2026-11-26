@@ -33,18 +33,13 @@ pub const Context = struct {
     windows: *ui.WindowSystem,
     drawing_windows: *bool,
 
-    /// Runs `func(args...)` as a task, as the plugin. It starts on the render thread at the next frame, where
-    /// it can draw. Waits carry on at the same point: `sdk.threads.nextDraw(io)` at a later frame on the render
-    /// thread, and other async calls where the task was. `sdk.threads.toWorker(io)` moves it to a worker for
-    /// slow or blocking work, `toRender` brings it back. Never block on the render thread, the game waits for it.
-    /// Before `stop`, every task is cancelled. Its waits fail with `error.Canceled` so it can wind down.
-    /// `func` returns `void` or an error union, whose errors are logged.
+    /// Runs `func(args...)` as a task, starting on the render thread next frame. See `sdk.threads`.
+    /// Tasks are cancelled before `stop`; errors returned are logged.
     pub fn spawn(self: *Context, comptime func: anytype, args: std.meta.ArgsTuple(@TypeOf(func))) tasks.SpawnError!void {
         return self.scheduler.spawn(func, args);
     }
 
-    /// Calls `func(target)` once a frame on the render thread, where it can update and draw UI.
-    /// See `sdk.threads.onDraw`.
+    /// Calls `func(target)` once a frame on the render thread. See `sdk.threads.onDraw`.
     pub fn onDraw(self: *Context, target: anytype, comptime func: fn (@TypeOf(target)) void) threads.Error!threads.Subscription {
         const acting = self.owner.enter();
         defer acting.end();
@@ -60,8 +55,7 @@ pub const Context = struct {
         try self.windows.add(owner);
     }
 
-    /// The Mods page's Settings button for the plugin, which sets `opened`, like a window's `open`.
-    /// `opened` must not move.
+    /// The Mods page's Settings button, which sets `opened`. `opened` must not move.
     pub fn settingsWindow(self: *Context, opened: *bool) void {
         const Open = struct {
             fn open(flag: *bool) void {
@@ -71,9 +65,7 @@ pub const Context = struct {
         self.owner.root.ui().onOpenSettings(.init(opened, Open.open));
     }
 
-    /// An entry under the plugin's own button on the overlay's bar that opens and closes something
-    /// of the plugin's, kept in step with `opened`, like a window's `open`. Whichever side changed
-    /// since last frame wins.
+    /// A toggle under the plugin's overlay bar button, synced with `opened`. The latest change wins.
     pub fn menuItem(self: *Context, label: []const u8, opened: *bool) !void {
         const Item = struct {
             object: api.wraith.MenuItem,

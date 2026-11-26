@@ -1,4 +1,4 @@
-//! The workbench's side of the debugger. Showing stops, stepping, breakpoints and taking over crashes.
+//! The workbench's side of the debugger: stops, stepping, breakpoints and taking over crashes.
 //! Its thread, unless it says otherwise.
 
 const std = @import("std");
@@ -209,9 +209,7 @@ fn shortcut(chord: ?ui.Chord) ?[:0]const u8 {
     return ui.format("{f}", .{chord orelse return null});
 }
 
-/// Focuses the code a stop went to, after a `show`'s raise since that focuses the main window. Then
-/// once more when Windows gives the window focus, since ImGui puts focus back where it was then.
-/// Inside that window.
+/// Focuses a stop's code after `show`'s raise, and again once Windows gives the window focus. Inside that window.
 pub fn applyPendingFocus(self: *Workbench) void {
     const doc = self.focus_when_active orelse return;
     // Let go meanwhile, so it's not about this stop anymore

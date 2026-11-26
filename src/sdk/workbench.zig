@@ -1,10 +1,5 @@
-//! Panels in the Workbench, for plugins that want tools there. An advanced feature, since a panel
-//! draws on the Workbench's own thread: not the render thread or the game thread.
-//!
-//! A panel mustn't call into the game while it draws. Have your game-thread code, like an
-//! `sdk.threads.onTick`, work out what the panel shows and `publish` it to a `Latest`, which the panel
-//! `read`s. Changes go the other way through a `Queue`, which the game-thread code `drain`s. Neither
-//! ever waits on the game thread, so a slow panel can't hold up the game.
+//! Workbench panels. They draw on the Workbench's own thread, so never call into the game there:
+//! game-thread code `publish`es to a `Latest`, and drains edits from a `Queue`.
 //!
 //!     self.panel = try sdk.workbench.addPanel(self, drawPanel, .{ .title = "Party" });
 //!
@@ -36,8 +31,7 @@ pub const Error = error{ OwnerGone, Failed };
 pub const Options = struct {
     /// Its tab's label. Empty uses the plugin's name.
     title: []const u8 = "",
-    /// In the game engine's group with Classes, like Unity's, rather than with the other plugins'
-    /// panels. For engine plugins.
+    /// Groups it with the engine's Classes panel, for engine plugins.
     engine: bool = false,
 };
 
@@ -55,15 +49,13 @@ pub const Panel = struct {
         self.object.focus();
     }
 
-    /// Takes it out, waiting for a draw on the Workbench's thread to finish unless it's from inside
-    /// one. After that, nothing of yours is drawn for it. Fine to call twice.
+    /// Removes it, waiting for an in-progress draw unless called from one. Idempotent.
     pub fn remove(self: Panel) void {
         self.object.remove();
     }
 };
 
-/// Calls `func(target)` on the Workbench's thread whenever the panel's showing, inside its ImGui
-/// frame, so it can draw with `sdk.ui`. Never call into the game from it.
+/// Calls `func(target)` on the Workbench thread while shown, to draw with `sdk.ui`. Never touch the game.
 pub fn addPanel(target: anytype, comptime func: fn (@TypeOf(target)) void, options: Options) Error!Panel {
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("addPanel expects a pointer, found " ++ @typeName(T));
@@ -79,9 +71,8 @@ pub fn showClass(class_name: []const u8) void {
     owner.root.ui().showClass(class_name);
 }
 
-/// The newest value from one thread for another, like what your game-thread code found for a panel
-/// to draw. Whoever makes values builds each in `next`'s allocator, so it can hold slices, and
-/// `publish`es it, which never waits. Readers `read` the newest, holding it till `end`.
+/// The newest value from one thread for another. Build in `next`'s allocator, `publish`, and readers
+/// `read` it until `end`. Never waits.
 pub fn Latest(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -96,16 +87,14 @@ pub fn Latest(comptime T: type) type {
             for (&self.arenas) |*a| a.deinit();
         }
 
-        /// For building the next value, from whoever publishes. What was built for the last one
-        /// that didn't make it goes.
+        /// Allocator for the next value. Discards an unpublished previous one.
         pub fn next(self: *Self) std.mem.Allocator {
             const spare = self.spareSlot();
             _ = self.arenas[spare].reset(.retain_capacity);
             return self.arenas[spare].allocator();
         }
 
-        /// Makes `value` the newest, if no reader has the last one right now. False if one does, so
-        /// try again later, like next tick. Never waits.
+        /// Makes `value` the newest. False if a reader holds the last one; retry later. Never waits.
         pub fn publish(self: *Self, value: T) bool {
             if (!self.lock.tryLock()) return false;
             defer self.lock.unlock();
@@ -141,8 +130,7 @@ pub fn Latest(comptime T: type) type {
     };
 }
 
-/// Things for another thread to do, like a panel's edits for your game-thread code. Anyone can
-/// `push`, which waits briefly. Whoever does the work `drain`s, which never waits.
+/// Work for another thread. `push` waits briefly; `drain` never waits.
 pub fn Queue(comptime A: type) type {
     return struct {
         const Self = @This();
@@ -167,8 +155,7 @@ pub fn Queue(comptime A: type) type {
             self.waiting.append(gpa, item) catch {};
         }
 
-        /// What's been pushed since last time, oldest first, good till the next `drain`. Empty if
-        /// someone's pushing right now, and it's there next time. Never waits.
+        /// Pushed items, oldest first, valid till the next `drain`. Empty if a push is in progress.
         pub fn drain(self: *Self) []const A {
             self.taken.clearRetainingCapacity();
             if (!self.lock.tryLock()) return &.{};

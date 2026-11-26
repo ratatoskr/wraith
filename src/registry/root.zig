@@ -1,5 +1,4 @@
-//! Packages from the Wraith Hub. Everything it has is in one index on dist.wraith.io, signed in the
-//! same file, and a copy of it is kept so it works offline. See the hub's README for what's in it.
+//! Wraith Hub packages, from one signed index on dist.wraith.io, cached for offline use.
 
 const std = @import("std");
 
@@ -46,6 +45,8 @@ pub const Version = struct {
     arches: ?[]const Arch = null,
     provider: ?[]const u8 = null,
     depends: []const []const u8 = &.{},
+    /// Game engine plugins it stands in for in its game, if it's for one.
+    supersedes: []const []const u8 = &.{},
     /// What's new in it, in Markdown.
     notes: ?[]const u8 = null,
 
@@ -80,8 +81,7 @@ pub const Package = struct {
     summary: []const u8 = "",
     /// Other mods use it and it comes with them. Not one to list for players.
     library: bool = false,
-    /// The game engine's official plugin, which Wraith keeps installed and up to date for games made
-    /// with it, see `mods.essentials`.
+    /// Kept installed and updated in every game it's for, see `mods.essentials`.
     essential: bool = false,
     /// Recommended for every game, and why.
     featured: bool = false,
@@ -117,8 +117,7 @@ pub const IndexGame = struct {
     gameEngine: ?[]const u8 = null,
 };
 
-/// `v2/index.signed`, everything on the hub. It has more, like what works in each game, that Wraith
-/// doesn't read yet.
+/// `v2/index.signed`, everything on the hub. Fields Wraith doesn't read yet are skipped.
 pub const Index = struct {
     format: u32,
     generated: []const u8 = "",
@@ -156,8 +155,7 @@ pub fn latest(pkg: Package, wraith_version: []const u8, arch: ?Arch) ?Version {
     return best;
 }
 
-/// Whether it was tested on this copy of the game Wraith knows as `ident`. Null if it doesn't
-/// say, or it's for any game.
+/// Whether it was tested on the game copy `ident`. Null if unstated or for any game.
 pub fn testedOn(version: Version, ident: []const u8, copy: core.manifest.Copy) ?bool {
     const g = version.game orelse return null;
     if (!g.matches(.{ .id = ident })) return null;
@@ -381,8 +379,7 @@ fn unzip(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, into: []const u8
     };
 }
 
-/// `partial` itself, or its single subfolder if the zip wrapped everything in one. Its
-/// manifest has to say it's `name`.
+/// `partial`, or its single subfolder if the zip wrapped one. Its manifest must say it's `name`.
 fn contentsOf(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, partial: []const u8, name: []const u8) ![]const u8 {
     const top = try findContents(arena, io, dir, partial);
     const text = try dir.readFileAlloc(io, try std.fs.path.join(arena, &.{ top, core.manifest.file_name }), arena, .limited(64 << 10));

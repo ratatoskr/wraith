@@ -316,8 +316,7 @@ const tests = struct {
     }
 
     test "system check" {
-        // Asks Windows for every process and driver. A CI runner that's still starting up can sit on
-        // that for minutes, so it gets a while and is skipped after
+        // Can take minutes on a CI runner still starting up, so it times out
         const Check = struct {
             done: std.atomic.Value(bool) = .init(false),
             failed: ?anyerror = null,

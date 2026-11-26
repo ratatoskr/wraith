@@ -1,10 +1,9 @@
--- Cheat Engine's Lua API, made from Wraith's, so imported CE tables can run their Lua. New code
--- should use Wraith's own API. API.md lists every CE builtin and how far each one goes here.
+-- Cheat Engine's Lua API on top of Wraith's, so imported CE tables can run. See API.md.
 --
 --   local ce = require("ce")
 --   local handle = ce.install(env, { name = "My Table", records = manifest, tweaks = bridge })
 --
--- `install` puts CE's globals in `env`, so call it once for each engine, before the table's code.
+-- Call `install` once per engine, before the table's code.
 
 local M = { name = "ce", version = 1 }
 
@@ -40,8 +39,7 @@ local function toint(v, what)
 end
 
 ---------------------------------------------------------------------------------------------------
--- Objects. CE's are userdata that take both `obj.method(x)` and `obj:method(x)`, and their
--- property names don't care about case.
+-- Objects. Take both `obj.method(x)` and `obj:method(x)`; property names ignore case, like CE.
 
 local function bind(obj, f)
   return function(first, ...)
@@ -136,8 +134,7 @@ local function is_a(v, c)
 end
 
 ---------------------------------------------------------------------------------------------------
--- CE numbers. CE reads `10` as hex and `#10` as decimal, while Wraith reads `10` as decimal and
--- `0x10` as hex. Same rules as the importer's numbers.zig.
+-- CE numbers: `10` is hex and `#10` decimal, unlike Wraith. Same rules as numbers.zig.
 
 local function is_hex(w)
   return w ~= "" and not w:find("[^%x]")
@@ -179,8 +176,7 @@ local function is_module_char(c)
   return c:find("[%w_%.%- ]") ~= nil
 end
 
--- `Tales of X.exe+10` to `"Tales of X.exe"+10`, and `Game-Win64.exe` too, since Wraith reads
--- spaces and dashes as the end of a name
+-- Quotes names like `Tales of X.exe`, since Wraith ends a name at spaces and dashes
 local function quote_modules(text)
   local out, i, copied, n = {}, 1, 1, #text
   while i <= n do
@@ -256,8 +252,7 @@ function M.location(text, swap)
   return table.concat(out)
 end
 
--- CE's aob text, like `7C??488B` or `48 8B ** xx 05`, as Wraith's pattern. Half bytes like `4?`
--- become `??`, which matches more but never less.
+-- CE aob text like `48 8B ** xx 05` as a Wraith pattern. Half bytes like `4?` widen to `??`.
 function M.pattern(text)
   local digits = {}
   for token in text:gmatch("[^%s,]+") do
@@ -477,8 +472,7 @@ function M.install(env, options)
     return nil, v
   end
 
-  -- What a word of location text becomes, if it's a name. Registered symbols go in as their
-  -- address. A word like `dead` that Wraith knows as a name stays a name, else it's hex.
+  -- Registered symbols become addresses, names Wraith knows stay names, anything else is hex
   local function swap(word)
     local s = symbols[word:lower()]
     if s then return fmt("0x%X", s.address) end
@@ -1407,8 +1401,7 @@ function M.install(env, options)
     return aligned(scan_module(m, M.pattern(tostring(text))), kind, param)[1]
   end)
 
-  -- CE's variable types as Wraith's scan types. Bytes are unsigned, the rest signed, like CE
-  -- compares them.
+  -- CE variable types as Wraith scan types. Bytes unsigned, the rest signed, like CE.
   local SCAN_TYPES = { [0] = "u8", "i16", "i32", "i64", "f32", "f64", "string", "utf16" }
   local function scan_value(vartype, input, hex)
     if vartype == 6 or vartype == 7 then return tostring(input) end
@@ -1555,8 +1548,7 @@ function M.install(env, options)
     local ok, n = pcall(w.code.instructionLength, w.code, get_address(address))
     return ok and n or nil
   end)
-  -- Starts a little before and keeps the start most decodings agree on, since code can't be read
-  -- backwards
+  -- Code can't be decoded backwards, so this tries a few starts and keeps the consensus
   def("getPreviousOpcode", function(address)
     local a = get_address(address)
     local votes, best, best_n = {}, nil, 0
@@ -1623,8 +1615,7 @@ function M.install(env, options)
   def("getScreenHeight", function() return floor(w.ui:displaySize().y) end)
 
   ---------------------------------------------------------------------------------------------
-  -- Breakpoints, through debug registers. The game never stops, so the callback runs a frame
-  -- later with a copy of the registers in CE's globals, like RAX and EIP.
+  -- Debug-register breakpoints. The callback runs a frame later with registers in CE's globals.
 
   local REGISTERS = {
     "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
@@ -1712,8 +1703,7 @@ function M.install(env, options)
   def("activateProtection", function() end)
   def("enableDRM", function() end)
   ---------------------------------------------------------------------------------------------
-  -- Table files. Scripts can't read files, so the importer puts them in the table's tweak file in
-  -- base64, and each is decoded the first time a script asks for it.
+  -- Table files, stored base64 in the tweak file since scripts can't read files. Decoded on use.
 
   local b64 = {}
   do
@@ -2117,8 +2107,7 @@ function M.install(env, options)
     return -1
   end
 
-  -- Records the importer couldn't map stay readable, but setting where they point at goes
-  -- through CE's own location text from then on
+  -- Unmapped records stay readable; setting their address goes through CE location text
   local function set_location(r, text, offsets)
     local st = rec_state(r)
     st.kind = "location"
@@ -2367,8 +2356,7 @@ function M.install(env, options)
     return r
   end
 
-  -- A flat list in table order, children after their parent, linked by `parent`. More can
-  -- come later through `handle.load`
+  -- Flat list in table order, children after their parent. `handle.load` can add more.
   local function load_records(list)
     for _, e in ipairs(list or {}) do
       local parent = e.parent ~= nil and by_id[e.parent] or nil
@@ -2439,7 +2427,7 @@ function M.install(env, options)
   def("getAddressList", function() return address_list end)
   def("AddressList", address_list)
 
-  -- The tweak changed some other way, like the Tweaks panel, so OnActivate and friends hear
+  -- The tweak changed elsewhere (e.g. Tweaks panel), so OnActivate and friends still fire
   function handle.toggled(path, on)
     for _, r in ipairs(order) do
       local st = rec_state(r)
@@ -2500,8 +2488,7 @@ function M.install(env, options)
     return function() fail(name, reasons[name], 2) end
   end
 
-  -- Setup calls whose absence only matters later. They warn once, so a table's main script
-  -- can carry on past them.
+  -- Setup calls that only matter later. They warn once so the main script carries on.
   local setup = {
     "registerAutoAssemblerCommand", "unregisterAutoAssemblerCommand", "registerLuaFunctionHighlight",
     "unregisterLuaFunctionHighlight", "registerSymbolLookupCallback", "unregisterSymbolLookupCallback",

@@ -1,5 +1,4 @@
-//! The game's code as it was before any plugin hooked it: a snapshot taken as Wraith starts, and the
-//! exe's file read from disk on a worker, for code that was hooked before Wraith got there.
+//! The game's unhooked code: a snapshot at startup, and the exe read from disk for earlier hooks.
 
 const OriginalCode = @This();
 

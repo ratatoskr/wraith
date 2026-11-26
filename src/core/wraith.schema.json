@@ -162,6 +162,14 @@
         "pattern": "^[a-z0-9][a-z0-9_-]{1,63}(@[0-9]+(\\.[0-9]+){0,2})?$"
       }
     },
+    "supersedes": {
+      "description": "Plugins for a game only. Game engine plugins this one stands in for in its game, like unity for a Unity game it can't run in. Wraith doesn't load or fetch them there while this one's on.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" }
+    },
     "devDepends": {
       "description": "For building against packages you're working on: a name from depends, to its folder or its wraith.json, relative to this one. Build tools leave it out of packages, and the hub won't take it.",
       "type": "object",
@@ -170,6 +178,7 @@
       "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 260 }
     }
   },
+  "dependentRequired": { "supersedes": ["game"] },
   "allOf": [
     { "not": { "required": ["game", "gameEngine"] } },
     { "not": { "required": ["description", "descriptionFile"] } }
@@ -181,7 +190,8 @@
       "provider": { "description": "Projects can't set this.", "not": {} },
       "clrMode": { "description": "Projects can't set this.", "not": {} },
       "autoLoad": { "description": "Projects can't set this.", "not": {} },
-      "library": { "description": "Projects can't set this.", "not": {} }
+      "library": { "description": "Projects can't set this.", "not": {} },
+      "supersedes": { "description": "Projects can't set this.", "not": {} }
     }
   }
 }

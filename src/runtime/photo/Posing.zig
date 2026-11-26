@@ -1,6 +1,4 @@
-//! Posing characters. Game and engine plugins hand over their skeletons each frame through the API's
-//! `Posing`, and this does picking, freezing, keys and settings, and draws the skeletons and the
-//! gizmo over the game. Photo mode's window draws its actors, panel and tools with what's here.
+//! Posing characters from the skeletons plugins hand over each frame: picking, freezing, gizmo.
 
 const Posing = @This();
 
@@ -337,8 +335,7 @@ fn drawSkeletons(self: *Posing, store: *poses.Store) void {
     };
 }
 
-/// Handles on the picked bone, which edit it like the boxes do. Wraith's gizmos draw them after
-/// this frame's done, so what's dragged comes back here next frame. True while the mouse is on them.
+/// The picked bone's gizmo; drags land next frame. True while the mouse is on it.
 fn updateGizmo(self: *Posing, store: *poses.Store, posed: ?*poses.Actor) bool {
     const a = posed orelse return self.hideGizmo();
     const b = self.currentBone(a) orelse return self.hideGizmo();
@@ -370,8 +367,7 @@ fn updateGizmo(self: *Posing, store: *poses.Store, posed: ?*poses.Actor) bool {
 }
 
 fn hideGizmo(self: *Posing) bool {
-    // Even when it's not said to show: picking another actor or bone clears `gizmo_shown` so it
-    // comes back in front, and with nothing picked after, it'd be left where it was
+    // Even when not shown, or it'd be left where it was after picking nothing
     self.gizmo.hide();
     self.gizmo_shown = false;
     return false;
@@ -385,8 +381,7 @@ pub fn drawSearch(self: *Posing) void {
     _ = ui.inputTextHint("##search", "Search actors, bones and shapes", &self.search);
 }
 
-/// A row for each actor in the scene list, frozen ones with a snowflake and edited ones marked.
-/// True when one's clicked.
+/// A row for each actor in the scene list. True when one's clicked.
 pub fn drawActorRows(self: *Posing, selected: bool) bool {
     self.acquire();
     defer self.release();
@@ -584,8 +579,7 @@ fn shapesTab(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
     }
 }
 
-/// The bones as an indented tree, with posed ones marked. Only the ones that match while
-/// searching, still indented.
+/// The bones as an indented tree, filtered while searching.
 fn boneList(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
     var depth: [poses.max_bones]u8 = undefined;
     // What's shown, which is every bone unless searching

@@ -1,6 +1,5 @@
-//! The project's tweaks. Turn them on and off, give them keys, edit them. A group is a row that
-//! folds, with its shared part's values, and what's in it under it, nested groups too. Rows drag
-//! or move with Move up and down among the ones next to them, laid out like the Tweaks window.
+//! The project's tweaks: turn them on and off, give them keys and edit them. Groups fold, and rows
+//! reorder among their siblings, laid out like the Tweaks window.
 
 const TweaksPanel = @This();
 
@@ -38,8 +37,7 @@ problem: ?devtools.Problem = null,
 reorder: ui.Reorder = .{ .kind = "wraith.tweaks", .siblings_only = true },
 /// Without the shell's, like in tests.
 own_layout: TweakLayout = .{},
-/// Values shown or hidden by hand, by `idOf`. They show while it's on and hide while it's off
-/// otherwise. Turning it on or off goes back to that.
+/// Values shown or hidden by hand, by `idOf`. Otherwise they show while on; toggling resets it.
 values: std.AutoHashMapUnmanaged(u64, ValuesShown) = .empty,
 
 const ValuesShown = struct { shown: bool, active: bool };

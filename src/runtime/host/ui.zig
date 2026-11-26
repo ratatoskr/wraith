@@ -28,9 +28,8 @@ pub fn isAvailable(_: *Loaded) bool {
     return overlay != null;
 }
 
-/// Runs a plugin's draw callback in the current ImGui frame, scoped to the plugin, with what it
-/// leaves open unwound after. Without an ImGui context, like in tests, it just calls it. The render
-/// thread, or the Workbench's for its panels.
+/// Runs a plugin's draw callback in the ImGui frame, scoped to it, unwinding what it leaves open.
+/// Render thread, or the Workbench's for panels.
 pub fn runAs(loaded: *Loaded, warned: *bool, ctx: *anyopaque, func: *const fn (ctx: ?*anyopaque) callconv(.c) void) void {
     if (c.ImGui_GetCurrentContext() == null) return func(ctx);
     drawing = loaded;

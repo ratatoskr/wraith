@@ -1,5 +1,4 @@
-//! The `Hooks` and `Watches` areas, from `hooks.sal` and `watches.sal`. Handlers get the registers as
-//! `cpu.sal`'s `Cpu`, see `cpu.zig`.
+//! The `Hooks` and `Watches` areas. Handlers get the registers as `cpu.sal`'s `Cpu`, see `cpu.zig`.
 
 const std = @import("std");
 

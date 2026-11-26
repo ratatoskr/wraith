@@ -1,5 +1,4 @@
-//! A pretend Wraith for tests: a root with frames you run yourself, a log and diagnostics you can
-//! look at. Areas it doesn't have give `Unsupported` or zero, like an older Wraith.
+//! A fake Wraith for tests, with frames you run yourself. Missing areas give `Unsupported` or zero.
 //!
 //!     var fake: sdk.testing.Fake = .{};
 //!     fake.attach();
@@ -69,8 +68,7 @@ pub const Fake = struct {
     nexts: std.ArrayList(NextResolver) = .empty,
     /// The thread `runFrame` last ran on.
     render_thread: std.Thread.Id = 0,
-    /// Where hops and delays carry on, like the runtime's: the render thread's in `runFrame`, the
-    /// game thread's in `runTick`. Made on first use.
+    /// Where hops and delays resume: render in `runFrame`, game in `runTick`. Made on first use.
     render_queue: sal.Queue = .{},
     game_queue: sal.Queue = .{},
     /// Under `lock`.
@@ -178,8 +176,7 @@ pub const Fake = struct {
         return self.last_message_buf[0..self.last_message_len];
     }
 
-    /// Ticks unless `driven`, settles what's posted, then runs draw callbacks, like the runtime's
-    /// frames.
+    /// Ticks unless `driven`, settles posts, then runs draw callbacks, like a runtime frame.
     pub fn runFrame(self: *Fake) void {
         @atomicStore(std.Thread.Id, &self.render_thread, std.Thread.getCurrentId(), .monotonic);
         if (!self.driven) self.runTick();

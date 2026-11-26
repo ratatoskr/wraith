@@ -1,6 +1,5 @@
-//! File > Export as mod. Asks what the project is on the hub, prefilled from last time or the game
-//! that's running, checks it like the hub does, then writes the project as an `.rwp` where you pick:
-//! a mod's zip, to send someone, upload to the hub, or open in another workbench.
+//! File > Export as mod. Asks the hub details, prefilled from last time or the running game,
+//! validates like the hub does, then writes the project as an `.rwp`.
 
 const ExportMod = @This();
 

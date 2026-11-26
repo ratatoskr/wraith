@@ -1,6 +1,4 @@
-//! A game's project, its addresses, tweaks, scripts and schemas. Saved only when asked, as plain
-//! files in `workbench/` next to the game's settings, and unsaved changes go when the game does, a
-//! crash included. A `.rwp` is a zip of one, for sending: exported, opened and merged, never saved to.
+//! A game's project, saved only when asked as plain files in `workbench/`. A `.rwp` is a zip of one.
 
 const Project = @This();
 
@@ -71,8 +69,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, work_dir: []const u8) !*
     return self;
 }
 
-/// What's saved. With nothing saved yet, `last` is an `.rwp` older versions saved to, brought into
-/// the folder.
+/// What's saved, else `last`, an `.rwp` older versions saved to.
 pub fn startUp(self: *Project, last: ?[]const u8) void {
     self.dropOldRecovery();
     self.reload() catch |err| log.warn("Couldn't open the project in {s}: {t}", .{ self.dir, err });
@@ -136,7 +133,6 @@ pub fn read(self: *Project, gpa: std.mem.Allocator, path: []const u8) !?[]u8 {
     return try gpa.dupe(u8, f.text);
 }
 
-/// Changes `path`, or adds it.
 pub fn write(self: *Project, path: []const u8, text: []const u8) !void {
     {
         self.lock.lock();
@@ -213,8 +209,7 @@ pub fn freeName(self: *Project, path: []const u8) ![]u8 {
     return error.NoFreeName;
 }
 
-/// Writes its files to `dir`, and deletes the ones it no longer has. Files and folders starting
-/// with a dot, like `.git`, are left alone.
+/// Writes its files to `dir` and deletes ones it no longer has, leaving dotfiles alone.
 pub fn save(self: *Project) !void {
     {
         self.lock.lockShared();
@@ -258,8 +253,7 @@ pub fn new(self: *Project) void {
     self.replace(&files, true);
 }
 
-/// Becomes an unsaved one of `files`, each with a `path` and `text`, like an import. Unsaved
-/// changes here are dropped.
+/// Becomes an unsaved one of `files`, each with a `path` and `text`. Unsaved changes are dropped.
 pub fn load(self: *Project, files: anytype) !void {
     var copies: std.ArrayList(File) = .empty;
     errdefer {
@@ -287,9 +281,7 @@ pub fn reload(self: *Project) !void {
     self.replace(&files, false);
 }
 
-/// Brings in another project's files as unsaved changes. Address lists join, its `wraith.json`
-/// comes in only if this has none, and other files that clash get a new name. Returns how many
-/// files came in.
+/// Brings in another project's files as unsaved changes, renaming clashes. Returns how many came in.
 pub fn mergeFrom(self: *Project, path: []const u8) !usize {
     var theirs = try self.unzip(path);
     defer {
@@ -351,8 +343,7 @@ fn innerItems(text: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Takes in the game's address list from before projects, renamed `.old` after so it's taken
-/// in once. Unsaved, like any change.
+/// Takes in the pre-projects address list, then renames it `.old` so it's taken in once.
 pub fn adopt(self: *Project, old: []const u8) !void {
     if (try self.read(self.allocator, addresses_file)) |there| {
         self.allocator.free(there);
@@ -433,8 +424,7 @@ fn dropOldRecovery(self: *Project) void {
 }
 // Zips
 
-/// An `.rwp` that's also a mod the hub takes: its files with `wraith.json` at the top, and without
-/// the manifest older projects had. It has to have a `wraith.json` already. `open` reads it back.
+/// An `.rwp` that's also a hub mod. Needs a `wraith.json` already.
 pub fn exportMod(self: *Project, path: []const u8) !void {
     var out: std.Io.Writer.Allocating = .init(self.allocator);
     defer out.deinit();
@@ -509,16 +499,14 @@ fn readTree(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !std.ArrayList
     return out;
 }
 
-/// Not the project's: anything starting with a dot or in a folder that does, like `.git`, and a
-/// half written `.tmp`.
+/// Dotfiles, dot folders and half written `.tmp`s.
 fn hidden(path: []const u8) bool {
     var parts = std.mem.tokenizeAny(u8, path, "/\\");
     while (parts.next()) |part| if (part[0] == '.') return true;
     return std.mem.endsWith(u8, path, ".tmp");
 }
 
-/// `files` into `path`, each replaced whole, then the files from before it no longer has, and any
-/// folders that leaves empty, deleted.
+/// Writes `files` into `path`, then deletes the old ones and any folders left empty.
 fn saveTree(io: std.Io, gpa: std.mem.Allocator, path: []const u8, files: []const File) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, path);

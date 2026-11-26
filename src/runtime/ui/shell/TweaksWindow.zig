@@ -1,7 +1,5 @@
-//! The overlay's Tweaks window, and the small list it leaves on screen when it's pinned. Plugins'
-//! `[Tweak]` structs show here too, as a row that opens up into the game's values. Every tweak this game has: your project's, installed projects' and
-//! plugins', with what's on, their values and their keys. Headings and groups fold, and rows drag
-//! or move from the right-click menu among the ones next to them. Render thread.
+//! The overlay's Tweaks window, and the small list left on screen when pinned. Lists every tweak and
+//! plugin `[Tweak]` struct this game has, with their values and keys. Render thread.
 
 const TweaksWindow = @This();
 
@@ -25,8 +23,7 @@ search: [128]u8 = @splat(0),
 only_on: bool = false,
 /// Dragging rows about. What's folded and the order are in the shell's `tweak_layout`.
 reorder: ui.Reorder = .{ .kind = "wraith.tweaks", .siblings_only = true },
-/// Tweaks showing their fields and `[Tweak]` structs showing their values, by `openKey` and
-/// `structKey`. Shut to start, so the list stays short.
+/// Tweaks and `[Tweak]` structs shown open, by `openKey` and `structKey`. Shut to start.
 opened: std.ArrayList(u64) = .empty,
 
 const red: ui.Color = .{ 1, 0.5, 0.5, 1 };
@@ -215,8 +212,7 @@ fn drawSection(self: *TweaksWindow, layout: *TweakLayout, e: *const Entry, name:
     _ = ui.tableNextColumn();
 }
 
-/// Where they're from, as a bar across the row. Clicking folds it, and it drags to put a source
-/// above or below another.
+/// Where they're from, as a bar across the row. Clicking folds it; it drags to reorder sources.
 fn drawHeading(self: *TweaksWindow, layout: *TweakLayout, e: *const Entry, title: []const u8, folds: bool) void {
     ui.tableNextRow();
     _ = ui.tableNextColumn();
@@ -336,8 +332,7 @@ fn drawRow(self: *TweaksWindow, gpa: std.mem.Allocator, tweaks: *Tweaks, layout:
     if (!ui.listeningForKeys()) ui.tooltip("{s}. Click to change it", .{if (t.key == null) "No key" else if (t.own_key) "Yours" else "The tweak's own"});
 }
 
-/// The pinned list on screen, of tweaks with keys and ones that are on. It only takes the mouse,
-/// to be moved, while the overlay's open.
+/// The pinned list of tweaks with keys and ones that are on. Only takes the mouse while the overlay's open.
 pub fn drawOnScreen(self: *TweaksWindow, shell: *Shell, interactive: bool) void {
     _ = self;
     if (!shell.registry.get(shell.own.tweaks_on_screen).toggle) return;

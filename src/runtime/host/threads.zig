@@ -1,10 +1,5 @@
-//! Where plugin code runs: the render thread, the game thread or a worker. The same for every
-//! language: an async call carries on on the thread that made it, and the hops in `threads.sal` on
-//! another. Promises say so themselves, through their resolver's `carryOn`, so it holds however
-//! the waiter waits, even when it comes after the promise settled. See `Back`.
-//!
-//! On the render thread a plugin carries on inside its own frame, like its draw callbacks, so it
-//! can draw there.
+//! Where plugin code runs: render thread, game thread or a worker. Async calls carry on on the thread
+//! that made them, via the resolver's `carryOn` (see `Back`), on the render thread inside their frame.
 
 const std = @import("std");
 
@@ -35,8 +30,7 @@ pub fn isHere(thread: Thread) bool {
     return here() == thread;
 }
 
-/// Whether something polls `thread`'s queue. Without frames nothing polls the render thread's,
-/// like in a headless test, and without them or a driver nothing polls the game thread's.
+/// Whether something polls `thread`'s queue, which needs frames, or a driver for the game thread.
 pub fn reachable(thread: Thread) bool {
     return switch (thread) {
         .render => host.frame.framesOn(),
@@ -50,8 +44,7 @@ var lock: sync.Mutex = .{};
 var group: std.Io.Group = .init;
 var stopped: bool = false;
 
-/// Runs `task` on `thread`: at the render thread's next frame, the game thread's next tick, or
-/// on a worker now. Fails only when it can't, leaving `task` the caller's.
+/// Runs `task` at the next frame, the next tick, or on a worker now. On failure it's still the caller's.
 pub fn post(thread: Thread, task: sal.Task) error{Failed}!void {
     queueOf(thread).postTask(task) catch return error.Failed;
 }
@@ -86,8 +79,7 @@ fn runTask(task: sal.Task) void {
     task.invoke(.{});
 }
 
-/// Waits for what's running on workers, posting no more meanwhile. Before `io` goes, once plugins
-/// have.
+/// Waits for workers' jobs, posting no more. After plugins go, before `io` does.
 pub fn stop() void {
     const io = host.wraith.ioOf() orelse return;
     lock.lock();
@@ -106,8 +98,7 @@ pub fn queueFor(loaded: *Loaded, thread: Thread) sal.Queue {
     return queueOf(thread);
 }
 
-/// Has whoever waits on `r`'s promise carry on on `thread`, `loaded`'s own way. Not when nothing
-/// polls it, so then they carry on wherever it settles.
+/// Has `r`'s waiter carry on on `thread`, `loaded`'s way, unless nothing polls it.
 pub fn carryOn(r: anytype, loaded: *Loaded, thread: Thread) void {
     if (reachable(thread)) r.carryOn(queueFor(loaded, thread));
 }
@@ -121,8 +112,7 @@ const Delay = struct {
     task: sal.Task,
 };
 
-/// Runs `task` once `ns` have gone by, from the next frame or tick after. Fails leaving it the
-/// caller's.
+/// Runs `task` at the first frame or tick after `ns`. On failure it's still the caller's.
 pub fn after(ns: u64, task: sal.Task) error{Failed}!void {
     const at = @import("wraith_core").timing.now() +| ns;
     delays_lock.lock();
@@ -147,8 +137,7 @@ pub fn checkDelays() void {
     }
 }
 
-/// An async call's resolver, which carries on on the thread that made it, wherever it settles.
-/// Made where the call's made, and used like the resolver.
+/// An async call's resolver that carries on on the thread that made it. Made where the call's made.
 pub fn Back(comptime R: type) type {
     return struct {
         const Self = @This();

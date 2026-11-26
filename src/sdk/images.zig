@@ -1,5 +1,4 @@
-//! Images to draw in the overlay, and the CPU side: decoding, PNG and frame captures. The runtime's
-//! images are `wraith.sal`'s `images` area. This adds loading a file on a worker, and drawing one.
+//! Overlay images: loading on a worker and drawing, on top of `wraith.sal`'s `images` area.
 
 const std = @import("std");
 
@@ -31,8 +30,7 @@ pub const LoadError = threads.MoveError || std.Io.Dir.ReadFileAllocError || erro
     OnGameThread,
 };
 
-/// Reads and decodes a file on a worker. A task goes back where it was after. Elsewhere it runs right
-/// there, so not on the render or game thread.
+/// Reads and decodes a file on a worker. Outside a task it blocks, so not on the render or game thread.
 pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) LoadError!Image {
     const task = tasks.current();
     const was = if (task) |t| t.where else null;

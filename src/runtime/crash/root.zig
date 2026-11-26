@@ -1,10 +1,5 @@
-//! Crash handling. A crash nothing else handled stops here. A thread of ours logs it, flushes the log and
-//! writes a report, then shows the crash window. From there it can go into the workbench's
-//! debugger, else it goes on to the game's own crash handling.
-//! The minidump comes from crash\wraith_crashhandler_<arch>.exe, outside the game, since dumping ourselves
-//! hangs if a paused thread holds a lock the dump needs. Without it we dump ourselves.
-//! The crashing thread itself only copies what it needs and waits, since it may have no stack or hold a
-//! lock anything else needs.
+//! Crash handling: a watcher thread logs, reports and shows the crash window for unhandled crashes.
+//! The crashing thread only copies and waits; dumps come from an outside exe since self-dumps can hang.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -96,8 +91,7 @@ threadlocal var panicking: bool = false;
 var choice: Atomic(Picked) = .init(.waiting);
 /// Tests answer the window without it showing.
 var test_choice: ?Window.Choice = null;
-/// A dump of our own process can deadlock on a lock another thread holds, so tests that
-/// don't need one skip it.
+/// Self-dumps can deadlock, so tests that don't need one skip it.
 var test_skip_dump = false;
 /// Tests check the crash handler wrote it, not us.
 var dumped_outside = false;
@@ -107,10 +101,7 @@ const Picked = enum(u8) { waiting, crash, workbench };
 const Last = sys.exceptions.Unhandled(route);
 const Watched = sys.exceptions.Vectored(Seen.record);
 
-/// Faults as they're raised, before the game's own handlers. Unreal catches crashes in its own
-/// `__except` and shows "Fatal error!", so `Last` never sees them, and this is all there is to go
-/// on. Last in the chain, so what other vectored handlers deal with never gets here. Nothing's
-/// handled, it's only noted, and the watcher logs it.
+/// Notes faults as they're raised, since Unreal's own `__except` means `Last` never sees them.
 const Seen = struct {
     const slots = 4;
     const stack_words = 512;
@@ -197,8 +188,7 @@ const Seen = struct {
     }
 };
 
-/// `logs_dir` is where the report and dump go, next to the log. `crash_handler` is the
-/// `wraith_crashhandler_<arch>.exe` for our arch, to write the dump from outside the game.
+/// `logs_dir` gets the report and dump. `crash_handler` writes the dump from outside the game.
 pub fn install(logs_dir: []const u8, exe: []const u8, process_id: u32, crash_handler: ?[]const u8) void {
     if (state.load(.acquire) != .off) return;
     const name = std.fs.path.basename(exe);
@@ -252,8 +242,7 @@ pub fn setDebugger(d: ?*Debugger) void {
     debugger = d;
 }
 
-/// The runtime's panic handler. Zig's own loads debug info from disk to print a trace, which needs more
-/// stack than game threads have. This logs it and traps instead, so it shows up as a crash like any other.
+/// Logs and traps, since Zig's own handler needs more stack than game threads have.
 pub fn panic(msg: []const u8, _: ?usize) noreturn {
     @branchHint(.cold);
     if (!panicking) {

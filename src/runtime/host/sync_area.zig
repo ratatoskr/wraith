@@ -1,8 +1,5 @@
-//! The `sync` area: locks shared between plugins, see sync.sal. A lock is its maker's, and holding
-//! or waiting for one is the asking plugin's, so whatever a plugin had goes with it: its locks
-//! go, what it held is handed on, and what it waited for is dropped. Plugins lock through their own
-//! area, which is how the asking one's known. A `Lock` object is just a lock's id, so one that's
-//! gone, or a script's own, is found to be nothing.
+//! The `sync` area: locks shared between plugins, see sync.sal. A plugin going drops its locks, hands
+//! on what it held and drops what it waited for. A `Lock` object is just an id.
 
 const std = @import("std");
 

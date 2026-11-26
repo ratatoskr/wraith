@@ -1,13 +1,10 @@
-//! Lua from CE tables, live under the CE compatibility layer `ce.lua`, which the runtime has as
-//! the script library `ce`. A table's file says `@use ce`, and its shared part loads the records
-//! manifest with `ce.load { ... }` before the table's own Lua. See `lua/API.md`.
+//! Lua from CE tables, run under the `ce` script library (`ce.lua`). See `lua/API.md`.
 
 const std = @import("std");
 
 const luaString = @import("wraith_api").tweak.luaString;
 
-/// Cheat Engine's Lua API on top of Wraith's, for imported tables' Lua. The runtime registers it as
-/// the script library `library_name`. See `lua/API.md`.
+/// CE's Lua API on top of Wraith's, registered as the script library `library_name`.
 pub const compat_source = @embedFile("lua/ce.lua");
 pub const library_name = "ce";
 /// What the layer does with each of CE's builtins.
@@ -31,8 +28,7 @@ pub fn section(arena: std.mem.Allocator, pre: []const u8, on: []const u8, off: [
     return out.items;
 }
 
-/// CE ran each block as a function, so one with a `return` at its top stays one, which keeps
-/// the return from ending the whole part.
+/// Wraps a block with a top-level `return` in a function, as CE ran it, so it doesn't end the part.
 pub fn body(arena: std.mem.Allocator, code: []const u8) ![]const u8 {
     if (!try returnsAtTop(arena, code)) return code;
     return std.fmt.allocPrint(arena, "-- ce: CE ran this as a function, which its return needs\n;(function()\n{s}\nend)()", .{code});
@@ -50,8 +46,7 @@ pub fn appendCode(arena: std.mem.Allocator, out: *std.ArrayList(u8), code: []con
     }
 }
 
-/// Lua 5.5 makes `for` loop variables read-only, so a loop whose body assigns to one gets a
-/// local copy at the top of its body, the way 5.3 behaved. Gives the code, and how many loops.
+/// Lua 5.5 `for` variables are read-only, so loops assigning one get a local copy. Returns the count.
 pub fn fixLoops(arena: std.mem.Allocator, code: []const u8) !struct { []const u8, u32 } {
     const tokens = try tokenize(arena, code);
     var inserts: std.ArrayList(struct { at: usize, text: []const u8 }) = .empty;
@@ -117,8 +112,7 @@ fn returnsAtTop(arena: std.mem.Allocator, code: []const u8) !bool {
     return false;
 }
 
-/// A `return` with a value outside any function, which in CE's `{$lua}` is asm for it to
-/// assemble.
+/// A top-level `return` with a value, which in CE's `{$lua}` is asm to assemble.
 pub fn returnsValue(arena: std.mem.Allocator, code: []const u8) !bool {
     const tokens = try tokenize(arena, code);
     // Each open block, and whether it's a function
@@ -180,8 +174,7 @@ const Token = struct {
     }
 };
 
-/// Names, keywords and punctuation, with strings, numbers and comments left out. `while` and
-/// `for` count their `do` like any other.
+/// Names, keywords and punctuation, skipping strings, numbers and comments.
 fn tokenize(arena: std.mem.Allocator, code: []const u8) ![]const Token {
     var out: std.ArrayList(Token) = .empty;
     var i: usize = 0;
@@ -307,8 +300,7 @@ pub fn manifest(arena: std.mem.Allocator, records: []const Record) ![]const u8 {
     return out.written();
 }
 
-/// `ce.files { ... }`, each file's bytes in base64 since scripts can't read files. Its lines are
-/// split so the tweak file stays readable, and base64 can't end a long string or start a `@`.
+/// `ce.files { ... }` in base64, since scripts can't read files. Base64 can't close a long string.
 pub fn files(arena: std.mem.Allocator, list: []const @import("files.zig").File) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;

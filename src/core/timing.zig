@@ -12,8 +12,7 @@ pub fn now() u64 {
     return clock.nanos();
 }
 
-/// Laid out like C, since plugins list theirs and the runtime reads them. Change `version` when the
-/// fields change, so a plugin built against another layout isn't read.
+/// C layout, read across the plugin boundary. Bump `version` when the fields change.
 pub const Zone = extern struct {
     pub const Snapshot = Stats;
     pub const version: u32 = 1;

@@ -1,13 +1,9 @@
-//! Wraith's API from `src/api/schemas`, the same areas scripts get, with real methods. A plugin has
-//! it as `ctx.wraith`:
+//! Wraith's API, the same areas scripts get, as `ctx.wraith`:
 //!
 //!     const stats = ctx.wraith.threads().stats();
 //!     const fov = try ctx.wraith.settings().add(.{ .id = .init("fov"), .kind = .number, .min = 60, .max = 120 }, null);
 //!
-//! `root()` gives the same where there's no `ctx` to hand.
-//!
-//! Once the plugin's unloading its calls do nothing and give zero or `error.Gone`. Kept objects,
-//! like a setting, go once they're released or the plugin unloads.
+//! `root()` gives the same without a `ctx`. After unload, calls give zero or `error.Gone`.
 
 const api = @import("wraith_api");
 const Owner = @import("Owner.zig");

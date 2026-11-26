@@ -1,5 +1,4 @@
-//! wraith_crashhandler_<arch>.exe. Does crash work from outside the game, where the game's locks
-//! can't hang it. The runtime runs the one for its own arch, since it has to match the game's.
+//! wraith_crashhandler_<arch>.exe: crash work from outside the game, where its locks can't hang us.
 //!
 //!   dump <pid> <file.dmp> [<thread id> <EXCEPTION_POINTERS address>]
 //!     A minidump, stopped at that exception if given. The address is in the game's memory.

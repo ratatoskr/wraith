@@ -1,7 +1,5 @@
-//! Finds the plugins a plugin depends on, on this machine. Each is the first of: the folder its
-//! `devDepends` names, one of your dev plugins, a folder by its name next to the plugin, the
-//! installed one, or the hub's copy in the cache. Only versions its `depends` allows count, except
-//! for ones you're working on. Just `std`, so Zig plugins' builds use it too.
+//! Finds a plugin's dependencies on this machine: devDepends, dev plugins, siblings, installed, cache.
+//! Only `std`, so Zig plugin builds can use it too.
 
 const std = @import("std");
 

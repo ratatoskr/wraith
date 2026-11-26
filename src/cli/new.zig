@@ -1,5 +1,4 @@
-//! `wraith new`: starts a plugin in Zig, TypeScript, JavaScript, Lua or C#, with what its language
-//! needs and a wraith.json for the game it's for, found the way `identify` finds it.
+//! `wraith new`: scaffolds a plugin in any supported language, with a wraith.json for its game.
 
 const std = @import("std");
 const builtin = @import("builtin");

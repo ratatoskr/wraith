@@ -1,6 +1,4 @@
-//! Where Wraith's settings live, and the runtime's own. Everything else that has settings, the game,
-//! the shell and plugins, registers its own in the registry too. Values are kept in
-//! `runtime/values.zon` for every game and `games/<id>/values.zon` for one.
+//! Wraith's and the runtime's own settings. Values live in `runtime/values.zon` and `games/<id>/values.zon`.
 
 const std = @import("std");
 const builtin = @import("builtin");

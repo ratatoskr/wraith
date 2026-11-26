@@ -147,7 +147,7 @@ pub fn create(allocator: std.mem.Allocator, info: *const RuntimeInfo) !*Runtime 
     if (self.game) |g| g.shell.setLoader(&self.loader);
     errdefer if (self.game) |g| g.shell.setLoader(null);
     try self.loader.start(self.game_settings.value.disabled_plugins);
-    // The game engine's own plugin, kept up to date off the hub, on a worker
+    // The game's essential mods, like its engine's own plugin, kept up to date off the hub, on a worker
     if (self.game) |g| g.shell.windows.mods.keepEssentials(g.shell);
 
     log.info("Runtime started with {d} plugin(s)", .{self.loader.count()});

@@ -1,6 +1,5 @@
-//! Wraith's built-in fonts, Inter and JetBrains Mono, each with Lucide's icons and Simple Icons'
-//! logos merged in, so `icons` and `brands` work in any text. The system's Chinese, Japanese or
-//! Korean fonts go in after, for the ones this user reads or types, so those don't show as "?".
+//! Wraith's built-in fonts, Inter and JetBrains Mono, with Lucide icons and Simple Icons logos merged
+//! in. The system's CJK fonts go in after, for users who read or type them.
 
 const std = @import("std");
 
@@ -20,8 +19,7 @@ const lucide = @embedFile("fonts/Lucide.ttf");
 /// Cut down to `brands`. Its codepoints don't overlap Lucide's.
 const simple_icons = @embedFile("fonts/SimpleIcons.ttf");
 
-/// Read by `loadSystem`, most wanted first. ImGui keeps pointing at them, so they stay till
-/// `freeSystem`.
+/// Read by `loadSystem`, most wanted first. ImGui keeps pointing at them till `freeSystem`.
 var system: [4]?[]u8 = @splat(null);
 var system_allocator: ?std.mem.Allocator = null;
 /// They're big, so not more than this many MB each.
@@ -70,16 +68,14 @@ fn readSystem(allocator: std.mem.Allocator, io: std.Io) void {
     }
 }
 
-/// Where the middle of a capital letter is, above the baseline, as a share of the font's size. ImGui
-/// sizes a font by its ascent plus descent, so for Inter that's half its cap height of 1490 over
-/// 1984 + 494, and for JetBrains Mono half of 730 over 1020 + 300.
+/// Middle of a capital, as a share of font size. ImGui sizes by ascent + descent, so it's half cap height over that.
 const inter_caps = 745.0 / 2478.0;
 const mono_caps = 365.0 / 1320.0;
 /// Lucide's and Simple Icons' glyphs are centred half way up theirs.
 const icons_middle = 0.5;
 
-/// Inter has stylistic alternates where Lucide's icons are, and the first font with a glyph wins.
-/// The icons are moved down to centre on the text's capitals, else they sit high and get clipped.
+/// Inter has alternates where Lucide's icons are, and the first font with a glyph wins.
+/// Icons are moved down to centre on capitals, else they sit high and get clipped.
 fn withIcons(data: []const u8, size: f32, name: [:0]const u8, caps: f32) ?*ui.c.ImFont {
     const font = tuft_imgui.addFont(data, size, name, .{ .skip_private_use = true }) orelse return null;
     const icons_offset: tuft_imgui.MergeOptions = .{ .offset_y = @round((icons_middle - caps) * size) };

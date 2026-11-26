@@ -1,5 +1,4 @@
-//! Tab-separated text for the clipboard, so it pastes into a spreadsheet as is. The Workbench's
-//! views and plugins' panels copy with it alike.
+//! Tab-separated clipboard text, so it pastes into a spreadsheet.
 
 const Clip = @This();
 

@@ -1,5 +1,5 @@
-//! Which copy of the game's code a code or memory document shows, live or one from before something
-//! hooked it, and a second pane next to the first, kept in step with it.
+//! Which copy of the game's code a code or memory document shows (live or pre-hook), and a second
+//! pane kept in step with the first.
 
 const std = @import("std");
 

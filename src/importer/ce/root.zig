@@ -1,12 +1,6 @@
-//! Cheat Engine tables to Wraith projects. Auto Assembler scripts become tweaks, records go to
-//! the Addresses list, and `import-report.md` says what needs a person to look at it.
-//!
-//! The whole table is one group file, `tweaks/<table>.rwt`, nested like the table. A script with
-//! scripts under it is a group whose shared part is its own [ENABLE], and a header holding
-//! scripts is a group with nothing shared. Its top says `@globals shared`, since CE runs a whole
-//! table in one Lua state and scripts lean on each other's globals. A table with Lua gets
-//! `@use ce`, the CE layer, with the records manifest and the table's own Lua in its shared
-//! part, see `lua.zig`.
+//! Cheat Engine tables to Wraith projects: scripts become tweaks in one nested group file,
+//! records go to Addresses, and `import-report.md` lists what needs review.
+//! The group uses `@globals shared` since CE runs a whole table in one Lua state.
 
 const std = @import("std");
 const tweak_format = @import("wraith_api").tweak;
@@ -190,8 +184,7 @@ const Importer = struct {
     }
     // Guessing about the table
 
-    /// Whichever registers its memory operands use more, like `[rbx+8]` or `[ebx+8]`. Some
-    /// x86 tables have a stray `[rsp]` pasted in, so one isn't enough.
+    /// Goes by which registers memory operands use more, since x86 tables can have a stray `[rsp]`.
     fn detectBits(self: *const Importer) machine.Bits {
         var votes: Votes = .{};
         for (self.table.entries) |*e| votes.count(e);
@@ -421,8 +414,7 @@ const Importer = struct {
         };
     }
 
-    /// What a tweak's asm can use by name once it's in the game. That's its own `@data` and
-    /// `@sym`, `original` and `resume`, modules, other tweaks' names and the table's symbols.
+    /// Names a tweak's asm can use in game: its own, modules, other tweaks' and the table's symbols.
     const KnownNames = struct {
         imp: *const Importer,
         tweak: *const convert.Tweak,
@@ -636,8 +628,7 @@ const Importer = struct {
         return dd.items;
     }
 
-    /// A record of a tweak's own data gives its field a label and choices, and goes there
-    /// instead of the list if it's under that tweak's script.
+    /// A record of a tweak's data labels its field, and moves there if it's under that script.
     fn absorb(self: *Importer, e: *const Entry, script_parent: ?*const Entry) !bool {
         const raw = std.mem.trim(u8, e.address orelse return false, " \t");
         if (e.offsets.len > 0 or raw.len == 0) return false;
@@ -662,8 +653,7 @@ const Importer = struct {
         return true;
     }
 
-    /// A field record's toggle hotkey flips its field, as `Key(...)` on a `Toggle`. Others go in
-    /// the report, since a field only has the one key.
+    /// A field record's toggle hotkey becomes `Key(...)`; others go in the report (one key per field).
     fn fieldKeys(self: *Importer, e: *const Entry, f: *convert.Field) !void {
         const at = try self.fileWhere();
         for (e.hotkeys) |h| {
@@ -761,8 +751,7 @@ const Importer = struct {
         }
     }
 
-    /// Records that others use as `(description)`, which CE looks up before any symbol, get
-    /// their ids first so the addresses using them can say so.
+    /// Records others use as `(description)` get ids first, since CE looks those up before symbols.
     fn referencedIds(self: *Importer, list: []const Entry) !void {
         for (list) |*e| {
             try self.referencesIn(e.address orelse "", e);

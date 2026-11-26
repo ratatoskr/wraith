@@ -146,8 +146,7 @@ fn add(self: *Files, entry: Entry, path: []const u8) void {
     self.next_seq += 1;
 }
 
-/// Next time, read from the last one's `seq + 1`. Coalesced entries come again when they grow,
-/// so take the newest copy of a `seq`.
+/// Next time, read from the last `seq + 1`. Coalesced entries repeat as they grow; take the newest.
 pub fn readSince(self: *Files, seq: u64, out: []Entry) []Entry {
     self.acquire();
     defer self.release();

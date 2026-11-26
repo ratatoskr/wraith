@@ -1,6 +1,5 @@
-// What Wraith's Timings and Signatures windows list from native code. Zones and heaps are wraith_core's
-// timing zones and heap usages in the plugin's memory, laid out like C, with the layout's version.
-// Ones of another version aren't listed. They're listed till they're removed or the plugin goes.
+// What the Timings and Signatures windows list from native code: wraith_core zones and heaps, by
+// layout version. Listed till removed or the plugin goes.
 
 namespace Wraith;
 
@@ -12,7 +11,7 @@ namespace Diagnostics {
         string pattern;
         usize start;
         usize length;
-        // Scanned the game's code as it was before anything patched it
+        // Scanned the code as it was before anything patched it
         bool original;
         ScanOutcome outcome;
         usize address;
@@ -39,12 +38,12 @@ trait Diagnostics {
     void removeZone(usize zone);
     void addHeap(usize heap, u32 version);
     void removeHeap(usize heap);
-    // For the Signatures window, and named in the address list as `plugin.name` when found
+    // For the Signatures window, and named `plugin.name` in the address list when found
     void recordScan(SignatureScan scan);
-    // Where the game's code from `start` is kept as it was before anything patched it, or 0
+    // The unpatched copy of the game's code from `start`, or 0
     usize original(usize start, usize length);
     // Like `recordScan`, with which copy it read
     void recordScanFrom(ScanRecord scan);
-    // Where `source`'s copy of the game's code from `start` is, or 0. Live memory has none
+    // Where `source`'s copy of the game's code from `start` is, or 0. Live has none
     usize codeCopy(usize start, usize length, Addresses.Source source);
 }

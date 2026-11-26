@@ -62,7 +62,6 @@ pub fn add(self: *Jobs, op: Op, name: []const u8) !Job {
     errdefer _ = self.pending.pop();
 
     if (!self.running) {
-        // The last worker is done. Join it before starting another
         if (self.worker) |w| w.join();
         self.worker = null;
         self.worker = try std.Thread.spawn(.{}, work, .{self});

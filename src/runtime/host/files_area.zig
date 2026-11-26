@@ -84,8 +84,7 @@ pub const WatchImpl = struct {
 
 // Images
 
-/// What an `Image` object points at. Kept till the plugin's freed, since the object can outlive
-/// the image.
+/// What an `Image` object points at. Kept till the plugin's freed, since the object can outlive it.
 pub const Held = struct {
     loaded: *Loaded,
     image: *api.ImageHandle,

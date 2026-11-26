@@ -1,0 +1,49 @@
+// Parts of the game only one plugin can drive at a time. The best placed claimer holds each: game
+// plugin, then engine plugin, then the rest, then the later loaded. Act on a part only while holding it.
+
+namespace Wraith;
+
+error LeaseError { Failed = 1 }
+
+namespace Lease {
+    // True when the plugin gets the part, false when a better placed one takes it. Not for its own
+    // `release`. Any thread, outside Wraith's locks, so it can call back in.
+    fn void Changed(bool held);
+
+    // The parts there are leases on, each claimed from its own area.
+    enum Part : u8 {
+        // `Threads.claimTicks`
+        ticks,
+        // `Game.claimSpeed`
+        speed,
+        // `FreeCamera.claim`
+        camera,
+        // `Posing.claim`
+        posing,
+        // `Display.claimView`
+        view,
+    }
+
+    struct Holder {
+        // Someone does. Otherwise Wraith does what it can itself.
+        bool held;
+        // It's the plugin asking.
+        bool mine;
+        // The plugin's id, or empty.
+        string plugin;
+    }
+}
+
+// A plugin's claim on a part. Gone with the plugin.
+trait Lease {
+    // Any thread.
+    bool held();
+    // Gives the part up for good, to the next best. Fine to call twice. Any thread.
+    void release();
+}
+
+// Who holds what, for any plugin.
+trait Leases {
+    // Any thread.
+    Lease.Holder holder(Lease.Part part);
+}

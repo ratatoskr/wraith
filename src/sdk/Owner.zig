@@ -1,5 +1,4 @@
-//! Who SDK stuff belongs to: a plugin's `Wraith` root, from `wraith.sal`. SDK calls are made for the
-//! thread's current owner, which is the plugin's own unless something entered another.
+//! The plugin SDK calls act for: the thread's current `Wraith` root, normally the plugin's own.
 
 const Owner = @This();
 
@@ -35,7 +34,7 @@ pub fn own() ?Owner {
     return .{ .root = own_root orelse return null };
 }
 
-/// Not inlined, since a task can move threads and a cached thread-local address would be the old thread's.
+/// Not inlined: a task can move threads, staling a cached thread-local.
 pub noinline fn current() ?Owner {
     if (entered) |root| return .{ .root = root };
     return own();

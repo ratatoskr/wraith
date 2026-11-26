@@ -1,8 +1,5 @@
-//! The handles over the game for moving, turning and scaling something, like posing's bone or what's
-//! picked in a Scene panel. Whoever makes one calls it from any thread, which only stores what's
-//! asked. The render thread draws the one shown last, once a frame, and keeps where it's dragged to
-//! for its owner to take. So only one shows at a time, and nobody else has to be on the render
-//! thread for it.
+//! Handles over the game for moving, turning and scaling something. Owners call from any thread;
+//! the render thread draws the one shown last and keeps where it's dragged for its owner to take.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -131,9 +128,8 @@ fn front() ?*Gizmo {
     return best;
 }
 
-/// Render thread, once a frame after everyone's placed theirs. `view` is the game's camera, or null
-/// when it's not known, and `draggable` whether the overlay has the mouse, so clicks go to the game
-/// otherwise.
+/// Render thread, once a frame after everyone's placed theirs. `view` is null when unknown;
+/// `draggable` is whether the overlay has the mouse.
 pub fn draw(view: ?struct { view: Mat4, projection: Mat4 }, draggable: bool) void {
     lock.lock();
     defer lock.unlock();

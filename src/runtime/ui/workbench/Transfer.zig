@@ -94,8 +94,7 @@ pub fn exportText(self: *Workbench, file_type: FileType, file_name: []const u8, 
     core.files.write(io, path, text, .{ .make_dir = true }) catch |err| return failedTransfer(self, "export", err);
 }
 
-/// Asks for a file and copies it into the project's `folder`, under a free name. Returns where
-/// it went, which the caller frees, or null if cancelled.
+/// Copies a picked file into the project's `folder` under a free name. Returns where, caller frees; null if cancelled.
 pub fn importFile(self: *Workbench, file_type: FileType, folder: []const u8) ?[]u8 {
     const path = pickFile(self, .open, file_type, "") orelse return null;
     defer self.allocator.free(path);

@@ -37,8 +37,7 @@ pub const State = enum {
     }
 };
 
-/// Where it's from. A plugin runs its own instead of a session, and only your project's have
-/// files to edit.
+/// Where it's from. Plugins run their own instead of a session.
 pub const Source = struct {
     kind: Kind = .project,
     /// The mod's or plugin's id. Empty for your project's, which is also its project's key.
@@ -62,8 +61,7 @@ pub const Field = struct {
 
 /// `tweaks/x.rwt`. Empty for a plugin's. A group's tweaks have their group's.
 path: []u8,
-/// `x`, or `plugin:id` for a plugin's, or `x/Title` for one of group `x`'s tweaks, and
-/// `x/Combat/Title` for one in a group nested in it.
+/// `x`, `plugin:id`, or a path in a group's file like `x/Combat/Title`.
 name: []u8,
 source: Source = .{},
 /// A group, the file's own or one nested in it. Its state is its shared part's.
@@ -85,8 +83,7 @@ state: State = .off,
 own: bool = false,
 /// What a group's own box does to what's in it.
 children: format.Children = .{},
-/// Turned off while started, so its session has to be told once it's clear whether its group
-/// goes too.
+/// Turned off while started; its session's told once it's clear whether its group goes too.
 stop_pending: bool = false,
 session: u32,
 /// Its default key, the project's, if they're used.

@@ -321,9 +321,8 @@ pub fn call(name: []const u8, event: api.TweakEvent, problem: *api.TweakProblem)
 
 // Turning tweaks on and off by name, for scripts and plugins
 
-/// What every tweak's box showed on the last tick, and what's been asked for since. `Tweaks`
-/// keeps one, and the host's calls reach the one that's up. Its lock is only held briefly and
-/// nothing else is taken under it, so any thread can call in, from inside any callback.
+/// Every tweak's box as of the last tick, plus what's been asked since. Its lock is brief and nests
+/// nothing, so any thread or callback can call in.
 pub const Switches = struct {
     lock: sync.RwLock = .{},
     /// By name. Names are ours.
@@ -374,8 +373,7 @@ pub const Switches = struct {
         return list;
     }
 
-    /// Takes every box as it is now, and adds the ones that changed to `changed` in `arena`.
-    /// One that's new isn't a change.
+    /// Takes every box as it is now, adding changed ones, not new ones, to `changed` in `arena`.
     pub fn update(self: *Switches, now: []const Switch, arena: std.mem.Allocator, changed: *std.ArrayList(Switch)) !void {
         self.lock.lock();
         defer self.lock.unlock();

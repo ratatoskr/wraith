@@ -1,6 +1,5 @@
-//! Make signature, from the code and memory views. It's worked out on a thread of its own, since
-//! it scans the module's code over and over. The shortest one found is copied as a location. The
-//! status bar shows it going, and a toast says how it went.
+//! Make signature, from the code and memory views. Runs on its own thread since it rescans the
+//! module's code repeatedly. The shortest found is copied as a location.
 
 const SigMaker = @This();
 

@@ -1,6 +1,5 @@
-//! The free camera: fly the game's camera around, or orbit it round a point. Game and engine plugins
-//! hand over the game's camera each frame through the API's `Camera`, and this does the controls,
-//! keys and settings. The game's thread only copies in and out, the render thread moves it.
+//! The free camera: fly or orbit the camera plugins hand over each frame.
+//! The game's thread only copies in and out, the render thread moves it.
 
 const Camera = @This();
 
@@ -41,8 +40,7 @@ const Shared = struct {
     pose: rig.Pose = undefined,
     /// A point something wants to orbit, till the render thread picks it up
     focus_at: ?V3 = null,
-    /// Which of the game's cameras was handed over last, so a cut to another is where the pose
-    /// starts again
+    /// Which of the game's cameras was handed over last, so a cut restarts the pose
     id: u64 = 0,
     /// It did, till the render thread picks it up
     restarted: bool = false,
@@ -106,8 +104,7 @@ pub const Press = enum {
 
     fn def(p: Press) Def {
         return switch (p) {
-            // No controller button by default, so one that does something in the game doesn't
-            // start it too. Players can add one
+            // No controller button by default, so it can't clash with the game's
             .toggle => .{ "Turn the free camera on or off", &.{.f6} },
             .orbit => .{ "Switch between flying and orbiting", &.{ .o, .gamepad_x } },
             .level => .{ "Level the camera", &.{ .x, .gamepad_y } },
@@ -198,8 +195,7 @@ presses: std.EnumArray(Press, PressKey) = .init(.{
 }),
 /// Whether it's on, for any thread.
 on_flag: Atomic(bool) = .init(false),
-/// Follow selection, from Photo mode: the game's camera that's picked goes on screen. Off each time
-/// the game starts.
+/// Photo mode's Follow selection. Off each time the game starts.
 follow: Atomic(bool) = .init(false),
 /// Everything it added to the registry, to take out again.
 added: [40]*Registry.Setting = undefined,
@@ -628,8 +624,7 @@ pub fn tick(self: *Camera) void {
 
 /// Turning, rolling, zooming and the wheel's speed, into `goal`.
 fn look(self: *Camera, options: Options, pad: ?tuft_input.Axes, dt: f32, typing: bool) void {
-    // Held still while looking, so it never runs into the edge of the screen. Not when it's for
-    // a window, but once it's looking, going over one doesn't stop it
+    // Held still while looking, so it never hits the screen edge
     const button = switch (options.mouse_look) {
         .right => self.keybinds.isButtonDown(.right),
         .middle => self.keybinds.isButtonDown(.middle),
@@ -637,8 +632,7 @@ fn look(self: *Camera, options: Options, pad: ?tuft_input.Axes, dt: f32, typing:
         .always => true,
     };
     const looking = button and (self.holding or !uiHasMouse());
-    // Clicking out in the game to look around is like clicking away from a window, so the keys
-    // move the camera rather than going to whatever window last had focus
+    // So the keys move the camera, not whatever window last had focus
     if (looking and !self.holding and options.mouse_look != .always) ui.clearWindowFocus();
     self.holdMouse(looking);
     self.hideFromGame(self.hiding(options));
@@ -737,10 +731,9 @@ fn drawKeys(self: *Camera, mouse_look: MouseLook, pad: bool) void {
     row("Stop", "{s}", .{self.keyNames(&buf, self.presses.getPtrConst(.toggle).setting)});
 }
 
-/// The game's cameras, for games whose plugin lists them, and whether what's on screen follows
-/// what's picked. Render thread.
+/// The game's cameras and the Follow selection toggle. Render thread.
 pub fn drawCameraPicker(self: *Camera) void {
-    const held = lists.best(.cameras) orelse return;
+    const held = lists.cameras() orelse return;
     defer held.end();
     ui.separatorText("Game cameras");
     held.record.draw(false);
@@ -750,12 +743,10 @@ pub fn drawCameraPicker(self: *Camera) void {
     ui.textDisabled("The free camera moves whichever's on screen.", .{});
 }
 
-/// What the plugin that owns `loaded`'s cameras should put on screen: the one picked while Follow
-/// selection's on, or 0 for the game's own. Only for the plugin whose cameras Photo mode shows. Any
-/// thread.
+/// The camera `loaded` should put on screen, or 0 for the game's own. Any thread.
 pub fn wantedCamera(self: *Camera, loaded: *const anyopaque) u64 {
     if (!self.follow.load(.acquire)) return 0;
-    const held = lists.best(.cameras) orelse return 0;
+    const held = lists.cameras() orelse return 0;
     defer held.end();
     if (@as(*const anyopaque, held.record.loaded) != loaded) return 0;
     return held.record.firstSelected();
@@ -804,8 +795,7 @@ fn row(label: []const u8, comptime fmt: []const u8, args: anytype) void {
     ui.text(fmt, args);
 }
 
-/// A window has the keyboard, like Posing's once it's clicked, so the keys are for it. Clicking in
-/// the game gives them back.
+/// A window has the keyboard. Clicking in the game gives it back.
 fn uiHasKeys() bool {
     return ui.getIO().WantTextInput or ui.isAnyWindowFocused();
 }

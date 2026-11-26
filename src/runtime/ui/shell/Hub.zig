@@ -1,8 +1,5 @@
-//! The Wraith overlay's bar. The overlay key slides it in from the bottom of the screen, or the
-//! top, with buttons for Wraith's windows, plugins' and the workbench. It holds the mouse and
-//! keyboard while it's up, unless the game leaves its mouse free. The windows are the shell's, in a `ui.WindowSystem`, so they stay up
-//! till they're closed and the bar just opens and closes them. Tiles drag about within their group,
-//! or move from their right-click menu, and the order's kept. Render thread.
+//! The overlay's bar of tiles for Wraith's windows, plugins and the workbench. Holds the mouse and
+//! keyboard while up, unless the game leaves its mouse free. Tile order is kept. Render thread.
 
 const Hub = @This();
 
@@ -212,8 +209,7 @@ fn tweaksOn(shell: *Shell) usize {
     return n;
 }
 
-/// A dock tile, a big icon on a rounded square that rises when hovered. A dot under it while
-/// what it opens is open, and a count in its corner if there's one.
+/// A dock tile that rises when hovered, with a dot while open and an optional count badge.
 fn tile(id: [:0]const u8, icon: []const u8, lit: bool, count: usize) bool {
     const size = ui.scaled(tile_size);
     const at = ui.getCursorScreenPos();
@@ -273,9 +269,8 @@ fn divider() void {
 /// At most this many plugins on the bar.
 const max_plugins = 32;
 
-/// A button per plugin with menu items, in the order they added their first unless they've been
-/// moved. One item and no settings opens it straight away, otherwise it's a list. `out` gets the
-/// tiles in the order drawn, and how many there are comes back.
+/// A button per plugin with menu items. One item and no settings opens straight away, else a list.
+/// `out` gets the tiles in draw order; returns how many.
 fn pluginButtons(self: *Hub, shell: *Shell, out: []Tile) usize {
     // Asked first, since a plugin going away waits on `MenuItems`
     var names: [max_plugins][64]u8 = undefined;

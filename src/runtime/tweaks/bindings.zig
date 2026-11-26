@@ -1,5 +1,4 @@
-//! Keys for tweaks and their fields. A tweak's key turns it on and off or runs it, a field's flips
-//! it. The callbacks only set a flag that the next tick acts on, since unbinding waits for them.
+//! Keys for tweaks and their fields. Callbacks only set a flag for the next tick, since unbinding waits for them.
 
 const std = @import("std");
 
@@ -16,10 +15,7 @@ const definitions = @import("definitions.zig");
 
 const log = core.log.scoped(.wraith_runtime);
 
-/// Under the lock. Each key is a setting in the registry, for just this game, listed under where
-/// the tweak's from, like your project, a mod or a plugin, with a heading for each tweak, its own
-/// key then its fields'. The project's key is its default if they're used, and the one picked in
-/// Settings wins.
+/// Under the lock. Each key is a per-game registry setting, defaulting to the project's key.
 pub fn apply(tw: *Tweaks) void {
     for (tw.list.items) |t| {
         const group = tw.sourceTitle(t);

@@ -1,8 +1,5 @@
-//! The overlay's settings window. Built from the registry, so Wraith's settings, plugins' and
-//! every key bound on the game show up the same way. A sidebar has Wraith's sections, then a page
-//! for each plugin, mod, your project and the address list with all its settings and keys, a fold
-//! for each tweak or entry in it, and a page of every key at the end. Changes take effect as you
-//! make them, and drags and typing get saved once they're done. Render thread.
+//! The overlay's settings window, built from the registry: Wraith's sections, a page per plugin,
+//! mod or project, and every key. Changes apply live; drags and typing save once done. Render thread.
 
 const SettingsWindow = @This();
 
@@ -191,8 +188,7 @@ fn drawPage(self: *SettingsWindow, shell: *Shell) bool {
     return false;
 }
 
-/// General first, then Wraith's sections in the order they were added. `last_sections` go at the
-/// end, in that order.
+/// General first, then Wraith's sections in the order added, then `last_sections`.
 fn wraithSections(self: *SettingsWindow, out: [][]const u8) [][]const u8 {
     var n: usize = 0;
     out[n] = "";
@@ -282,8 +278,7 @@ fn addName(list: [][]const u8, n: usize, name: []const u8) usize {
     return n + 1;
 }
 
-/// Its settings and keys without a section first, then one that folds for each section, like
-/// each tweak.
+/// Its settings and keys without a section first, then a fold for each section.
 fn drawGroup(self: *SettingsWindow, shell: *Shell, group: []const u8) void {
     var sections: [256][]const u8 = undefined;
     var n: usize = 0;
@@ -454,8 +449,7 @@ fn row(self: *SettingsWindow, shell: *Shell, s: *Setting) void {
     helpText(s.def.help, s.def.restart, s.def.scope);
 }
 
-/// What a path's Browse dialog picked, for the setting it was for. Static, since the dialog's on a
-/// thread of its own so the game keeps going, and it can outlast the window.
+/// A Browse dialog's pick. Static, since the dialog runs on its own thread and can outlast the window.
 const Picked = struct {
     lock: sync.RwLock = .{},
     busy: bool = false,

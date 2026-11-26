@@ -1,6 +1,5 @@
-//! What script sessions printed, and a prompt under it to type JS or Lua into, like a REPL. It
-//! runs in a Console session of its own for each language, or in any script's session. Enter runs
-//! it, Shift+Enter adds a line and Up and Down go back through what ran.
+//! What script sessions printed, with a JS or Lua REPL prompt under it. Runs in the Console's own
+//! session per language, or in any script's session.
 
 const Console = @This();
 

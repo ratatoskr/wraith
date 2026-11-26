@@ -3,7 +3,7 @@
   "id": "example_zig",
   "kind": "plugin",
   "version": "0.1.0",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "title": "Example (Zig)",
   "summary": "Free shopping, Mira on demand and tailing without being seen, for Trails beyond the Horizon. Written in Zig.",
   "arches": ["x64"],

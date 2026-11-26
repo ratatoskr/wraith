@@ -1,5 +1,4 @@
-//! The runtime's message bus, between it and workbench sessions. Published messages get delivered on
-//! the next frame.
+//! The runtime's message bus, between it and workbench sessions. Delivered on the next frame.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;

@@ -1,7 +1,5 @@
-//! Salamander's host for wraith. The runtime's binary is the host, so it outlives every plugin.
-//! Each tuft owner, a plugin's or later a script's, has a Salamander owner that closes with it, so
-//! nothing calls into code that's going. The render thread has a queue it polls each frame, and the
-//! game thread one it polls each tick.
+//! Salamander's host for wraith, outliving every plugin. Each tuft owner has a Salamander owner that
+//! closes with it, so nothing calls into code that's going.
 
 const std = @import("std");
 

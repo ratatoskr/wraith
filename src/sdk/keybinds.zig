@@ -1,5 +1,4 @@
-//! Keys tasks can wait on. Binding a key with a callback is `wraith.sal`'s `input` area, which calls
-//! it on the render thread at the start of the next frame. `api.tweak.parseChord` reads one from text.
+//! Keys tasks can wait on. For callbacks use `wraith.sal`'s `input` area.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -70,9 +69,8 @@ pub const Presses = struct {
         if (self.waiter.load(.acquire)) |t| t.wake();
     }
 
-    /// Waits for a press since the last `next` returned, so ones while you were busy aren't lost.
-    /// From one task at a time. A task carries on on the render thread at the frame after the press.
-    /// Other threads block, so never the render thread, where presses come in, or the game thread.
+    /// Waits for a press since the last `next`, so none are missed. One task at a time.
+    /// Blocks outside a task, so never call it on the render or game thread.
     pub fn next(self: *Presses, io: std.Io) (std.Io.Cancelable || error{ OnRenderThread, OnGameThread })!void {
         if (tasks.current()) |t| {
             while (true) {

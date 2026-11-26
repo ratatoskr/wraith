@@ -1,4 +1,4 @@
-// Tweaks a plugin lists with the project's own, and turning any tweak on or off by name.
+// Tweaks a plugin lists with the project's own, and switching any tweak by name.
 
 namespace Wraith;
 
@@ -18,7 +18,7 @@ namespace Tweaks {
         toggle,
         // Runs once, then everything it did goes back
         action,
-        // An action that opens something of the plugin's, like a window. Shown with an open button.
+        // An action that opens something, like a window. Shown with an open button.
         open,
     }
 
@@ -29,7 +29,7 @@ namespace Tweaks {
         string label;
     }
 
-    // Like a tweak's `@data`. Its memory isn't touched, changes come to the handler.
+    // Like a tweak's `@data`, but no memory: changes go to the handler.
     struct Field {
         string name;
         FieldType type;
@@ -51,9 +51,9 @@ namespace Tweaks {
     }
 
     struct Definition {
-        // The plugin's own name for it, kept with the user's settings
+        // Kept with the user's settings
         string id;
-        // Shown in the list. Empty shows the id.
+        // Empty shows the id.
         string title;
         // Like `Ctrl+F8`. Empty is none.
         string key;
@@ -76,38 +76,33 @@ namespace Tweaks {
         f64 value;
     }
 
-    // On the render thread. Failing an `on` keeps it off, showing the error's explanation, which for a
-    // script is what it threw.
+    // On the render thread. Failing an `on` keeps it off and shows the error (a script's throw).
     fn void!TweakError Handler(Event event);
 
-    // A tweak's box went on or off, by its saved name like `kai/Combat/Max bravery`. On the render
-    // thread, after the frame it changed.
+    // A tweak went on or off, by saved name like `kai/Combat/Max bravery`. Render thread, after the frame it changed.
     fn void Switched(string name, bool on);
 
     trait SwitchSubscription {
-        // No more. Fine to call twice, or from inside one.
+        // Fine to call twice, or from inside one.
         void cancel();
     }
 }
 
 trait Tweaks {
-    // Listed with the project's tweaks until it's removed or the plugin goes. The same id again
-    // replaces it and keeps it on.
+    // Until removed or the plugin goes. The same id replaces it and keeps it on.
     void!TweakError add(Definition definition, keep Handler handler);
-    // Like `add`, under a heading of its own in the plugin's list, like `Combat`. Empty is none.
+    // Like `add`, under a heading like `Combat`. Empty is none.
     void!TweakError addIn(string section, Definition definition, keep Handler handler);
-    // Waits for its handler if it's running, unless it's from inside it.
+    // Waits for its handler if it's running, unless called from inside it.
     void remove(string id);
-    // A toggle that enables `hook` while it's on, under `section` like `addIn`. The definition's
-    // mode and fields are ignored.
+    // A toggle that enables `hook` while on. The definition's mode and fields are ignored.
     void!TweakError addHook(string section, Definition definition, keep Hook hook);
-    // An open button that opens and focuses `window`, like a plugin's own Party window.
+    // An open button that opens and focuses `window`.
     void!TweakError addOpener(string section, Definition definition, keep Window window);
-    // Whether a tweak's box is on, by its saved name like `kai/Combat/Max bravery`. A group's own
-    // box, not what's in it. Any thread.
+    // Whether a tweak's box is on, by saved name. A group's own box, not its contents. Any thread.
     bool!TweakError isOn(string name);
-    // Turns it on or off next frame, the same as clicking its box. Fine from inside any handler.
+    // Switches it next frame, like clicking its box. Fine from inside any handler.
     void!TweakError setOn(string name, bool on);
-    // Hears every tweak's box go on or off. Gone with the plugin.
+    // Hears every tweak go on or off. Gone with the plugin.
     SwitchSubscription!TweakError onSwitched(keep Switched handler);
 }

@@ -1,10 +1,5 @@
-//! Writes `schemas/imgui.sal` from dear_bindings' `dcimgui.json`: Dear ImGui's functions as the
-//! static methods of an `ImGui` trait, named like dcimgui's without the `ImGui_`, so `ImGui::Button`
-//! is `Button` and its version with every argument is `ButtonEx`. Its flags and enums become `.sal`
-//! enums. Functions that take what can't cross, like callbacks, varargs or pointers to ImGui's own
-//! structs, are left out.
-//!
-//! `zig build imgui-sal` runs it, after an ImGui update. The output's checked in.
+//! Writes `schemas/imgui.sal` from dear_bindings' `dcimgui.json`, leaving out functions that can't cross.
+//! `zig build imgui-sal` runs it after an ImGui update. The output's checked in.
 
 const std = @import("std");
 const Value = std.json.Value;

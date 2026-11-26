@@ -1,6 +1,5 @@
-//! Screenshots on a key. A PNG always, an EXR too in HDR games that keeps the full range, and a
-//! copy on the clipboard. The frame's copied on the render thread and saved on a thread of its own,
-//! with a toast saying how it went. It was a plugin once, whose settings it takes over.
+//! Screenshots on a key: PNG, plus EXR in HDR games, and the clipboard.
+//! Copied on the render thread, saved on a thread of its own.
 
 const Screenshot = @This();
 

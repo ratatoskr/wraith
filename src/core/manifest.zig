@@ -1,5 +1,4 @@
-//! A package's manifest, `wraith.json` at the top of its folder. The hub has its schema, at
-//! https://hub.wraith.io/schema/v1/wraith.json. Plugins and projects both use it.
+//! A package's `wraith.json` manifest. Schema: https://hub.wraith.io/schema/v1/wraith.json.
 
 const std = @import("std");
 
@@ -62,8 +61,7 @@ pub const Here = struct {
     game_engine_variant: ?[]const u8 = null,
 };
 
-/// Every game made with a game engine, for a package that works on any of them. Not script engines
-/// or the hook engine.
+/// Every game made with a game engine (not script or hook engines).
 pub const GameEngine = struct {
     /// Like `unity`, the way Wraith names them.
     id: []const u8 = "",
@@ -92,12 +90,10 @@ pub const ClrMode = enum {
     provided,
 };
 
-/// The version of Wraith's API this Wraith has. It goes up when plugins and projects need
-/// updating for it, and packages say which they're made for with `apiVersion`.
-pub const api_version: u32 = 2;
-/// The oldest `apiVersion` this Wraith still loads. 2 put the API in `namespace Wraith`, which
-/// changed every trait's hash.
-pub const min_api_version: u32 = 2;
+/// Wraith's API version; bumped when packages need updating. Packages declare theirs in `apiVersion`.
+pub const api_version: u32 = 3;
+/// The oldest `apiVersion` this Wraith still loads.
+pub const min_api_version: u32 = 3;
 
 /// Whether this Wraith loads a package made for `apiVersion`.
 pub const ApiFit = enum {
@@ -141,12 +137,17 @@ pub const Manifest = struct {
     autoLoad: bool = true,
     library: bool = false,
     depends: []const []const u8 = &.{},
-    /// For building against plugins you're working on: a name from `depends` to its folder, or
-    /// its wraith.json, relative to this one. Left out of packages, see `packaged`.
+    /// Engine plugins this game plugin replaces in its game, like `unity`. See `supersedesHere`.
+    supersedes: []const []const u8 = &.{},
+    /// Local paths for `depends` entries you're working on. Stripped from packages.
     devDepends: std.json.ArrayHashMap([]const u8) = .{},
-    /// A Markdown file relative to this one, instead of `description`. Packages have it put in
-    /// `description`, see `packaged`.
+    /// Markdown file used as `description`; inlined when packaged.
     descriptionFile: ?[]const u8 = null,
+
+    /// What it stands in for. Only a game's plugin can supersede.
+    pub fn supersedesHere(self: Manifest) []const []const u8 {
+        return if (self.game != null) self.supersedes else &.{};
+    }
 
     pub fn isFor(self: Manifest, here: Here) bool {
         if (self.game) |game| return game.matches(here);
@@ -202,6 +203,7 @@ pub const Manifest = struct {
             autoLoad: ?bool = null,
             library: ?bool = null,
             depends: ?[]const []const u8 = null,
+            supersedes: ?[]const []const u8 = null,
             devDepends: ?std.json.ArrayHashMap([]const u8) = null,
             descriptionFile: ?[]const u8 = null,
         };
@@ -229,6 +231,7 @@ pub const Manifest = struct {
             .autoLoad = if (self.autoLoad) null else false,
             .library = if (self.library) true else null,
             .depends = list(self.depends),
+            .supersedes = list(self.supersedes),
             .devDepends = if (self.devDepends.map.count() > 0) self.devDepends else null,
             .descriptionFile = text(self.descriptionFile),
         };
@@ -290,8 +293,7 @@ pub fn validId(id: []const u8) bool {
 /// Room for any id's namespace, with the `_` a digit at the front gets.
 pub const namespace_max = 65;
 
-/// The namespace a plugin's schemas are in, its id in PascalCase, like `TrailsHorizon` for
-/// `trails_horizon`. `Plugin` for one with no letters or digits.
+/// A plugin's schema namespace: its id in PascalCase, or `Plugin` if that's empty.
 pub fn namespaceOf(buf: *[namespace_max]u8, id: []const u8) []const u8 {
     var n: usize = 0;
     var up = true;
@@ -327,8 +329,7 @@ pub fn validTag(tag: []const u8) bool {
     return true;
 }
 
-/// A picture's path in the package, like `images/menu.png`. PNG, JPEG or WebP, with `/` between
-/// folders and no `..` anywhere, as the hub has it.
+/// A PNG, JPEG or WebP path in the package, `/`-separated with no `..`, as the hub requires.
 pub fn validImage(path: []const u8) bool {
     if (path.len == 0 or path.len > 128 or path[0] == '/' or path[0] == '.') return false;
     if (std.mem.indexOf(u8, path, "..") != null) return false;
@@ -346,9 +347,8 @@ pub const PackageError = error{ OutOfMemory, BadManifest, BothDescriptions, Desc
 /// Bytes of a description file. The hub takes up to 20000 characters.
 const description_limit = 64 << 10;
 
-/// The file as it goes in a package: without `devDepends`, which only means something in your
-/// checkout, and with `descriptionFile`'s text as `description`. `dir` is the manifest's folder.
-/// Everything else stays, fields this doesn't know included. Null if it's already that.
+/// The manifest as packaged: no `devDepends`, `descriptionFile` inlined, unknown fields kept.
+/// Null if unchanged.
 pub fn packaged(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, text: []const u8) PackageError!?[]u8 {
     var value = std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimStart(u8, text, "\xEF\xBB\xBF"), .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,

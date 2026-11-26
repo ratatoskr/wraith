@@ -1,5 +1,4 @@
-//! tuft's maths types by the names Salamander's Zig takes aliased ones by, since math.sal's in
-//! `namespace Wraith`.
+//! tuft's maths types under the `Wraith_` names Salamander's generated Zig aliases them by.
 
 const math = @import("tuft_math");
 

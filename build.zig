@@ -11,11 +11,10 @@ const Locations = @import("src/core/Locations.zig");
 
 const wraith_build = @This();
 
-/// Builds a Zig plugin's DLLs against the SDK, for plugins outside this repo.
-/// Every arch its manifest's `.arches` lists, or both, side by side. With -Dtarget just that one.
 /// `[Instance("..")] struct T` gives `T.instance`, as `api.sal_options` has it.
 const instance_tag = "wraith.Instance=Sig";
 
+/// Builds a Zig plugin's DLLs against the SDK for each arch in `.arches`, or just -Dtarget's.
 pub const Plugin = struct {
     name: []const u8,
     manifest: std.Build.LazyPath,
@@ -36,8 +35,7 @@ pub const Plugin = struct {
         root_source_file: std.Build.LazyPath,
         target: std.Build.ResolvedTarget,
         optimize: std.builtin.OptimizeMode,
-        /// Its `.sal` files, as Zig with their game code's methods and statics. Null means schemas/
-        /// next to root_source_file, or in the project root.
+        /// Its `.sal` schema folder. Null means schemas/ next to root_source_file, or in the project root.
         schemas: ?std.Build.LazyPath = null,
         schema_import: []const u8 = "schema",
         /// Null means wraith.json in the project root.
@@ -77,11 +75,7 @@ pub const Plugin = struct {
         manifest: ?std.Build.LazyPath = null,
     };
 
-    /// A C plugin, compiled by Zig. It includes `wraith.h`, Wraith's API made from its schemas,
-    /// `wraith_plugin.h` for its `wraith_plugin` export, and `schema.h` for its own schemas and the
-    /// ones of plugins it depends on, found like a Zig plugin's: their types, and each function and
-    /// static's name and pointer type. Names are in each one's namespace, like
-    /// `ExampleC_Player_heal_name`. Wraith's types, like `Wraith_Vec3`, come from `wraith.h`.
+    /// A C plugin compiled by Zig, with `wraith.h`, `wraith_plugin.h` and its generated `schema.h`.
     pub fn initC(b: *std.Build, options: COptions) Plugin {
         const targets = targetsOf(b, options.target);
         const depends = dependsOf(b);
@@ -141,8 +135,7 @@ pub const Plugin = struct {
         const api = Salamander.bundle(salamander, paths.api);
         module.addIncludePath(Salamander.cHeaders(salamander, .{ .source = api, .target = options.target, .name = "wraith.h" }));
         module.addIncludePath(paths.include);
-        // Its own schemas and its dependencies', set up like a Zig plugin's. Wraith's types are in
-        // scope, and come from wraith.h
+        // Its own and its dependencies' schemas, like a Zig plugin's. Wraith's types come from wraith.h
         const own: Salamander.ZigOptions.With = .{ .name = "wraith", .folder = paths.api };
         // Without any of its own, the first dependency's folder stands in
         const folder = options.schemas orelse if (options.depends.len > 0) options.depends[0].folder else null;
@@ -181,8 +174,7 @@ pub const Plugin = struct {
         for (self.arches) |arch| arch.mod.linkLibrary(make(b, arch.target));
     }
 
-    /// The DLLs, the manifest and its schemas, directly in the install prefix. Wraith reads the
-    /// schemas as it loads the plugin, and plugins that depend on it build with them.
+    /// Installs the DLLs, manifest and schemas directly in the prefix.
     pub fn install(self: Plugin, b: *std.Build) void {
         for (self.arches) |arch| b.getInstallStep().dependOn(&b.addInstallArtifact(arch.lib, .{
             .dest_dir = .{ .override = .prefix },
@@ -198,8 +190,7 @@ pub const Plugin = struct {
         for (picturesOf(b)) |path| b.getInstallStep().dependOn(&b.addInstallFile(b.path(path), path).step);
     }
 
-    /// `manifest` as it goes in a package: without its `devDepends`, which only mean something in your
-    /// checkout, and with its `descriptionFile` put in `description`.
+    /// `manifest` as packaged: no `devDepends`, and `descriptionFile` inlined as `description`.
     fn packaged(b: *std.Build, manifest: std.Build.LazyPath) std.Build.LazyPath {
         if (manifest != .src_path) return manifest;
         const sp = manifest.src_path;
@@ -241,9 +232,7 @@ pub const Plugin = struct {
         return out.items;
     }
 
-    /// The plugins its wraith.json depends on, found like `wraith sdk deps` finds them: in its
-    /// `devDepends`, as a package by that name in build.zig.zon, next to it, installed, or the
-    /// hub's copy that `wraith sdk deps` downloaded. Their schemas go in its `schema` import.
+    /// Its dependencies, found like `wraith sdk deps` does. Their schemas go in its `schema` import.
     fn dependsOf(b: *std.Build) []const Salamander.ZigOptions.With {
         const io = b.graph.io;
         const root = b.root.joinString(b.allocator, ".") catch @panic("OOM");
@@ -520,9 +509,7 @@ const installed_arches = [_]struct { dir: []const u8, cpu: std.Target.Cpu.Arch }
     .{ .dir = "x86", .cpu = .x86 },
 };
 
-/// The C# plugin the `cs` kind's tests load, `cs_plugin` in `options`, the DLL in its build's folder.
-/// Its SDK's made by `wraith sdk cs types`, then built with the dotnet SDK. Only with `-Dcs-tests`,
-/// since that needs the SDK and takes a while. Empty otherwise, and the tests are skipped.
+/// The C# plugin the `cs` tests load. Only built with `-Dcs-tests` (needs dotnet); else tests skip.
 fn addCsPlugin(b: *std.Build, mods: Modules, options: *std.Build.Step.Options) void {
     const wanted = b.option(bool, "cs-tests", "Build a C# plugin with the dotnet SDK for the cs kind's tests") orelse false;
     const dotnet = (if (wanted) b.findProgram(.{ .names = &.{"dotnet"} }) else null) orelse {
@@ -670,8 +657,7 @@ const Modules = struct {
 
         // Wraith's API, every file in `src/api/schemas` as one schema
         api.addAnonymousImport("wraith.sal", .{ .root_source_file = @import("salamander").bundle(salamander_dep, b.path("src/api/schemas")) });
-        // And as Zig with real methods, made for the target's pointer size each build. The maths
-        // types are tuft's, so they have its methods
+        // And as Zig with real methods, per target pointer size. Maths types are tuft's
         const math_alias = b.createModule(.{ .root_source_file = b.path("src/api/math_alias.zig"), .imports = &.{.{ .name = "tuft_math", .module = tuft.module("tuft_math") }} });
         const api_zig = @import("salamander").zigModule(salamander_dep, .{
             .folder = b.path("src/api/schemas"),

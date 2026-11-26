@@ -10,12 +10,11 @@ namespace Plugin {
         string name;
         // A copy of its folder, deleted once it's unloaded
         string dir;
-        // Everything it can use. Stops working once it's unloaded.
+        // Stops working once it's unloaded.
         Api wraith;
-        // Wraith's schemas with its own and those of plugins it depends on, as one bundle, for languages
-        // that read them while running, like scripts.
+        // Wraith's, its own and its dependencies' schemas as one bundle, for languages that read them at runtime.
         string schema;
-        // What the plugins it depends on offer, one per [Service] trait in their schemas.
+        // One per [Service] trait in its dependencies' schemas.
         []Service services;
     }
 
@@ -26,8 +25,7 @@ namespace Plugin {
         object obj;
     }
 
-    // What runs plugins of one kind, provided as `wraith.kind.<name>` at major 1. JS and Lua are built in.
-    // A plugin's manifest names its kind as its provider.
+    // Runs plugins of one kind, provided as `wraith.kind.<name>` at major 1. JS and Lua are built in.
     trait Kind {
         Plugin!StartError start(keep Guest guest);
     }

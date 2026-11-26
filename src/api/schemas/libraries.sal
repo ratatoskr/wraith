@@ -5,11 +5,10 @@ namespace Wraith;
 // Names are letters, digits, `_`, `-` and `.`, up to 64.
 error LibraryError {
     InvalidName = 1,
-    // There's no library by that name
     NotFound,
-    // There is, but not for that language
+    // There is one, but not for that language
     NoSource,
-    // Someone else has one by that name and language, like the runtime's own
+    // Someone else has one by that name and language
     Taken,
     TooBig,
     Failed,
@@ -18,6 +17,6 @@ error LibraryError {
 trait Libraries {
     // For a language like "lua" or "js". Good till the thread's next call into Wraith.
     string!LibraryError get(string name, string language);
-    // Until the plugin goes. The same name and language again replaces it.
+    // Until the plugin goes. The same name and language replaces it.
     void!LibraryError add(string name, string language, string source);
 }

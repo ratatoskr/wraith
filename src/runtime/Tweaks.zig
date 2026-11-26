@@ -1,14 +1,5 @@
-//! The project's tweaks, `tweaks/*.rwt`, installed project mods' and ones plugins add. Each runs in a script session of
-//! its own while it's on, workbench open or not, and its key turns it on and off or runs an
-//! action. Its data fields are kept per game and go in when it starts. While it's on they're read
-//! from and written to the game's memory.
-//!
-//! A group's file is listed once for the group, with its shared part's fields, then once for each
-//! of its tweaks and nested groups, named by their path like `file/Title` or `file/Combat/Title`.
-//! A group's own box turns what's in it on or off as its `@children` says.
-//!
-//! This is the front. What the tweaks are lives in `tweaks/definitions.zig`, what's kept in
-//! `tweaks/values.zig`, running them in `tweaks/running.zig` and keys in `tweaks/bindings.zig`.
+//! Tweaks from the project, installed mods and plugins. Each runs in its own script session while on.
+//! The front; the parts live in `tweaks/`.
 
 const Tweaks = @This();
 
@@ -45,8 +36,7 @@ pub const Env = struct {
     publish: *const fn (topic: []const u8, payload: []const u8) anyerror!void = publishRuntime,
     /// Keep the settings, which are only good during the call.
     save: *const fn (context: ?*anyopaque, settings: Settings) void = ignoreSave,
-    /// Its key turned one on or off, or ran an action. For saying so. The title's only good
-    /// during the call.
+    /// Its key turned one on or off, or ran an action. The title's only good during the call.
     keyed: *const fn (context: ?*anyopaque, title: []const u8, now: Keyed) void = ignoreKeyed,
 
     fn alwaysReady(_: ?*anyopaque, _: []const u8) bool {
@@ -144,8 +134,7 @@ switches: switching.Switches = .{},
 /// The generation `switches` last caught up with.
 switches_seen: u32 = 0,
 
-/// An installed project mod. Its tweak files are named `id:file`, like a plugin's `plugin:id`, so
-/// what's kept for them outlasts updates.
+/// An installed project mod. Its tweak files are named `id:file` so what's kept outlasts updates.
 pub const ModProject = struct {
     id: []const u8,
     title: []const u8,
@@ -162,8 +151,7 @@ pub const ModFile = struct {
     text: []const u8,
 };
 
-/// What's installed now, copied. Any thread. Their tweaks show up on the next tick. One updated
-/// turns off what was on in it, reads it again and turns that back on.
+/// What's installed now, copied. Any thread; their tweaks show up on the next tick.
 pub fn setMods(self: *Tweaks, mods: []const ModProject) !void {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     errdefer arena.deinit();
@@ -406,8 +394,7 @@ pub fn toggle(self: *Tweaks, name: []const u8) void {
     self.setOn(name, on);
 }
 
-/// Runs it again as it is now, saved or not, if it's on. For after editing it. A group runs its
-/// shared part and everything that's on in it again.
+/// Runs it again as it is now, saved or not, if it's on.
 pub fn rerun(self: *Tweaks, name: []const u8) void {
     self.lock.lock();
     defer self.lock.unlock();
@@ -418,8 +405,7 @@ pub fn rerun(self: *Tweaks, name: []const u8) void {
     if (t.is_group or t.state.wanted()) running.restart(self, t);
 }
 
-/// Kept for next time, and written to the game now if it's on. Fitted to the field first. Saved
-/// once values stop changing.
+/// Kept for next time, and written to the game now if it's on. Saved once values stop changing.
 pub fn setValue(self: *Tweaks, name: []const u8, field: []const u8, value: f64) void {
     self.lock.lock();
     defer self.lock.unlock();
@@ -444,8 +430,7 @@ pub fn resetValue(self: *Tweaks, name: []const u8, field: []const u8) void {
     self.changed();
 }
 
-/// Your own key for it, over the project's, saved in the registry for this game. Null means no
-/// key. Any more picked in Settings stay.
+/// Your own key for it, over the project's, saved per game. Null means no key.
 pub fn setKey(self: *Tweaks, name: []const u8, key: ?input.Chord) void {
     self.lock.lock();
     defer self.lock.unlock();

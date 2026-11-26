@@ -1,7 +1,4 @@
-//! Settings that Wraith, plugins and tweaks register. Each says what it is, its default and whether
-//! it's kept for every game or just this one. The registry keeps the values, saves them to that
-//! scope's file, and binds the key settings, since a keybind is just a setting whose kind is a key.
-//! Plugins can still draw their own screens for theirs, with `get` and `set`. Any thread.
+//! Settings that Wraith, plugins and tweaks register, saved per scope; keybinds are key settings. Any thread.
 
 const Registry = @This();
 
@@ -58,8 +55,7 @@ pub const Path = struct {
 pub const Key = struct {
     /// Null starts without one.
     default: ?Keys,
-    /// Bound on the game's keys. Off for keys used inside Wraith's own windows, which the registry
-    /// only keeps.
+    /// Bound on the game's keys. Off for keys used only inside Wraith's own windows.
     in_game: bool = true,
     /// Hide the key from the game.
     consume: bool = true,
@@ -100,8 +96,7 @@ pub const Definition = struct {
     group: []const u8,
     /// A heading in the group, like "Look & Feel". Can be empty.
     section: []const u8 = "",
-    /// A smaller heading in its section, like "Free camera keys". Settings with one should be
-    /// added together, since it shows where the heading changes.
+    /// A subheading, like "Free camera keys". Add settings sharing one together.
     heading: []const u8 = "",
     scope: Scope = .global,
     kind: Kind,
@@ -258,8 +253,7 @@ pub fn add(self: *Registry, def: Definition, hooks: Hooks) !*Setting {
     return s;
 }
 
-/// Its saved value stays for next time. Waits for its key's callback and its change hook if
-/// they're running elsewhere, so its hooks' context can go once this returns.
+/// Saved value stays. Waits for running hooks elsewhere, so their context can go once this returns.
 pub fn remove(self: *Registry, s: *Setting) void {
     const kept = blk: {
         self.lock.lock();
@@ -281,16 +275,14 @@ pub fn remove(self: *Registry, s: *Setting) void {
     _ = self.changes.fetchAdd(1, .release);
 }
 
-/// What's registered now, in the order added. They stay readable till the registry goes, though
-/// one may be removed meanwhile.
+/// What's registered now, in order. They stay readable till the registry goes, even if removed.
 pub fn list(self: *Registry, allocator: std.mem.Allocator) ![]*Setting {
     self.lock.lockShared();
     defer self.lock.unlockShared();
     return allocator.dupe(*Setting, self.settings.items);
 }
 
-/// Moves every key setting over, or unbinds them all with null. Call it before the old one goes,
-/// and not while settings are being added or removed.
+/// Rebinds every key setting, or unbinds with null. Not while settings are being added or removed.
 pub fn setKeybinds(self: *Registry, keybinds: ?*Keybinds) void {
     for (self.settings.items) |s| if (s.binding) |b| {
         b.unbind();
@@ -324,8 +316,7 @@ pub fn get(self: *Registry, s: *const Setting) Value {
     return s.value;
 }
 
-/// Saved to its scope's file on a worker. Numbers get clamped, and a key that can't be bound is
-/// refused.
+/// Saved on a worker. Numbers get clamped; a key that can't be bound is refused.
 pub fn set(self: *Registry, s: *Setting, wanted: Value) !void {
     return self.setWith(s, wanted, .{});
 }
@@ -386,8 +377,7 @@ pub fn reset(self: *Registry, s: *Setting) !void {
     try self.set(s, defaultOf(s.def.kind));
 }
 
-/// Moves what's saved under `from` to `to`, like when a plugin's setting becomes Wraith's own.
-/// Leaves it if `to` has one already. Call it before `to` is added.
+/// Moves what's saved under `from` to `to`, unless `to` has one. Call it before `to` is added.
 pub fn rename(self: *Registry, scope: Scope, from: []const u8, to: []const u8) !void {
     self.lock.lock();
     defer self.lock.unlock();
@@ -466,8 +456,7 @@ fn consumes(s: *const Setting, key: anytype) bool {
     };
 }
 
-/// Whether a key setting hides its key from the game, over what it was added with, like a mode's
-/// keys only while it's on. Null goes back to that. Any thread.
+/// Overrides whether a key setting hides its key from the game; null restores it. Any thread.
 pub fn setConsume(self: *Registry, s: *Setting, on: ?bool) void {
     _ = self;
     s.consume_now.store(if (on) |o| (if (o) 2 else 1) else 0, .release);

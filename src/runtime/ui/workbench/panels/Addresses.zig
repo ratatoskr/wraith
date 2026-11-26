@@ -30,8 +30,7 @@ wb: *Workbench,
 list: AddressList,
 /// Its hotkeys, in the game's keybinds.
 keys: AddressKeys,
-/// Before the workbench's thread starts, the render thread keeps holds and hotkeys going. This
-/// is the handover.
+/// Hands holds and hotkeys from the render thread to the workbench's thread once it starts.
 live_lock: RwLock = .{},
 /// Its thread ticks it now. Under `live_lock`.
 handed_over: bool = false,
@@ -137,8 +136,7 @@ fn readSchemas(self: *Addresses) void {
     self.shared = shared;
 }
 
-/// The schemas the project, plugins and scripts share, parsed again, or null if they didn't
-/// change. Each is ours, so a plugin going just drops them next time.
+/// The shared schemas parsed again, or null if unchanged. Each is ours, so a plugin going just drops them.
 fn readShared(self: *Addresses) ?std.ArrayList(Shared) {
     const now = SharedSchemas.global.generation();
     if (now == self.plugins_generation) return null;
@@ -156,8 +154,7 @@ fn readShared(self: *Addresses) ?std.ArrayList(Shared) {
     }
     for (entries) |e| {
         var diag: Schema.Diagnostic = .{};
-        // With Wraith's types before it, as plugins' are read. Else alone, for any that clash. A
-        // file of its own, so it's not in Wraith's namespace
+        // With Wraith's types before it, else alone for any that clash. Its own file, so not in Wraith's namespace
         const own = if (std.mem.startsWith(u8, e.text, Schema.bundle_marker)) e.text else salamander_schema.bundle(arena.allocator(), &.{.{ .name = e.name, .text = e.text }}) catch continue;
         const with = std.mem.concat(arena.allocator(), u8, &.{ wraith_prefix, own }) catch continue;
         var own_from: usize = wraith_prefix.len;
@@ -217,8 +214,7 @@ pub fn tickUnopened(self: *Addresses) void {
     if (!self.handed_over) self.tickLive();
 }
 
-/// Before the workbench's thread starts, or back if it couldn't. Waits for a render thread tick
-/// in flight.
+/// Before the workbench's thread starts, or back if it couldn't. Waits for a render thread tick in flight.
 pub fn handOver(self: *Addresses, on: bool) void {
     self.live_lock.lock();
     defer self.live_lock.unlock();

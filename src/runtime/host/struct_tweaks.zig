@@ -1,6 +1,5 @@
-//! Structs marked `[Tweak("..")]` in a plugin's or project's schemas or a tweak file's `@schema`. The Tweaks
-//! window shows each one, its fields edited live, under where it's from. They need `[Instance]` so
-//! Wraith can find them. Kept till the plugin closes or the file changes.
+//! Structs marked `[Tweak("..")]` in schemas or a tweak file's `@schema`, shown in the Tweaks window
+//! with live-edited fields. They need `[Instance]`. Kept till the plugin closes or the file changes.
 
 const std = @import("std");
 
@@ -20,8 +19,7 @@ pub const Entry = struct {
     owner: ?*Owner,
     /// The tweak file's, by its `key`. 0 for a plugin's.
     file: usize = 0,
-    /// Where it's from, a plugin or a mod by id, or "" for your project, and its name for people.
-    /// Both live as long as it does.
+    /// Where it's from, a plugin or mod id or "" for your project, and its name for people. Both live as long as it does.
     source: []const u8,
     source_title: []const u8,
     /// In `schemas`.
@@ -53,8 +51,7 @@ const File = struct {
 
 var cleanup: OnGone(.closing, closing) = .{};
 
-/// The `[Tweak]`s in its own files, in place of what it had. Not ones from plugins it depends on,
-/// which show under their own. A project's list under it, like its tweaks.
+/// The `[Tweak]`s in its own files, replacing what it had. Dependencies' show under their own.
 pub fn publish(loaded: *Loaded) void {
     // A tweak's script session isn't a plugin, and its file lists its own
     if (loaded.session) return;
@@ -80,9 +77,8 @@ pub fn publish(loaded: *Loaded) void {
     }
 }
 
-/// A tweak file's `@schema` texts, each its own, in place of what `key` had. Empty takes them
-/// away. Each comes after `base`, its project's schemas, but only its own structs are listed. Ones
-/// that don't parse are left out, since turning the tweak on says why.
+/// A tweak file's `@schema` texts, replacing what `key` had. Each comes after `base`, but only its own
+/// structs are listed. Ones that don't parse are left out.
 pub fn publishFile(key: usize, source: []const u8, source_title: []const u8, base: []const schemas_api.File, texts: []const []const u8) void {
     const made = allocator.create(File) catch return;
     made.* = .{ .key = key, .arena = .init(allocator) };
@@ -159,8 +155,7 @@ pub fn snapshot(arena: std.mem.Allocator, query: []const u8) []Summary {
 
 pub const Drawn = enum { drawn, not_there_yet, gone };
 
-/// Its fields, if it's still listed. Holds the list while drawing, so don't call into `Tweaks` from
-/// in here. Render thread.
+/// Its fields, if still listed. Holds the list while drawing, so don't call into `Tweaks`. Render thread.
 pub fn drawFields(source: []const u8, type_name: []const u8) Drawn {
     lock.lockShared();
     defer lock.unlockShared();

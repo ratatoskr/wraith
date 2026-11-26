@@ -1,5 +1,4 @@
-//! The console, only if the launcher asks for it or loading fails. Players never see one otherwise.
-//! Till then lines wait in a ring, so a failure shows how it got there.
+//! The console, shown only on request or load failure. Lines buffer in a ring until then.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;

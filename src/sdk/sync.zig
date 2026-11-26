@@ -1,8 +1,5 @@
-//! Locks within a plugin. `Mutex` works with tasks: a task that has to wait parks, and carries on once
-//! it's handed the lock, without holding up the render thread or its fiber. Anywhere else, like a
-//! hook on a game thread or a draw callback, the thread waits. For short work, like copying a few
-//! things in or out. Not reentrant. `RwLock` and `Signal` are tuft's, for plain threads. To share a
-//! lock with other plugins, see the `sync` area.
+//! Locks within a plugin. `Mutex` parks tasks instead of blocking; elsewhere the thread waits.
+//! Keep held sections short. Not reentrant. For cross-plugin locks see the `sync` area.
 
 const std = @import("std");
 
@@ -13,8 +10,7 @@ const tasks = @import("tasks.zig");
 
 const Inner = sys.sync.Mutex;
 
-/// Tuft's for plain threads, which block rather than park a task. Many readers or one writer, not
-/// reentrant, nothing to set up.
+/// Tuft's reader-writer lock; blocks rather than parks. Not reentrant.
 pub const RwLock = sys.sync.RwLock;
 /// Wakes one waiter per `set`, like a thread waiting for rare work.
 pub const Signal = sys.sync.Signal;

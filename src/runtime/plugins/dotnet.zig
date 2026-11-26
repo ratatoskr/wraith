@@ -1,10 +1,5 @@
-//! The built-in `cs` kind, for C# plugins made with Wraith's C# SDK. One compiled with NativeAOT is a
-//! native plugin, `wraith_<id>_<arch>.dll`, and runs like one. Otherwise it's `wraith_<id>.dll`, run
-//! by CoreCLR in a load context of its own that goes when it unloads. Either way its
-//! `Wraith.Entry.Get` gives the same `NativeEntry`, so it starts like a native plugin.
-//!
-//! A process only gets one CoreCLR. This joins the game's, or starts the installed .NET if its
-//! `clrMode` lets it, and then every C# plugin shares it.
+//! The built-in `cs` kind. NativeAOT builds run as native plugins, others in a CoreCLR load context
+//! that goes when they unload. A process gets one CoreCLR, the game's or the installed .NET, shared by all.
 
 const std = @import("std");
 
@@ -50,8 +45,7 @@ pub fn mustWait(known: *const Known) bool {
     return std.ascii.eqlIgnoreCase(provider, name) and known.clr_mode == .wait and !available();
 }
 
-/// The CoreCLR to run `loaded` in, joining or starting one as its `clrMode` says. Null after
-/// saying why it can't.
+/// The CoreCLR to run `loaded` in, joined or started per its `clrMode`. Null after saying why.
 fn open(loaded: *const Loaded) ?*const CoreClr {
     lock.lock();
     defer lock.unlock();

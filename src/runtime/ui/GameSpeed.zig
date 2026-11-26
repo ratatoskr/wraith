@@ -1,8 +1,5 @@
-//! The game's speed, as a slider with a pause button by it. The Workbench, Settings and Photo mode
-//! each draw one, and they all show and set the same speed, whoever else set it, like a key or a
-//! plugin. It changes as you slide it, without a toast, since you can see where it's at. Slow
-//! motion and pausing need a plugin that handles the game's speed, so without one it starts at 1
-//! and the pause button's off, and Settings and Photo mode say why.
+//! The game's speed as a slider with a pause button, shared by the Workbench, Settings and Photo
+//! mode. Slowing and pausing need a plugin that handles the game's speed.
 
 const GameSpeed = @This();
 

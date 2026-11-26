@@ -1,9 +1,5 @@
-//! Running tweaks: a file's in a script session of its language's provider, a plugin's through its
-//! callback. Everything in a group's file shares the file's session. A group's shared part is up
-//! while its own box is on or anything in it is. It comes up before what's in it, outermost
-//! first, and once the last reason goes it stops with everything in it, innermost first.
-//! Every change of a tweak's `state` goes through the few functions at the top. While it runs its
-//! fields are read from and written to the game's memory and its names are published.
+//! Running tweaks, in a script session or through a plugin's callback. A group's file shares one session.
+//! Every change of a tweak's `state` goes through the few functions at the top.
 
 const std = @import("std");
 
@@ -25,8 +21,7 @@ const log = core.log.scoped(.wraith_runtime);
 /// Sessions start here so they don't meet the workbench's.
 pub const first_session = 1 << 24;
 
-/// Under the lock. Wanted, so it starts on a tick. A group's own box goes on, and its shared part
-/// comes up on a tick if it isn't already.
+/// Under the lock. Wanted, so it starts on a tick.
 pub fn request(t: *Tweak) void {
     if (t.is_group) {
         t.own = true;
@@ -55,8 +50,7 @@ pub fn active(tw: *Tweaks, t: *const Tweak) bool {
     return if (t.is_group) needsUp(tw, t) else t.state.wanted();
 }
 
-/// Under the lock. Its box. A group's turns its direct children on or off as its `@children`
-/// says, and groups among them do the same with theirs. True if what's kept on changed.
+/// Under the lock. A group's box cascades as its `@children` says. True if what's kept on changed.
 pub fn setOn(tw: *Tweaks, t: *Tweak, on: bool) bool {
     defer tw.changed();
     if (t.file == null and !t.is_group) {
@@ -104,8 +98,7 @@ fn offOne(t: *Tweak) void {
     t.state = .off;
 }
 
-/// Under the lock. Stopped if it's started and waits to start again, to run it as it is now. A
-/// group goes with everything in it, and what was on in it starts again too.
+/// Under the lock. Stops it if started and waits to start again, to run it as it is now.
 pub fn restart(tw: *Tweaks, t: *Tweak) void {
     if (t.file == null and !t.is_group) {
         stopSession(tw, t);
@@ -130,8 +123,7 @@ pub fn restart(tw: *Tweaks, t: *Tweak) void {
     };
 }
 
-/// Under the lock. Stopped if it's started. Any problem stays for the caller to clear. A group
-/// turns off everything in it.
+/// Under the lock. Any problem stays for the caller to clear.
 pub fn turnOff(tw: *Tweaks, t: *Tweak) void {
     if (t.file == null and !t.is_group) {
         stopSession(tw, t);
@@ -143,8 +135,7 @@ pub fn turnOff(tw: *Tweaks, t: *Tweak) void {
     settle(tw, t.fileOf());
 }
 
-/// Under the lock. Tells a group's file's session what's off now. A group that's not needed
-/// anymore goes with everything in it at once, from the outside in.
+/// Under the lock. Tells a group's file's session what's off now.
 pub fn settle(tw: *Tweaks, file: *Tweak) void {
     if (file.is_group) settleIn(tw, file);
 }
@@ -169,8 +160,7 @@ fn settleIn(tw: *Tweaks, t: *Tweak) void {
     };
 }
 
-/// Under the lock. Tells its session a group's going with everything in it, and takes their data
-/// and names. The file's own takes the whole session.
+/// Under the lock. The file's own group takes the whole session.
 fn stopGroup(tw: *Tweaks, g: *Tweak) void {
     if (g.file == null) {
         send(tw, protocol.topics.stop, protocol.Target{ .session = g.session });
@@ -183,9 +173,7 @@ fn stopGroup(tw: *Tweaks, g: *Tweak) void {
     };
 }
 
-/// Under the lock. Sends it to its session or plugin. What's in a group's file brings up the
-/// groups it's in first, outermost first. The file's own comes up with what's first in its
-/// session, so it only gets a run of its own when it's on by itself.
+/// Under the lock. Sends it to its session or plugin, bringing up its groups first, outermost first.
 fn start(tw: *Tweaks, t: *Tweak) void {
     if (t.byPlugin()) {
         clearProblem(tw, t);
@@ -267,8 +255,7 @@ fn confirm(tw: *Tweaks, t: *Tweak) void {
     if (t.state == .starting) t.state = .running;
 }
 
-/// Under the lock. It threw or refused while starting, so nothing of it is on. The box goes off,
-/// the problem stays. A group's shared part failing takes everything that's on in it with it.
+/// Under the lock. It threw or refused while starting; the box goes off, the problem stays.
 fn fail(tw: *Tweaks, t: *Tweak, problem: []const u8) void {
     if (t.is_group) {
         for (tw.list.items) |c| if (c.isUnder(t)) {
@@ -299,8 +286,7 @@ fn fail(tw: *Tweaks, t: *Tweak, problem: []const u8) void {
     t.state = .failed;
 }
 
-/// Under the lock. The provider went, and its session's memory with it. What was on runs again
-/// once the provider's back, but an action is just dropped. A group's file goes all at once.
+/// Under the lock. The provider went; what was on runs again once it's back, actions are dropped.
 fn lose(tw: *Tweaks, t: *Tweak) void {
     dropSession(tw, t);
     if (!t.is_group) {
@@ -316,8 +302,7 @@ fn lose(tw: *Tweaks, t: *Tweak) void {
     };
 }
 
-/// Under the lock. For a lone tweak or a plugin's. Tells its session or plugin, if it has it.
-/// Gets a fresh session, so its output can't land on the next run.
+/// Under the lock. Gets a fresh session, so its output can't land on the next run.
 fn stopSession(tw: *Tweaks, t: *Tweak) void {
     if (!t.state.started()) return;
     if (t.byPlugin()) return queueCall(tw, t, .off, "", 0);
@@ -325,8 +310,7 @@ fn stopSession(tw: *Tweaks, t: *Tweak) void {
     dropSession(tw, t);
 }
 
-/// Under the lock. Forgets its session without telling the provider. A group's file's takes
-/// everything in it.
+/// Under the lock. Forgets its session without telling the provider.
 fn dropSession(tw: *Tweaks, t: *Tweak) void {
     t.session = newSession(tw);
     clearLive(t);
@@ -355,8 +339,7 @@ fn setProblem(tw: *Tweaks, t: *Tweak, problem: []const u8) void {
     t.problem = tw.allocator.dupe(u8, problem) catch null;
 }
 
-/// Not under the lock. Starts what's waiting, plugins' right away and files' once their
-/// language's provider is there.
+/// Not under the lock. Starts what's waiting, files' once their language's provider is there.
 pub fn tick(tw: *Tweaks) void {
     {
         tw.lock.lock();
@@ -391,7 +374,7 @@ fn startedIn(tw: *Tweaks, t: *const Tweak) bool {
     return false;
 }
 
-/// Stops them all, for shutting down.
+/// For shutting down.
 pub fn stopAll(tw: *Tweaks) void {
     {
         tw.lock.lock();
@@ -445,8 +428,7 @@ pub fn onMessage(tw: *Tweaks, message: *const api.Message) void {
     tw.changed();
 }
 
-/// Under the lock. Who a session's message is about: what's at `part` in a group's file, else
-/// the file's group or lone tweak. Null if it's not started, since it's late from a run that's gone.
+/// Under the lock. Who a session's message is about. Null if it's late from a run that's gone.
 fn partOf(tw: *Tweaks, session: u32, part: []const u8) ?*Tweak {
     const t = findSession(tw, session) orelse return null;
     const which = if (t.is_group and part.len > 0) definitions.findPart(tw, t, part) orelse return null else t;
@@ -469,8 +451,7 @@ fn onStarted(tw: *Tweaks, t: *Tweak, fields: []const protocol.TweakState.Field, 
     tw.changed();
 }
 
-/// As `<tweak>.<name>`, until its session goes. In a group's file it's the titles down to it,
-/// like `<group>.<name>`, `<group>.<tweak>.<name>` or `<group>.<nested>.<tweak>.<name>`.
+/// As `<tweak>.<name>`, or `<group>.<tweak>.<name>` in a group's file, until its session goes.
 fn publishNames(t: *const Tweak, names: []const protocol.TweakState.Name) void {
     Names.global.removeGroup(.tweak, t.name);
     for (names) |n| {

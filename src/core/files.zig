@@ -1,5 +1,4 @@
-//! Writing files on an `Io` worker, since std's Windows file calls need more stack than game
-//! threads have, and the render thread must never wait on a file.
+//! File writes on an `Io` worker: std's Windows file calls need more stack than game threads have.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -28,8 +27,7 @@ pub fn writeHere(io: std.Io, path: []const u8, data: []const u8, options: Option
     try cwd.rename(tmp, cwd, path, io);
 }
 
-/// Saves a file every so often, like settings, without the caller waiting. If saves overlap the
-/// latest one wins. `wait` before it goes.
+/// Background saves for files like settings; the latest wins. Call `wait` before freeing.
 pub const Saver = struct {
     allocator: std.mem.Allocator,
     io: std.Io,

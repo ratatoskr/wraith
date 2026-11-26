@@ -1,7 +1,5 @@
-//! Top-level `await` for JS typed into a session, like in the Console. Code that awaits is wrapped
-//! in an async function whose result prints once it settles. As an expression first, so
-//! `await memory.scan(...)` shows what it gave, else as statements, with top-level `let`, `const`
-//! and `var` put on `globalThis` so they outlast the function like they would at the top.
+//! Top-level `await` for JS typed into a session, by wrapping it in an async function.
+//! Top-level declarations go on `globalThis` so they outlast it.
 
 const std = @import("std");
 

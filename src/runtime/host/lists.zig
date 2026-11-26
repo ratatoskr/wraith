@@ -1,8 +1,5 @@
-//! Lists of a plugin's things that Wraith shows, from `list.sal`. The plugin says what's in each and
-//! which is current, and Wraith keeps what the player's picked, by id and by name, so a pick carries
-//! over when ids change. Lists that remember keep their picks in a hidden setting for next time.
-//! Wraith's own features find theirs by purpose, like the free camera's cameras, and draw them where
-//! they belong. Buttons go back to the plugin on the render thread.
+//! Lists of a plugin's things that Wraith shows, from `list.sal`. Picks are kept by id and name, so
+//! they survive id changes. Buttons call the plugin on the render thread.
 
 const std = @import("std");
 
@@ -16,6 +13,7 @@ const scratch = @import("scratch.zig");
 const icons = @import("../ui/icons.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const Owner = @import("tuft_event").Owner;
+const leases = @import("leases.zig");
 const Registry = @import("../settings/Registry.zig");
 
 const W = api.wraith;
@@ -76,8 +74,7 @@ pub const State = struct {
     /// The plugin's, copied into `arena`
     items: []Item = &.{},
     arena: std.heap.ArenaAllocator = .init(allocator),
-    /// What the player picked, in order. An id of 0 is one only known by name so far, like from
-    /// last time
+    /// What the player picked, in order. Id 0 is only known by name so far, like from last time
     chosen: std.ArrayList(Chosen) = .empty,
 
     pub const Chosen = struct { id: u64, name: Name };
@@ -105,8 +102,7 @@ pub const State = struct {
         s.rematch();
     }
 
-    /// Anything picked that isn't listed by its id goes to the first listed by its name that isn't
-    /// picked already. Ones that aren't there keep their id, for when they come back.
+    /// Points picks whose id isn't listed at the first unpicked item with their name. Missing ones keep their id.
     fn rematch(s: *State) void {
         for (s.chosen.items) |*c| {
             if (s.indexOf(c.id) != null) continue;
@@ -141,8 +137,7 @@ pub const State = struct {
         return s.items[d].id == id;
     }
 
-    /// What counts as picked since nothing that's picked is listed: the current one, or else the
-    /// first.
+    /// The default when nothing picked is listed: the current one, else the first.
     pub fn byDefault(s: *const State) ?usize {
         if (!s.current_by_default or !s.picks() or s.items.len == 0) return null;
         for (s.chosen.items) |c| if (s.indexOf(c.id) != null) return null;
@@ -229,10 +224,6 @@ pub const Record = struct {
     title: []const u8,
     current_label: []const u8,
     handlers: Handlers,
-    /// A game's plugin 2, a game engine's 1, the rest 0. Wraith's features go by the best.
-    rank: u8,
-    /// Ties go to the lowest.
-    order: u64,
     /// Hidden, with what's picked, for next time.
     keep: ?*Registry.Setting = null,
 
@@ -337,8 +328,7 @@ pub const Record = struct {
         if (self.keep) |k| if (settings.registryOf()) |r| r.set(k, .{ .text = text }) catch {};
     }
 
-    /// Render thread. With `titled`, its title goes over it. The plugin mustn't go while it's
-    /// drawing, which a lease or its own callback sees to.
+    /// Render thread. With `titled`, its title goes over it. The plugin mustn't go while it's drawing.
     pub fn draw(self: *Record, titled: bool) void {
         var arena: std.heap.ArenaAllocator = .init(allocator);
         defer arena.deinit();
@@ -495,8 +485,6 @@ pub const Record = struct {
 };
 
 var records: host.Owned(Record) = .{};
-var order_lock: sync.RwLock = .{};
-var next_order: u64 = 0;
 
 pub const OpenError = error{ InvalidId, AlreadyOpen, Failed };
 
@@ -521,12 +509,6 @@ pub fn open(loaded: *Loaded, id: []const u8, purpose: Purpose, options: Options,
     const a = arena.allocator();
     const title = a.dupe(u8, if (options.title.len > 0) options.title else id) catch return error.Failed;
     const current_label = a.dupe(u8, if (options.current_label.len > 0) options.current_label else "Current") catch return error.Failed;
-    const order = blk: {
-        order_lock.lock();
-        defer order_lock.unlock();
-        next_order += 1;
-        break :blk next_order;
-    };
     record.* = .{
         .loaded = loaded,
         .purpose = purpose,
@@ -535,8 +517,6 @@ pub fn open(loaded: *Loaded, id: []const u8, purpose: Purpose, options: Options,
         .title = title,
         .current_label = current_label,
         .handlers = handlers,
-        .rank = rankOf(loaded),
-        .order = order,
         .state = .{ .pick = options.pick, .current_by_default = options.current_by_default },
     };
     if (options.remember and record.state.picks()) if (settings.registryOf()) |r| {
@@ -553,13 +533,6 @@ pub fn open(loaded: *Loaded, id: []const u8, purpose: Purpose, options: Options,
     return record;
 }
 
-fn rankOf(loaded: *const Loaded) u8 {
-    const m = loaded.manifest.value;
-    if (m.game != null) return 2;
-    if (m.gameEngine != null) return 1;
-    return 0;
-}
-
 fn matchId(r: *Record, id: []const u8) bool {
     return std.mem.eql(u8, r.id, id) and r.going();
 }
@@ -569,8 +542,7 @@ pub fn find(loaded: *Loaded, id: []const u8) ?*Record {
     return records.findWhere(&loaded.owner, id, matchId);
 }
 
-/// The best-ranked list for `purpose` that has something in it, with its plugin kept from going
-/// till `end`.
+/// A list with its plugin kept from going till `end`.
 pub const Held = struct {
     record: *Record,
     lease: Owner.Lease,
@@ -580,22 +552,22 @@ pub const Held = struct {
     }
 };
 
-pub fn best(purpose: Purpose) ?Held {
-    var found: ?*Record = null;
-    {
-        records.lock.lockShared();
-        defer records.lock.unlockShared();
-        for (records.entries.items) |e| {
-            const r = e.record;
-            if (e.stopped or r.purpose != purpose or !r.going() or !r.hasItems()) continue;
-            if (found) |f| if (r.rank < f.rank or (r.rank == f.rank and r.order > f.order)) continue;
-            found = r;
-        }
-    }
-    const r = found orelse return null;
-    const lease = records.lease(&r.loaded.owner) orelse return null;
-    return .{ .record = r, .lease = lease };
+/// The free camera's list: the camera holder's, if it has something in it.
+pub fn cameras() ?Held {
+    var out: ?Held = null;
+    _ = leases.withHolder(.camera, &out, camerasOf);
+    return out;
 }
+
+fn camerasOf(out: *?Held, holder: *leases.Lease) void {
+    const r = records.findWhere(&holder.loaded.owner, @as([]const u8, cameras_id), matchId) orelse return;
+    if (r.purpose != .cameras or !r.hasItems()) return;
+    const lease = records.lease(&r.loaded.owner) orelse return;
+    out.* = .{ .record = r, .lease = lease };
+}
+
+/// What the free camera's list is called, for each plugin.
+pub const cameras_id = "wraith.cameras";
 
 fn validId(id: []const u8) bool {
     if (id.len == 0 or id.len > 64) return false;
@@ -704,7 +676,7 @@ test "two picks with the same name each find their own" {
 }
 
 const tests = struct {
-    test "a plugin's lists, through list.sal, with the free camera's going by rank" {
+    test "a plugin's lists, through list.sal, with the free camera's from the plugin holding the camera" {
         const sdk = @import("wraith_sdk");
         const r = try Registry.create(testing.allocator, .{});
         defer r.destroy();
@@ -737,8 +709,11 @@ const tests = struct {
         try testing.expectEqual(null, r.find("unity.list.wraith.cameras"));
         engine_cams.set(&.{ .{ .id = 10, .name = "Main Camera" }, .{ .id = 11, .name = "UI", .current = true } });
         try testing.expectEqualSlices(u64, &.{11}, engine_cams.selected());
+        // Only once it holds the camera
+        try testing.expectEqual(null, cameras());
+        _ = try root.camera().claim(null);
         {
-            const held = best(.cameras).?;
+            const held = cameras().?;
             defer held.end();
             try testing.expectEqual(&engine.owner, &held.record.loaded.owner);
             try testing.expectEqualStrings("On screen", held.record.current_label);
@@ -749,32 +724,29 @@ const tests = struct {
         try testing.expectEqual(.plain, find(&engine, "lights").?.purpose);
         sdk.Owner.detach();
 
-        // A game's plugin's cameras win over the engine's, once they have something in them
+        // A game's plugin holding the camera has its cameras shown, once they have something in them
         sdk.Owner.attach(game.root());
         const game_root = sdk.wraith.root().?;
         const game_cams = game_root.camera().cameras(null, null);
-        {
-            const held = best(.cameras).?;
-            defer held.end();
-            try testing.expectEqual(&engine.owner, &held.record.loaded.owner);
-        }
+        _ = try game_root.camera().claim(null);
+        try testing.expectEqual(null, cameras());
         game_cams.set(&.{.{ .id = 20, .name = "Player" }});
         {
-            const held = best(.cameras).?;
+            const held = cameras().?;
             defer held.end();
             try testing.expectEqual(&game.owner, &held.record.loaded.owner);
         }
         sdk.Owner.detach();
         game.deinitForTest();
         {
-            const held = best(.cameras).?;
+            const held = cameras().?;
             defer held.end();
             try testing.expectEqual(&engine.owner, &held.record.loaded.owner);
         }
 
         // Gone with the plugin, what's picked kept
         engine.deinitForTest();
-        try testing.expectEqual(null, best(.cameras));
+        try testing.expectEqual(null, cameras());
         try testing.expectEqual(null, r.find("unity.list.lights"));
         try testing.expectEqualStrings("Rim", r.stores[1].values.get("unity.list.lights").?.text);
     }

@@ -1,13 +1,11 @@
-//! Holds the game's input while a Wraith screen's up: the cursor, the mouse and the keyboard, and
-//! controllers while the overlay's setting wants them. In a game that leaves its mouse free it
-//! keeps the mouse and keyboard, unless it's `always`. Render thread.
+//! Holds the game's input while a Wraith screen's up: cursor, mouse, keyboard, and controllers if
+//! the overlay's setting wants them. Leaves mouse and keyboard in mouse-free games unless `always`. Render thread.
 
 const UiHold = @This();
 
 const Overlay = @import("../Overlay.zig");
 
-/// Takes the mouse and keyboard even where the game leaves the mouse free, like for a screen
-/// that has to be answered.
+/// Takes the mouse and keyboard even where the game leaves the mouse free, for screens that must be answered.
 always: bool = false,
 holding: bool = false,
 /// The mouse, keyboard and cursor, while holding.

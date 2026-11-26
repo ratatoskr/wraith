@@ -21,8 +21,7 @@ const fade_seconds = 0.25;
 /// How dark the game gets.
 const darkness = 0.6;
 
-/// Each frame. Fades towards `wanted`, and gives it 0 once it's gone. `name` keeps blocking ones
-/// apart.
+/// Each frame. Fades towards `wanted`, returning 0 once gone. `name` keeps blocking ones apart.
 pub fn update(self: *Dim, wanted: bool, mode: Mode, name: [:0]const u8) f32 {
     const step = ui.getIO().DeltaTime / fade_seconds;
     self.fade = if (wanted) @min(self.fade + step, 1) else @max(self.fade - step, 0);

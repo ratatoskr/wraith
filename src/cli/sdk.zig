@@ -132,8 +132,7 @@ const Options = struct {
     pointer_size: u8 = 8,
     /// Don't download dependencies from the hub.
     offline: bool = false,
-    /// Plugins its manifest depends on. Their schemas are in their namespaces, with their [Service]
-    /// traits as `Freecam.camera()`.
+    /// Manifest dependencies. Their schemas get their own namespaces, services like `Freecam.camera()`.
     depends: []const []const u8 = &.{},
     /// Its schemas', and C#'s home for anything without one. Its id in PascalCase if empty.
     namespace: []const u8 = "",
@@ -253,8 +252,7 @@ const lua_hooks =
     \\
 ;
 
-/// How a plugin's schemas parse: its own files in its namespace, and each dependency's, named like
-/// `freecam/...`, in theirs. Every file uses Wraith's and its dependencies' without a `use`.
+/// Each package's schemas parse in its own namespace; every file sees Wraith's and deps' without `use`.
 fn parseOptions(arena: std.mem.Allocator, options: Options) !salamander_schema.Options {
     var o = api.sal_options;
     o.pointer_size = options.pointer_size;
@@ -353,8 +351,7 @@ fn generate(arena: std.mem.Allocator, language: Language, options: Options, file
     return list.items;
 }
 
-/// Wraith's API is in its own `Wraith` namespace. That's also home to its `Raw`, and its constants
-/// class, which can't be `Api` or `Schema` since those are traits of Wraith's.
+/// Wraith's API, `Raw` and constants live in `Wraith`. Constants can't be `Api` or `Schema` (traits).
 const cs_namespace = "Wraith";
 const cs_class = "Constants";
 

@@ -1,6 +1,5 @@
-//! The free camera and posing for plugins: `Camera` and `Posing` from the API, which game and engine
-//! plugins hand the game's camera and skeletons to. They go to the runtime's Photo mode while there
-//! is one. Any thread.
+//! The free camera and posing for plugins, `Camera` and `Posing`, which game and engine plugins hand
+//! the game's camera and skeletons to. Any thread.
 
 const std = @import("std");
 
@@ -11,6 +10,8 @@ const sync = @import("tuft_sys").sync;
 const Photo = @import("../photo/Photo.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 const OnGone = @import("Owned.zig").OnGone;
+const leases = @import("leases.zig");
+const wraith = @import("wraith.zig");
 const Owner = @import("tuft_event").Owner;
 
 const W = api.wraith;
@@ -28,14 +29,52 @@ pub fn set(p: ?*Photo) void {
     photo = p;
 }
 
+/// As the camera changes hands: the free camera uses the new one's world. Under the camera's lease lock.
+pub fn cameraHandedOver(after: ?*leases.Lease) void {
+    const a = after orelse return;
+    const w = a.world orelse return;
+    lock.lockShared();
+    defer lock.unlockShared();
+    if (photo) |p| p.camera.world(w);
+}
+
+/// As posing changes hands: forgets the old one's characters. Edits are kept by bone name for if it's back.
+pub fn posingHandedOver(before: ?*leases.Lease) void {
+    const b = before orelse return;
+    lock.lockShared();
+    defer lock.unlockShared();
+    if (photo) |p| p.posing.forget(@intFromPtr(&b.loaded.owner));
+}
+
+fn keepWorld(w: W.FreeCamera.World, lease: *leases.Lease) void {
+    lease.world = w;
+    if (!lease.held()) return;
+    lock.lockShared();
+    defer lock.unlockShared();
+    if (photo) |p| p.camera.world(w);
+}
+
+/// A lease on `part` as the plugin's `Lease`, for `claim`s.
+fn claimFor(loaded: *Loaded, comptime part: leases.Part, changed: ?W.Lease.Changed) api.salamander.Plain(if (part == .camera) W.FreeCamera else W.Posing, "claim") {
+    const t = wraith.tablesOf(loaded) orelse {
+        if (changed) |c| c.release();
+        return error.Failed;
+    };
+    const l = leases.claim(loaded, part, changed, null) catch return error.Failed;
+    return .init(l, t.lease);
+}
+
 pub const CameraImpl = struct {
-    pub fn setWorld(_: *Loaded, w: W.FreeCamera.World) void {
-        lock.lockShared();
-        defer lock.unlockShared();
-        if (photo) |p| p.camera.world(w);
+    pub fn claim(loaded: *Loaded, changed: ?W.Lease.Changed) api.salamander.Plain(W.FreeCamera, "claim") {
+        return claimFor(loaded, .camera, changed);
     }
 
-    pub fn camera(_: *Loaded, id: u64, state: *W.FreeCamera.State) void {
+    pub fn setWorld(loaded: *Loaded, w: W.FreeCamera.World) void {
+        _ = leases.withLease(loaded, .camera, w, keepWorld);
+    }
+
+    pub fn camera(loaded: *Loaded, id: u64, state: *W.FreeCamera.State) void {
+        if (!leases.holds(loaded, .camera)) return;
         lock.lockShared();
         defer lock.unlockShared();
         if (photo) |p| p.camera.camera(id, state);
@@ -67,7 +106,13 @@ pub const CameraImpl = struct {
 };
 
 pub const PosingImpl = struct {
-    pub fn active(_: *Loaded) bool {
+    pub fn claim(loaded: *Loaded, changed: ?W.Lease.Changed) api.salamander.Plain(W.Posing, "claim") {
+        return claimFor(loaded, .posing, changed);
+    }
+
+    /// False for a plugin that doesn't hold posing, so it can skip building skeletons.
+    pub fn active(loaded: *Loaded) bool {
+        if (!leases.holds(loaded, .posing)) return false;
         lock.lockShared();
         defer lock.unlockShared();
         const p = photo orelse return false;
@@ -75,6 +120,7 @@ pub const PosingImpl = struct {
     }
 
     pub fn pose(loaded: *Loaded, skeleton: W.Posing.Skeleton, matrices: *math.Mat4) void {
+        if (!leases.holds(loaded, .posing)) return;
         const lease = posing_cleanup.lease(&loaded.owner) orelse return;
         defer lease.end();
         lock.lockShared();
@@ -83,6 +129,7 @@ pub const PosingImpl = struct {
     }
 
     pub fn shapes(loaded: *Loaded, actor: u64, list: []const W.Posing.Shape, weights: *f32) void {
+        if (!leases.holds(loaded, .posing)) return;
         const lease = posing_cleanup.lease(&loaded.owner) orelse return;
         defer lease.end();
         lock.lockShared();
@@ -90,7 +137,8 @@ pub const PosingImpl = struct {
         if (photo) |p| p.posing.shapes(actor, list, weights);
     }
 
-    pub fn wanted(_: *Loaded, actor: u64) bool {
+    pub fn wanted(loaded: *Loaded, actor: u64) bool {
+        if (!leases.holds(loaded, .posing)) return false;
         lock.lockShared();
         defer lock.unlockShared();
         const p = photo orelse return false;

@@ -1,6 +1,5 @@
-//! How the tweak lists are laid out: the order things go in and what's folded. The Tweaks window
-//! and the workbench's Tweaks panel share it, and it's kept per game. Things only move among the
-//! ones next to them, since what's in a group is up to its file. Any thread.
+//! How the tweak lists are laid out: order and what's folded, shared by the Tweaks window and panel
+//! and kept per game. Rows only move among siblings, since a group's contents are up to its file. Any thread.
 
 const TweakLayout = @This();
 

@@ -1,25 +1,20 @@
-//! Salamander, for traits shared with other plugins in any language. The runtime is the host: the plugin
-//! gets it when it attaches, and objects it provides are owned by the plugin, so they stop being called
-//! once it unloads. Traits come from the plugin's `schemas/` folder, as its `schema` import.
+//! Salamander traits shared with plugins in any language, from `schemas/` as the `schema` import.
+//! Provided objects stop being called once the plugin unloads.
 //!
-//! A [Service] trait in its schemas is offered to plugins that depend on it. The plugin struct lists a
-//! function for each, giving the object. The function's return type says which trait it's for:
+//! Offer a [Service] trait with a function per service; its return type picks the trait:
 //!
 //!     pub const services = .{freecam};
 //!     pub fn freecam(self: *Plugin) schema.Freecam {
 //!         return .init(&self.cam, rt.implement(schema.Freecam, Cam));
 //!     }
 //!
-//! A plugin that depends on it gets it with `sdk.salamander.service(schema.Freecam, "freecam")`.
-//!
-//! Everything else is Salamander's own, through `rt`, like `rt.host().provide` and `rt.host().get`.
+//! Dependents get it with `sdk.salamander.service(schema.Freecam, "freecam")`.
 
 const std = @import("std");
 
 const api = @import("wraith_api");
 pub const rt = @import("salamander_runtime");
-/// Through generated structs' pointers, like `follow(manager, "items.table.data")`. Null at a
-/// null one or one that can't be read, so a stale pointer doesn't crash the game.
+/// Follows generated structs' pointers, like `follow(manager, "items.table.data")`. Null if unreadable.
 pub const follow = rt.follow;
 const Memory = @import("tuft_mem").Memory;
 
@@ -29,9 +24,7 @@ var own_owner: ?*rt.Owner = null;
 var render_queue: ?rt.Queue = null;
 var services: []api.wraith_raw.Wraith_Plugin_Service = &.{};
 
-/// The runtime's host from now on, for every Salamander call this plugin makes. Code its schemas
-/// declare, like `Player.heal` in generated Zig, is found through its `Schema` area, and memory is
-/// read like scripts read it.
+/// Makes the runtime the host for this plugin's Salamander calls.
 pub fn attach(h: rt.Host, o: ?*rt.Owner, queue: rt.Queue, offered: []const api.wraith_raw.Wraith_Plugin_Service) void {
     rt.setHost(h);
     own_owner = o;
@@ -48,8 +41,7 @@ pub fn detach() void {
     services = &.{};
 }
 
-/// What `plugin`, one this plugin depends on, offers as `T`, a [Service] trait in its schemas, like
-/// `sdk.salamander.service(schema.Freecam, "freecam")`.
+/// What dependency `plugin` offers as [Service] trait `T`, like `service(schema.Freecam, "freecam")`.
 pub fn service(comptime T: type, plugin: []const u8) ?T {
     const name = T.salamander.name;
     for (services) |s| {
@@ -58,8 +50,7 @@ pub fn service(comptime T: type, plugin: []const u8) ?T {
     return null;
 }
 
-/// Finds names with `address` and reads this process's memory without faulting. What plugins,
-/// scripts and sessions all find things with.
+/// Resolves names with `address` and reads this process's memory without faulting.
 pub fn locator(ctx: ?*anyopaque, address: *const fn (ctx: ?*anyopaque, name: []const u8) anyerror!usize) rt.declared.Locator {
     return .{ .ctx = ctx, .address = address, .read = readMemory, .write = writeMemory };
 }

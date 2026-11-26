@@ -1,6 +1,5 @@
-//! The game's C# runtime, Mono, IL2CPP or CoreCLR, for Unity games, .NET games and mod loaders.
-//! Calling in from a thread the runtime doesn't know can crash it, so one thread of ours
-//! makes every call, attached while it does. Others hand it work with `call` and wait.
+//! The game's C# runtime (Mono, IL2CPP or CoreCLR). One attached thread of ours makes every call,
+//! since unknown threads can crash it; others hand it work with `call`.
 
 const Managed = @This();
 
@@ -39,12 +38,10 @@ pub const State = enum(u8) {
 
 pub const Error = error{NotRunning};
 
-/// How long the runtime has to have been started before we attach, so we don't race the game
-/// still setting it up.
+/// How long after the runtime starts before we attach, so we don't race the game's setup.
 const settle_ms = 1000;
 
-/// How long CoreCLR's host can keep refusing to be joined, while it's still starting, before we
-/// give up.
+/// How long CoreCLR's host can refuse to be joined before we give up.
 const join_timeout_ms = 30_000;
 
 state: Atomic(State) = .init(.off),
@@ -117,8 +114,7 @@ const Job = struct {
     next: ?*Job = null,
 };
 
-/// Watches for the runtime's DLL and starts the attached thread. Does nothing if it can't. `io` and
-/// `clr_dir`, a folder Wraith can write to, are for joining CoreCLR. The folder's copied.
+/// Watches for the runtime's DLL and starts the attached thread. `clr_dir` is copied.
 pub fn start(self: *Managed, io: std.Io, clr_dir: []const u8) void {
     self.useCoreClr(io, clr_dir);
     if (!self.begin()) return;
@@ -129,8 +125,7 @@ pub fn start(self: *Managed, io: std.Io, clr_dir: []const u8) void {
     }
 }
 
-/// Like `start`, for a runtime that's already loaded at `base`, without watching for others. Call
-/// `useCoreClr` first for CoreCLR.
+/// Like `start`, for a runtime already loaded at `base`. Call `useCoreClr` first for CoreCLR.
 pub fn startOn(self: *Managed, k: Kind, base: usize) void {
     self.found_kind.store(@backingInt(k), .release);
     self.found.store(base, .release);
@@ -198,9 +193,7 @@ pub fn kind(self: *const Managed) ?Kind {
     return self.rt;
 }
 
-/// Runs `func(rt, args...)` on the attached thread and waits for what it returns. Straight away if
-/// this thread can call in already, like it being that thread or Unity's main one, which some of
-/// Unity's own methods need.
+/// Runs `func(rt, args...)` on the attached thread and waits. Runs inline if this thread can call in already.
 pub fn call(self: *Managed, comptime func: anytype, args: anytype) Error!ReturnOf(func) {
     const R = ReturnOf(func);
     const Ctx = struct {
@@ -274,9 +267,7 @@ fn tryStart(self: *Managed, loaded: *bool, started_at: *?u64) void {
     log.info("The game's {s} is running", .{label(k)});
 }
 
-/// CoreCLR has no exports to read, so we join it through the game's own host and load tuft's
-/// helper into it. Its host can refuse while it's still starting the runtime, so this tries again
-/// each poll for a while.
+/// Joins CoreCLR through the game's host, retrying each poll while it's still starting.
 fn tryJoin(self: *Managed, started_at: *?u64) void {
     const so_far = sinceSeen(started_at);
     if (so_far < settle_ms) return;
@@ -336,8 +327,7 @@ fn fail(self: *Managed, comptime message: []const u8, args: anytype) void {
     self.state.store(.failed, .release);
 }
 
-/// Attached only while it has calls, since the game closing waits for every thread its runtime
-/// knows, and this one would never end by itself.
+/// Attached only while it has calls, since the game's exit waits for every attached thread.
 fn drain(self: *Managed, drop: bool) void {
     var attached: ?*tuft_managed.Thread = null;
     defer if (attached) |t| self.rt.detach(t);
@@ -378,8 +368,7 @@ pub fn startForTest(self: *Managed, rt: Runtime) !void {
 
 // Lookups, for the attached thread
 
-/// Like `Game.Player`, `Player`, or `Game.Player/Inner` for a nested class. The first image with
-/// it wins.
+/// Like `Game.Player` or `Game.Player/Inner`. The first image with it wins.
 pub fn findClass(rt: *const Runtime, name: []const u8) ?*Class {
     const slash = std.mem.indexOfScalar(u8, name, '/');
     const outer_name = name[0 .. slash orelse name.len];
@@ -443,8 +432,7 @@ pub fn fullName(rt: *const Runtime, a: std.mem.Allocator, c: *Class) std.mem.All
     return out.items;
 }
 
-/// The first method called `name` with `params` parameters, or any number if it's null. Looks in
-/// parents too.
+/// The first method called `name` with `params` parameters (any if null), parents included.
 pub fn findMethod(rt: *const Runtime, class: *Class, name: []const u8, params: ?u32) ?*Method {
     var here: ?*Class = class;
     while (here) |c| : (here = rt.classParent(c)) {
@@ -480,8 +468,7 @@ fn methodCode(rt: *const Runtime, class_name: []const u8, method: []const u8) ?u
     return rt.methodPointer(m);
 }
 
-/// Where `Class:Method` or `Namespace.Class:Method`'s code is, for names in addresses, compiling it
-/// first under Mono. Null if it's not a name like that, isn't there, or the runtime isn't running.
+/// Where `Class:Method`'s code is, compiling it first under Mono. Null if not found.
 pub fn methodAddress(self: *Managed, name: []const u8) ?usize {
     const parts = splitMethodName(name) orelse return null;
     if (!self.running()) return null;

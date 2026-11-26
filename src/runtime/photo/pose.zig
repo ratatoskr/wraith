@@ -1,6 +1,4 @@
-//! Skeletons as the game last handed them over, and the player's edits, which go back on every frame.
-//! Bones are matrices in one space, so an edit to a bone turns, moves or scales it in its own axes and
-//! takes everything under it along.
+//! Skeletons as last handed over, and the player's edits, reapplied every frame.
 
 const std = @import("std");
 const math = @import("tuft_math");
@@ -84,8 +82,7 @@ pub const ShapeEdit = struct {
     }
 };
 
-/// What a shape's called once what's before the last dot is gone, so `Face.blink` and `Lashes.blink`
-/// count as the same, the way exporters often name them.
+/// A shape's name after the last dot, so `Face.blink` and `Lashes.blink` match.
 pub fn shapeKey(name: []const u8) []const u8 {
     const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return name;
     return if (dot + 1 < name.len) name[dot + 1 ..] else name;
@@ -100,8 +97,7 @@ pub fn euler(degrees: Vec3) Quat {
 
 /// The degrees `euler` takes for a turn, given as where it takes x, y and z.
 fn eulerOf(r: [3]Vec3) Vec3 {
-    // euler turns round x, then y, then z, which as a matrix for column vectors is Rz Ry Rx. Its
-    // element [i][j] is r[j]'s i-th part, as rows here are where the axes go
+    // Euler x then y then z is Rz Ry Rx for column vectors; rows here are where the axes go
     const sy = std.math.clamp(-r[0].z, -1, 1);
     const y = std.math.asin(sy);
     if (@abs(sy) < 1 - 1e-6) {
@@ -121,8 +117,7 @@ pub const Placed = struct {
     }
 };
 
-/// Puts each edit on its bone and everything under it, parents first so a child's edit goes on in
-/// its already moved axes. `parents` must come before their children.
+/// Puts each edit on its bone and everything under it. `parents` must come before their children.
 pub fn apply(parents: []const i32, world: []Mat4, edits: []Placed) void {
     std.mem.sort(Placed, edits, {}, Placed.lessThan);
     var inside: [max_bones]bool = undefined;
@@ -179,8 +174,7 @@ pub const Actor = struct {
     }
 };
 
-/// Everything shared between the game's threads, which pose, and the render thread, which edits.
-/// Callers hold the lock.
+/// Shared between the game's threads, which pose, and the render thread, which edits. Callers hold the lock.
 pub const Store = struct {
     actors: []Actor,
     edits: [max_edits]Edit = undefined,
@@ -251,8 +245,7 @@ pub const Store = struct {
         if (slot) |a| @memcpy(a.world[0..count], world);
     }
 
-    /// `shapes` are anything with a `name` and a `mesh`, and `weights` one for each. After `pose`
-    /// for the same actor, which gives it its slot.
+    /// `shapes` have a `name` and `mesh`, one weight each. Call after `pose` for the same actor.
     pub fn shape(s: *Store, id: u64, shapes: anytype, weights: []f32) void {
         const count: u32 = @intCast(@min(shapes.len, weights.len, max_shapes));
         const w = weights[0..count];

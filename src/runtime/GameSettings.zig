@@ -1,5 +1,4 @@
-//! What the runtime keeps about a game, in `games/<game id>/game.zon`: its project, tweaks and the
-//! like. Settings, Wraith's or plugins', are in the registry instead.
+//! What the runtime keeps about a game in `games/<game id>/game.zon`. Settings live in the registry.
 
 const GameSettings = @This();
 

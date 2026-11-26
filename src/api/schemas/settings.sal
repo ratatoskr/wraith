@@ -1,5 +1,4 @@
-// Settings a plugin registers. Wraith keeps their values, saves them and lists them under the plugin in
-// its Settings, and the plugin can still show them on a screen of its own. Keys are keybinds.
+// Settings a plugin registers, which Wraith stores and lists under the plugin in its Settings.
 
 namespace Wraith;
 
@@ -8,13 +7,13 @@ struct Colour { f32 r; f32 g; f32 b; f32 a; }
 error SettingError { Unavailable = 1, InvalidDefinition, InvalidId, AlreadyAdded, InvalidValue, Failed }
 
 namespace Setting {
-    // A path is text, a folder or file picked with a Browse button or typed
+    // A path is a folder or file, picked or typed
     enum Kind : u8 { toggle, number, choice, text, colour, path }
 
     // Where a value's kept: for every game, or just this one.
     enum Scope : u8 { global, game }
 
-    // A value of any kind. Only the setting's kind's field means anything. Choices and paths are text.
+    // Only the setting's kind's field means anything. Choices and paths are text.
     struct Value {
         bool toggle;
         f64 number;
@@ -45,20 +44,20 @@ namespace Setting {
         []string options;
         // For paths: a file, not a folder
         bool file;
-        // For a file: its type, like ".json"
+        // For a file, like ".json"
         string extension;
-        // For paths: what it uses while it's empty, like "Pictures\Wraith"
+        // For paths: what's used while empty
         string placeholder;
     }
 
-    // After its value changes, on the thread that changed it. From Wraith's Settings that's the render thread.
+    // After its value changes, on the thread that changed it (render thread from Settings).
     fn void Changed(Setting setting);
 }
 
 trait Setting {
     // Text is good till this setting's next get().
     Value!SettingError get();
-    // Saved and listed like picking it in Settings. Numbers get clamped.
+    // Saved, like picking it in Settings. Numbers get clamped.
     void!SettingError set(Value value);
     // Gone from Settings. Its saved value stays.
     void remove();

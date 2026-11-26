@@ -46,6 +46,8 @@ pub const Info = struct {
     start_ns: u64 = 0,
     /// What it couldn't load without, like `unity@1.2`, when that's why it failed.
     needs: Text(80) = .{},
+    /// The game's plugin that stands in for it here, when that's why it's off.
+    superseded_by: Text(64) = .{},
 };
 
 pub const About = struct {
@@ -83,10 +85,16 @@ clr_mode: core_manifest.ClrMode = .load,
 /// From its manifest, like `unity@1.2`.
 depends: [][]u8 = &.{},
 needs: Text(80) = .{},
+/// Game plugins only: the engine plugins it stands in for.
+supersedes: [][]u8 = &.{},
+/// Its manifest's `game` or `gameEngine`, once it's read.
+for_game: bool = false,
+for_engine: bool = false,
+superseded_by: Text(64) = .{},
 
 /// Needs the list's lock held.
 pub fn infoOf(k: *Known, info: *Info) void {
-    info.* = .{ .state = k.state, .last_error = k.last_error, .needs = k.needs };
+    info.* = .{ .state = k.state, .last_error = k.last_error, .needs = k.needs, .superseded_by = k.superseded_by };
     info.name.set(k.name);
     info.about = k.about;
     if (k.provider) |p| info.provider.set(p);
@@ -124,6 +132,7 @@ pub fn findOrAdd(list: *List, allocator: std.mem.Allocator, name: []const u8) !*
 /// Needs the list's lock held exclusively, or the loader being torn down.
 pub fn destroy(k: *Known, allocator: std.mem.Allocator) void {
     k.setDepends(allocator, &.{}) catch unreachable;
+    k.setSupersedes(allocator, &.{}) catch unreachable;
     if (k.provider) |p| allocator.free(p);
     if (k.dir) |d| allocator.free(d);
     allocator.free(k.name);
@@ -132,19 +141,28 @@ pub fn destroy(k: *Known, allocator: std.mem.Allocator) void {
 
 /// Needs the list's lock held exclusively. Keeps the old ones if it fails.
 pub fn setDepends(k: *Known, allocator: std.mem.Allocator, depends: []const []const u8) !void {
-    const copy = try allocator.alloc([]u8, depends.len);
+    try setList(allocator, &k.depends, depends);
+}
+
+/// Needs the list's lock held exclusively. Keeps the old ones if it fails.
+pub fn setSupersedes(k: *Known, allocator: std.mem.Allocator, supersedes: []const []const u8) !void {
+    try setList(allocator, &k.supersedes, supersedes);
+}
+
+fn setList(allocator: std.mem.Allocator, list: *[][]u8, items: []const []const u8) !void {
+    const copy = try allocator.alloc([]u8, items.len);
     var made: usize = 0;
     errdefer {
         for (copy[0..made]) |d| allocator.free(d);
         allocator.free(copy);
     }
-    for (depends) |d| {
+    for (items) |d| {
         copy[made] = try allocator.dupe(u8, d);
         made += 1;
     }
-    for (k.depends) |d| allocator.free(d);
-    allocator.free(k.depends);
-    k.depends = copy;
+    for (list.*) |d| allocator.free(d);
+    allocator.free(list.*);
+    list.* = copy;
 }
 
 /// Needs the list's lock held. Whether `name` is in its `depends`.

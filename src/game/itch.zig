@@ -1,5 +1,4 @@
-//! itch.io, from the `.itch\receipt.json.gz` butler leaves, and the itch app's database for listing
-//! what's installed.
+//! itch.io games, from butler's `.itch\receipt.json.gz` and the itch app's database.
 
 const std = @import("std");
 

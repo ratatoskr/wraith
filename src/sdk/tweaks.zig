@@ -13,11 +13,7 @@
 //!     // Opens a window of the plugin's
 //!     try sdk.tweaks.opens(ctx, .{ .id = "party", .title = "Party" }, &self.party.window);
 //!
-//! A field's default is its first value. `fields` can say more about each, like `.min`, `.max`,
-//! `.label`, `.hex` or `.key`. Bools are checkboxes and enums dropdowns. Callbacks can fail, and the
-//! tweak stays off showing why. A definition's `section` puts it under a heading, like `Combat`.
-//!
-//! For anything else there's `ctx.wraith.tweaks()` itself.
+//! `fields` can set `.min`, `.max`, `.label`, `.hex` or `.key`. A failing callback leaves the tweak off.
 
 const std = @import("std");
 
@@ -49,8 +45,7 @@ pub const FieldOptions = struct {
     key: []const u8 = "",
 };
 
-/// On while the tweak is. `target` is a hook, or anything with `enable` and `disable`, and must
-/// stay put.
+/// Enables `target` (a hook, or anything with `enable`/`disable`) while on. Must stay put.
 pub fn hook(ctx: *Context, definition: Definition, target: anytype) !void {
     const Target = @TypeOf(target);
     const Handler = struct {
@@ -76,8 +71,7 @@ pub fn action(ctx: *Context, definition: Definition, comptime Args: type, owner:
     try State.add(ctx, definition, owner);
 }
 
-/// Opens `window`, a `ui.Window`, from the Tweaks list, like a plugin's own Party window. It shows
-/// with an open button. `window` must stay put.
+/// An open button for a `ui.Window` in the Tweaks list. `window` must stay put.
 pub fn opens(ctx: *Context, definition: Definition, window: *ui.Window) !void {
     const Handler = struct {
         fn handle(w: *ui.Window, event: W.Tweaks.Event) W.TweakError!void {
@@ -87,8 +81,7 @@ pub fn opens(ctx: *Context, definition: Definition, window: *ui.Window) !void {
     try add(ctx, definition, .open, &.{}, W.Tweaks.Handler.init(window, Handler.handle));
 }
 
-/// On and off, with the fields as `Args`. `callbacks` has `on(owner, args)`, `off(owner)`, and
-/// optionally `changed(owner, args)` for a field changing while it's on.
+/// A toggle with fields as `Args`: `on(owner, args)`, `off(owner)` and optional `changed(owner, args)`.
 pub fn toggle(ctx: *Context, definition: Definition, comptime Args: type, owner: anytype, comptime callbacks: anytype) !void {
     const State = Stateful(Args, @TypeOf(owner), callbacks, .toggle);
     try State.add(ctx, definition, owner);

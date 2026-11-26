@@ -1,6 +1,4 @@
-//! Keeps our last-chance filter first. Games and their crash reporters set their own with
-//! `SetUnhandledExceptionFilter`, which would silently replace ours. With this they become the
-//! filter ours passes crashes on to instead, and get back what they'd expect.
+//! Keeps our last-chance filter first; filters games set become the one ours passes crashes on to.
 
 const std = @import("std");
 

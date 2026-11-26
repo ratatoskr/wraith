@@ -1,5 +1,4 @@
-//! Plugins' sounds, through one player for the whole runtime. Nothing plays while the user has
-//! sounds off.
+//! Plugins' sounds, through one player for the runtime. Nothing plays while the user has sounds off.
 
 const std = @import("std");
 

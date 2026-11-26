@@ -1,5 +1,4 @@
-//! Reading and checking code with tuft's assembler. What restore bytes were, whether a script's
-//! copy of them is the same code, and whether what we wrote assembles.
+//! Decodes and checks code with tuft's assembler.
 
 const std = @import("std");
 const tuft_asm = @import("tuft_asm");
@@ -136,8 +135,7 @@ pub const Known = struct {
     }
 };
 
-/// Whether `source` assembles, with each name `known` takes somewhere near it. Only for code of
-/// our own bits, since the assembler's are fixed.
+/// Whether `source` assembles, with `known` names placed nearby. Only for our own bitness.
 pub fn check(arena: std.mem.Allocator, source: []const u8, bits: Bits, known: Known) !?Problem {
     if (bits != Bits.native()) return null;
     var diagnostic: tuft_asm.Diagnostic = .{};

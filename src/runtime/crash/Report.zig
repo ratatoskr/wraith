@@ -1,5 +1,4 @@
-//! A crash report. It says what happened and where, the registers, what's on the stack and the
-//! recent log. Built into a fixed buffer, since the heap might be what broke.
+//! A crash report, built into a fixed buffer since the heap might be what broke.
 
 const Report = @This();
 

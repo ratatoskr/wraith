@@ -1,5 +1,4 @@
-//! Just enough XML for Cheat Engine tables. Elements, attributes, text, entities, CDATA and
-//! comments. No namespaces or DTDs, which tables don't use.
+//! Just enough XML for Cheat Engine tables. No namespaces or DTDs.
 
 const std = @import("std");
 

@@ -1,7 +1,5 @@
-//! The address list's hotkeys. Each is a key setting in the registry, for just this game, listed
-//! under Address list in Wraith's settings, where a key picked for it wins. A press only counts
-//! up, and whoever ticks the list does what it asks, so the list is only ever touched from one
-//! thread.
+//! The address list's hotkeys, as per-game key settings in the registry. A press only counts up and
+//! whoever ticks the list acts on it, so the list is only touched from one thread.
 
 const AddressKeys = @This();
 

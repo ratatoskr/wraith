@@ -1,6 +1,4 @@
-//! Cheat Engine numbers to ours. CE reads `10` as hex and `#10` as decimal, while we read `10`
-//! as decimal and `0x10` as hex. A number we miss is a wrong write, so this tokenises instead of
-//! pattern matching, and anything that's a name stays a name.
+//! CE numbers to ours (CE `10` is hex, `#10` decimal). Tokenises, since a missed number is a wrong write.
 
 const std = @import("std");
 const tuft_asm = @import("tuft_asm");
@@ -127,8 +125,7 @@ const Mode = enum {
     address,
 };
 
-/// One CE statement, no label or comment, with its numbers ours. `nop 3` becomes three nops and
-/// `(float)1.5` in an instruction becomes its bits.
+/// One CE statement with its numbers ours. `nop 3` becomes three nops, `(float)1.5` its bits.
 pub fn asmStatement(arena: std.mem.Allocator, statement: []const u8, names: Names, notes: *Notes) ![]const u8 {
     const text = std.mem.trim(u8, statement, " \t");
     var i: usize = 0;
@@ -168,8 +165,7 @@ pub fn isData(word: []const u8) bool {
     return false;
 }
 
-/// Location text with its numbers ours, like `[[base]+0x10]+8`. Module names with spaces get
-/// quotes, since CE takes `Tales of Arise.exe+10` bare.
+/// Location text with its numbers ours, like `[[base]+0x10]+8`.
 pub fn address(arena: std.mem.Allocator, text: []const u8, names: Names, notes: *Notes) ![]const u8 {
     const quoted = try quoteModules(arena, std.mem.trim(u8, text, " \t"));
     var out: std.ArrayList(u8) = .empty;
@@ -177,8 +173,7 @@ pub fn address(arena: std.mem.Allocator, text: []const u8, names: Names, notes: 
     return out.items;
 }
 
-/// `Tales of X.exe+10` to `"Tales of X.exe"+10`, and `Game-Win64.exe` too, since ours reads
-/// spaces and dashes as the end of a name.
+/// Quotes names like `Tales of X.exe`, since ours ends a name at spaces and dashes.
 fn quoteModules(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
@@ -314,8 +309,7 @@ fn word_(arena: std.mem.Allocator, word: []const u8, mode: Mode, names: Names, n
         .rename => |r| return r,
         .unknown => {},
     }
-    // CE reads it as a number when no symbol has that name. Short ones like FF are plainly
-    // bytes, but a word like `add` or `dead` might have been meant as a name
+    // CE reads it as a number if no symbol matches, but a word like `dead` may have meant a name
     const letters = for (word) |ch| {
         if (std.ascii.isDigit(ch)) break false;
     } else true;
@@ -349,8 +343,7 @@ pub fn isModule(word: []const u8) bool {
     return std.ascii.endsWithIgnoreCase(base, ".exe") or std.ascii.endsWithIgnoreCase(base, ".dll");
 }
 
-/// CE's aob text, like `7C??488B` or `48 8B ** xx 05`, as our pattern. Half bytes like `4?` become
-/// `??`, which matches more but never less.
+/// CE aob text like `48 8B ** xx 05` as our pattern. Half bytes like `4?` widen to `??`.
 pub fn pattern(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     var digits: std.ArrayList(u8) = .empty;
     var out: std.ArrayList(u8) = .empty;

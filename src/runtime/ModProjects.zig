@@ -1,5 +1,4 @@
-//! Installed project mods for the game Wraith's in, read for their tweaks, schemas and address
-//! list. Not on the render thread, since it reads every one's files.
+//! Installed project mods for this game. Not on the render thread, since it reads every one's files.
 
 const std = @import("std");
 
@@ -16,8 +15,7 @@ const log = core.log.scoped(.wraith_runtime);
 /// Big enough for any tweak someone means to write.
 const max_file = 1 << 20;
 
-/// In `arena`. Ones for other games are left out, and so are folders that aren't projects and
-/// copies the hub pulled, by `revoked` hashes.
+/// In `arena`. Skips other games', non-projects and `revoked` copies.
 pub fn read(arena: std.mem.Allocator, io: std.Io, mods_dir: []const u8, here: core.manifest.Here, revoked: []const []const u8) ![]const Tweaks.ModProject {
     var dir = std.Io.Dir.openDirAbsolute(io, mods_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return &.{},
@@ -123,10 +121,10 @@ test "only projects for this game, with their tweak files" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     const files = [_][2][]const u8{
-        .{ "tables/wraith.json", "{ \"id\": \"tables\", \"kind\": \"project\", \"apiVersion\": 2, \"title\": \"Tables\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
+        .{ "tables/wraith.json", "{ \"id\": \"tables\", \"kind\": \"project\", \"apiVersion\": 3, \"title\": \"Tables\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
         .{ "tables/tweaks/speed.rwt", "@js" },
         .{ "tables/tweaks/readme.md", "no" },
-        .{ "elsewhere/wraith.json", "{ \"id\": \"elsewhere\", \"kind\": \"project\", \"apiVersion\": 2, \"game\": { \"ids\": [\"steam-2\"] } }" },
+        .{ "elsewhere/wraith.json", "{ \"id\": \"elsewhere\", \"kind\": \"project\", \"apiVersion\": 3, \"game\": { \"ids\": [\"steam-2\"] } }" },
         .{ "elsewhere/tweaks/a.rwt", "@js" },
         .{ "old/wraith.json", "{ \"id\": \"old\", \"kind\": \"project\", \"game\": { \"exes\": [\"kai.exe\"] } }" },
         .{ "old/tweaks/a.rwt", "@js" },

@@ -1,6 +1,4 @@
-/* What a C plugin needs besides Wraith's API: the `wraith_plugin` export Wraith starts it through.
- * Everything else goes through `wraith.h`, made from Wraith's schemas, like
- * `Wraith_Hooks_detourNative(Wraith_Api_hooks(w), ...)`.
+/* The `wraith_plugin` export a C plugin needs. Everything else is Wraith's API in `wraith.h`.
  *
  *     static bool start(sal_Host host, wraith_Guest guest) {
  *         Wraith_Api w = wraith_root(guest);
@@ -10,9 +8,8 @@
  *     static void stop(void) {}
  *     WRAITH_PLUGIN(start, stop)
  *
- * Calls that can fail give a code, SAL_OK for success, with the value through a pointer at the end.
- * Objects you hand Wraith, like a tweak's handler, are tables of function pointers you fill in with
- * SAL_TABLE. Wraith stops calling them once the plugin's unloading. */
+ * Fallible calls return SAL_OK or a code, with the value through a trailing pointer.
+ * Objects you hand Wraith are SAL_TABLE function tables, no longer called once unloading. */
 
 #ifndef WRAITH_PLUGIN_H
 #define WRAITH_PLUGIN_H
@@ -59,8 +56,7 @@ static inline bool wraith_same(sal_string a, sal_string b) {
     return true;
 }
 
-/* What `plugin`, one this plugin depends on, offers as a [Service] trait in its schemas, laid out like
- * `schema.h`'s, or no table. Only during `start`, so keep what it gives:
+/* What dependency `plugin` offers as a [Service] trait, or no table. Only during `start`:
  *     sal_object o = wraith_service(host, guest, SAL_STR("freecam"), &sal_info_Freecam_Freecam);
  *     Freecam_Freecam cam = { o.data, o.table }; */
 static inline sal_object wraith_service(sal_Host host, wraith_Guest guest, sal_string plugin, const sal_Info *want) {
@@ -72,8 +68,7 @@ static inline sal_object wraith_service(sal_Host host, wraith_Guest guest, sal_s
     return none;
 }
 
-/* Offers nothing to other plugins. To offer a [Service] trait, give `WRAITH_PLUGIN_WITH` a function
- * that gives the object for that trait's name, owned so it stops when the plugin goes:
+/* Offers nothing. To offer a [Service] trait, pass `WRAITH_PLUGIN_WITH` a function like:
  *     static sal_object service(sal_string trait) {
  *         if (!wraith_same(trait, sal_info_Game_Freecam.name)) return wraith_no_service(trait);
  *         Game_Freecam cam = sal_own_Game_Freecam(host, (Game_Freecam){ (uintptr_t)&mine, &cam_table }, owner);

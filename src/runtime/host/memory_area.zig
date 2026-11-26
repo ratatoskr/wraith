@@ -255,8 +255,7 @@ fn startFirst(loaded: *Loaded, options: W.Memory.Scan.Options, resolver: wraith.
     try Job.start(s, tables, step, .{ .first = .of(resolver, s.loaded) });
 }
 
-/// A scan's step on a worker. Only enters the plugin's owner to settle, so unloading doesn't wait
-/// for a long search, it cancels it.
+/// A scan's step on a worker. Only enters the owner to settle, so unloading cancels it rather than waits.
 const Job = struct {
     scan: *scans.Scan,
     search: *mem.Search,

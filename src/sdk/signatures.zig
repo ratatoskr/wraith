@@ -1,9 +1,5 @@
-//! Signatures, for native plugins. Their own scans go to the runtime, which lists them, and their
-//! tuft scans of other copies of the game's code read the runtime's: the snapshot from when it
-//! started, and the exe from disk.
-//!
-//! `find` is the usual way to look one up. It goes through the runtime like a schema's `[Sig]`
-//! does, so it's listed, reused, and falls through the copies the plugin allows.
+//! Signature scans for native plugins, through the runtime so they're listed and reused.
+//! Use `find`, which works like a schema's `[Sig]`.
 
 const std = @import("std");
 

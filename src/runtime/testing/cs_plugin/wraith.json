@@ -1,1 +1,1 @@
-{ "id": "cs_fixture", "kind": "plugin", "apiVersion": 2, "provider": "cs" }
+{ "id": "cs_fixture", "kind": "plugin", "apiVersion": 3, "provider": "cs" }

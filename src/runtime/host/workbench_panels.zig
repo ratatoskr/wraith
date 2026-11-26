@@ -1,8 +1,5 @@
-//! Plugins' Workbench panels. Plugins add them from any thread, and the Workbench draws them on its
-//! own thread. Removing one stops new draws and waits for one under way, so a native plugin can free
-//! what its panel uses once `remove` returns. It doesn't wait when that would wait on itself: from
-//! the Workbench's thread while it holds the panel, or from a script, whose draw would be waiting
-//! for the script's lock the remover holds. A script's state isn't freed under it anyway.
+//! Plugins' Workbench panels, added from any thread and drawn on the Workbench's. `remove` waits for a
+//! draw under way, unless that'd wait on itself: from the Workbench's thread or from a script.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -26,16 +23,14 @@ pub const Panel = struct {
     label: [:0]u8,
     engine: bool,
     draw: Draw,
-    /// Draws under way in the low bits, and `stopped_bit` once it's stopped. Whoever brings it to
-    /// stopped with none under way lets go of `draw`.
+    /// Draws under way in the low bits, plus `stopped_bit`. Whoever stops it with none under way lets go of `draw`.
     state: Atomic(u32) = .init(0),
     /// `draw`'s been let go of, so nothing of the plugin's runs for it again.
     finished: Atomic(bool) = .init(false),
     let_go: Atomic(bool) = .init(false),
     /// Asked for from any thread, done by the Workbench.
     focus_wanted: Atomic(bool) = .init(false),
-    /// Set by the Workbench each frame, from whether it was drawn the frame before, so it's never
-    /// briefly false in between for another thread to see.
+    /// Set by the Workbench each frame from the frame before, so other threads never see it briefly false.
     shown: Atomic(bool) = .init(false),
     /// Drawn this Workbench frame. Workbench thread.
     drawn: bool = false,
@@ -171,10 +166,7 @@ pub fn version() u32 {
     return changes.load(.acquire);
 }
 
-/// The ones still going, `engine` ones or the rest, into `out`. Each is held, so it can't go till
-/// `release`, and nothing on this thread waits on it meanwhile. Workbench thread.
-/// None of them are showing, for a Workbench that's closed and so drawing nothing to say so.
-/// Workbench thread.
+/// Marks none showing, for a closed Workbench. Workbench thread.
 pub fn hideAll() void {
     lock.lockShared();
     defer lock.unlockShared();
@@ -184,6 +176,7 @@ pub fn hideAll() void {
     }
 }
 
+/// The live `engine` panels or the rest, into `out`, each held till `release`. Workbench thread.
 pub fn take(engine: bool, out: []*Panel) []*Panel {
     lock.lockShared();
     defer lock.unlockShared();
@@ -215,8 +208,7 @@ pub fn release(taken: []const *Panel) void {
     }
 }
 
-/// Draws it in the current window, scoped to its plugin. Only what `take` gave, and not once it's
-/// been stopped, like by another panel's draw.
+/// Draws it in the current window, scoped to its plugin. Only what `take` gave, not once it's stopped.
 pub fn drawPanel(p: *Panel) void {
     if (p.stopped()) return;
     host.ui.runInWorkbench(p.loaded, &p.warned, p, Panel.call);

@@ -1,5 +1,4 @@
-//! The console window, if the settings ask for it or the runtime fails to start. Lines before
-//! that are in `LogHistory`, so it shows them first.
+//! The console window, if the settings ask for it or the runtime fails to start.
 
 const std = @import("std");
 
@@ -8,8 +7,7 @@ const terminal = @import("tuft_sys").terminal;
 
 const LogHistory = @import("LogHistory.zig");
 
-/// First thing, before anything's logged. Leaves stderr alone unless there's a console already,
-/// like when the launcher asked for one.
+/// First thing, before anything's logged. Leaves stderr alone unless there's a console already.
 pub fn start() void {
     core.log.setStderr(terminal.isOpen());
 }

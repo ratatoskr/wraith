@@ -1,5 +1,4 @@
-//! Cheat Engine Auto Assembler scripts, cut into statements. Comments go, `[ENABLE]` and
-//! `[DISABLE]` split it, and `{$lua}` parts are kept as Lua text.
+//! Splits CE Auto Assembler scripts into statements, by `[ENABLE]`/`[DISABLE]`, keeping `{$lua}` text.
 
 const std = @import("std");
 

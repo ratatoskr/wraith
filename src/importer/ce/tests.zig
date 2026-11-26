@@ -472,8 +472,7 @@ test "a table becomes a project" {
     const a = arena.allocator();
     const p = try ce.import(a, testing.allocator, table_source, .{ .name = "test.CT" });
 
-    // One file for the table, the parent a group with its own script shared, and the record a
-    // Toggle field
+    // One file; the parent is a group sharing its script, the record a Toggle field
     const file = fileText(p, "tweaks/test.rwt").?;
     const want = [_][]const u8{
         "@group \"test\"\n@children none\n@globals shared\n@use ce\n@lua\n-- ce: the table's records, for getAddressList()\nce.load {\n",

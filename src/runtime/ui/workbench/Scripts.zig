@@ -174,8 +174,7 @@ pub fn run(self: *Scripts, id: u32, code: []const u8) void {
     self.sendPending();
 }
 
-/// Like typed at the Console. It runs in the session, but its document still opens with what it
-/// ran before. Once scripts are ready.
+/// Like typed at the Console: runs in the session, but its document keeps what it ran before. Once scripts are ready.
 pub fn eval(self: *Scripts, id: u32, code: []const u8) void {
     const s = self.find(id) orelse return;
     if (s.pending) |p| self.allocator.free(p);

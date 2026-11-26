@@ -11,8 +11,7 @@ pub const BootstrapFlags = struct {
     pub const started_with_game: u32 = 1;
     /// Don't return until the runtime has loaded or failed.
     pub const wait_until_ready: u32 = 2;
-    /// Open the console from the start. Without it there's one only if the runtime's settings ask,
-    /// or loading fails.
+    /// Open the console at startup, rather than only on request or load failure.
     pub const console: u32 = 4;
 };
 pub const ShutdownFn = fn () callconv(.c) void;
@@ -30,7 +29,7 @@ pub const Path = extern struct {
     }
 };
 
-/// Passed across reloads so the next runtime doesn't probe with its own devices, which overlays like Special K mistake for the game's.
+/// Passed across reloads so the next runtime doesn't probe devices, which overlays like Special K misread.
 pub const GraphicsHandover = extern struct {
     api: u32 = 0,
     /// Holds a reference, whoever takes it releases it.

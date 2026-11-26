@@ -4,14 +4,13 @@ const std = @import("std");
 
 const api = @import("wraith_api");
 const Owner = @import("Owner.zig");
+const Lease = @import("lease.zig").Lease;
 
 const W = api.wraith;
 const Mat4 = @import("tuft_math").Mat4;
 const Vec3 = @import("tuft_math").Vec3;
 
-/// What the game's camera shows, for drawing over the world, like a gizmo or a label over a
-/// character. Row-vector style, the way Direct3D has it: the camera looks down +z and depth goes
-/// from 0 to 1.
+/// The game camera's view, for drawing over the world. Direct3D style: row vectors, +z forward, depth 0-1.
 pub const View = struct {
     view: Mat4,
     projection: Mat4,
@@ -20,8 +19,7 @@ pub const View = struct {
         return self.view.mul(self.projection);
     }
 
-    /// Where `point` in the world is on a window `size` pixels big, from its top left. Null if it's
-    /// behind the camera.
+    /// `point` in window pixels from the top left, or null if behind the camera.
     pub fn project(self: View, point: Vec3, size: [2]f32) ?[2]f32 {
         const clip = self.viewProjection().transformVec4(point.withW(1));
         if (clip.w < 0.01) return null;
@@ -29,16 +27,19 @@ pub const View = struct {
     }
 };
 
-/// For a game or game engine plugin, each frame once the camera's where it'll be drawn from, after
-/// the free camera has moved it. Any thread.
+/// Lease on the view and color space, for game or engine plugins. Only the holder's setters count.
+pub fn claimView(changed: Lease.Changed) error{ OwnerGone, Failed }!Lease {
+    const owner = Owner.current() orelse return error.OwnerGone;
+    return .{ .object = owner.root.display().claimView(changed.callback) catch return error.Failed };
+}
+
+/// Sets the view each frame, after the free camera moved it. Holder only, any thread.
 pub fn setView(view_: Mat4, projection: Mat4) void {
     const owner = Owner.current() orelse return;
     owner.root.display().setView(view_, projection);
 }
 
-/// For a game or game engine plugin that knows how the game's output is encoded, like HDR10 when
-/// the game's HDR is on. Wraith goes by it where the swap chain can't say, like a 10-bit one Wraith
-/// joined late. What the game sets on its swap chain itself still wins. Any thread.
+/// Sets the output color space, like HDR10, where the swap chain can't say. Holder only, any thread.
 pub fn setColorSpace(space: W.ColorSpace) void {
     const owner = Owner.current() orelse return;
     owner.root.display().setColorSpace(space);

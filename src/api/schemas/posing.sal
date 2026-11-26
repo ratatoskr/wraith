@@ -1,53 +1,47 @@
-// Posing characters' bones and blend shapes. A game's plugin, or its engine's, hands Wraith each
-// character's skeleton, and its blend shapes if it has any, once the game's animated it, and Wraith
-// puts the player's edits on them. Wraith does the rest: the Posing window, picking bones, freezing,
-// the keys and settings. Any thread.
+// Posing characters' bones and blend shapes. A game or engine plugin hands Wraith each animated
+// skeleton and its shapes, and Wraith applies the player's edits and does the rest. Any thread.
 
 namespace Wraith;
 
 namespace Posing {
-    // One bone, as the game has it.
     struct Bone {
-        // What it's called. Edits are kept by it, so it should stay the same from frame to frame
+        // Edits are kept by it, so keep it stable across frames
         string name;
-        // Its parent's place in the same list, which must come before it, or -1 for none
+        // Its parent's index, which must come before it, or -1
         i32 parent;
     }
 
     // An actor's skeleton, this frame.
     struct Skeleton {
-        // Anything that stays the same for this actor while it's around, like its address
+        // Stable while the actor's around, like its address
         u64 id;
         // Shown in the list of actors
         string name;
         []Bone bones;
-        // From the bones' space to the world's, or the identity if they're already in the world
+        // From the bones' space to the world's, or the identity if they're in the world already
         Mat4 to_world;
     }
 
     // One blend shape, or morph target, on one of an actor's meshes.
     struct Shape {
-        // What it's called. Edits are kept by it and its mesh, so both should stay the same
+        // Edits are kept by it and its mesh, so keep both stable
         string name;
-        // Which of the actor's meshes it's on, like the face or the body
+        // Which mesh it's on, like the face or the body
         string mesh;
     }
 }
 
 trait Posing {
-    // Whether posing wants skeletons at all right now. A game can skip building them when it's false.
+    // A lease on posing the game's characters, see `Lease`. Only the holder's skeletons are posed.
+    Lease!LeaseError claim(keep ?Lease.Changed changed);
+    // It holds the lease and posing's on. When false the game can skip building skeletons.
     bool active();
-    // Every frame for each actor, once the game's done with its skeleton (animation, IK and physics)
-    // and before anything follows it, like attached accessories. `matrices` has one per bone, in the
-    // same order, row-vector style, and posing changes them in place. Posing draws them with the
-    // game's camera from `frame.setView`, which the game's plugin sets too.
+    // Every frame per actor, after animation, IK and physics and before anything follows it.
+    // `matrices` has one per bone, row-vector style, changed in place.
     void pose(Skeleton skeleton, Mat4* matrices);
-    // Every frame for each actor with blend shapes, after `pose` for it and before it's skinned.
-    // `weights` has one per shape, in the same order, 0 for none of it and 1 for all of it, and
-    // posing changes them in place. `actor` is the skeleton's id.
+    // Every frame per actor with shapes, after `pose` and before skinning. `weights` has one per
+    // shape, 0 to 1, changed in place. `actor` is the skeleton's id.
     void shapes(u64 actor, []Shape list, f32* weights);
-    // Whether the player's picked `actor`, the skeleton's id, or edited it. Games that animate far
-    // or minor characters less can animate these ones in full while posing's open, and leave the
-    // rest be.
+    // Whether the player's picked or edited `actor`, so the game can animate it in full.
     bool wanted(u64 actor);
 }

@@ -1,5 +1,5 @@
-//! Every type the project's and plugins' schemas have, by plugin and namespace. Pick one to see its
-//! fields, methods, statics or values, what uses it and its source, or lay it over memory.
+//! Every type in the project's and plugins' schemas, by plugin and namespace, with its members,
+//! users and source, or laid over memory.
 
 const SchemasPanel = @This();
 
@@ -127,8 +127,7 @@ pub fn show(self: *SchemasPanel, name: []const u8) bool {
 
 // Keeping up with the parses
 
-/// Since the Addresses panel's parses are what rows point into, they're looked at again as soon
-/// as it has new ones.
+/// Rows point into the Addresses panel's parses, so this reruns as soon as it has new ones.
 fn catchUp(self: *SchemasPanel) void {
     const now = self.wb.panels.addresses.plugins_generation;
     if (now == self.seen) return;
@@ -497,7 +496,6 @@ fn membersLabel(t: *const Schema.Type) [:0]const u8 {
     };
 }
 
-/// Works out what's shown about it.
 fn pick(self: *SchemasPanel, t: *const TypeRow) void {
     self.members_of = t.id;
     self.picked_members.clear();

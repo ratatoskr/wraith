@@ -1,11 +1,5 @@
-// Runs `.rwt` tweaks. A session compiles one into calls on `__t`, one line for each of the
-// tweak's, so whatever throws can say the tweak's own line. Code changes are made off and all
-// switched on in `done`, so a tweak that fails part way changes nothing, and `stop` undoes them.
-// Wraith's areas and `salamander` are globals here.
-//
-// A group's file runs its shared part like a lone tweak, then each of its tweaks in `part`, with
-// state of their own that falls back to the shared part's. A nested group's shared part runs the
-// same way, and what's in it runs `with` its `scope`, so it sees every group's above it.
+// Runs `.rwt` tweaks compiled into calls on `__t`, one per tweak line so errors say the tweak's line.
+// Code changes all switch on in `done`, so a tweak that fails part way changes nothing.
 (() => {
   "use strict";
   // What a part owns. Its code changes, names, data and schema
@@ -61,8 +55,7 @@
   };
   const num = (a) => (typeof a === "number" ? a : Number(typeof a === "bigint" ? a : a.unwrap()));
 
-  // Location text like `game.exe+0x10`, `sig("48 8B ??", Rip)` or `[ptr]+8`, see
-  // `addresses.resolve`. Names from @sym and @data come first
+  // Location text like `game.exe+0x10`; @sym and @data names come first
   const scope = () => [...cur.names].map(([name, address]) => ({ name, address }));
   const evaluate = (line, text) => {
     for (const name of cur.pending.names) {
@@ -176,8 +169,7 @@
   };
   const cellAt = (address) => ({ address, load: (kind) => load(address, kind), store: (kind, v) => store(address, kind, v) });
 
-  // Places the part's pending data and asm together, so the code always reaches it, then fills
-  // in the data. Before anything needs it, or in `done`
+  // Places the part's pending data and asm together, so the code always reaches it
   const flush = (part) => {
     const p = part.pending;
     if (!p.data.length && !p.code.length) return;
@@ -259,8 +251,7 @@
       return h;
     });
 
-  // A signature like `[Thiscall] f32 (Player* self, i32)`, in `.sal`'s way, with `fn` and a
-  // name for each parameter
+  // A `.sal` signature like `[Thiscall] f32 (Player* self, i32)`
   const signatureOf = (text) => {
     const open = text.indexOf("(");
     const close = text.lastIndexOf(")");
@@ -324,8 +315,7 @@
     return f !== above ? f : null;
   };
 
-  // Names a nested group's code has, for what's in it. Whether it has one is kept, since a
-  // function's names don't change once it's run
+  // Names a nested group's code has, cached since they don't change once it's run
   const scopeOf = (part) => {
     const has = new Map();
     const owns = (n) => {
@@ -351,9 +341,7 @@
     });
   };
 
-  // A nested group's `@globals shared`, for what's in it. Names already in the real globals
-  // still go there, and the rest land in the group's globals. It finds them when it's used,
-  // since its own code gets this before its part is made
+  // A nested group's `@globals shared`; names already in the real globals still go there
   const sharers = new Map();
   const sharerOf = (path) => {
     let proxy = sharers.get(path);
@@ -394,9 +382,7 @@
   };
 
   globalThis.__t = {
-    // `body(data, sym, types)` is one of a group's tweaks or nested groups, run with its own
-    // state. `parent` is the nested group it's in, if it is. `shares` is a group's
-    // `@globals shared`
+    // One of a group's tweaks or nested groups, with its own state. `shares` is `@globals shared`
     part(name, body, parent, shares) {
       if (name === "") {
         cur = shared;
@@ -424,9 +410,7 @@
       return sharerOf(name);
     },
 
-    // A part's top-level `var` and `function` names, each as `[name, get, set, isVar]`, put in
-    // the shared globals so they stay live. A var that's already there keeps its value, like
-    // a `var` at the top of a script
+    // A part's top-level `var` and `function` names, as `[name, get, set, isVar]`, kept live in the shared globals
     share(list) {
       const env = cur.globals;
       if (!env) return;
@@ -450,10 +434,7 @@
       return part.scope || (part.scope = scopeOf(part));
     },
 
-    // `@use name`. A library with `install(env, options)` installs into the globals, which is
-    // the file's own here. Gives what install gave back, else the library, and the file's top
-    // part also gets it as a global. A handle's `stop` runs when the part stops. Its `tweaks`
-    // take names like `./Combat` in this file
+    // `@use name`. Gives what `install` gave back, else the library. A handle's `stop` runs when the part stops
     use(line, name, title) {
       let lib;
       try {
@@ -492,8 +473,7 @@
         return p;
       });
       if (!placed.length) return;
-      // Placed with the patches and injects that read it, in `flush`. Reading it before then
-      // places it first
+      // Placed with the asm that reads it in `flush`, or now if read before then
       const where = near ? evaluate(line, near) : undefined;
       const part = cur;
       part.pending.data.push({ line, near: where, size: Math.max(size, 8), placed });
@@ -587,8 +567,7 @@
       });
     },
 
-    // Returns where its data went, for the UI. `lookup` finds a group's tweak's own functions, and
-    // a nested group's `assign` sets its names for what's in it
+    // Returns where its data went, for the UI
     done(lookup, assign) {
       const part = cur;
       flush(part);

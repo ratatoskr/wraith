@@ -2,8 +2,7 @@
 
 const std = @import("std");
 
-/// Like `Ctrl+Shift+f8`, or null if a key has no name of ours or there's more than one key that
-/// isn't a modifier.
+/// Like `Ctrl+Shift+f8`, or null for unknown keys or more than one non-modifier.
 pub fn chord(arena: std.mem.Allocator, codes: []const u16) !?[]const u8 {
     var ctrl = false;
     var shift = false;

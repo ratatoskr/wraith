@@ -1,10 +1,5 @@
-//! A struct in game memory as controls, built from its schema and read fresh each frame. Names
-//! come from the fields, or `[Label("..")]`. `[Range(min, max)]` makes a number a slider,
-//! `[ReadOnly]` shows it without letting it change and `[Hidden]` leaves it out. `[Flatten]` on a
-//! struct or a pointer to one shows its fields in place, as if it wasn't there. Nested structs,
-//! bitfields, arrays and pointers to structs fold open, `T[count]` ones as long as their count says.
-//! `[Choices("Type.path.to.list", id, name)]` makes a number one of a list the game has, like its
-//! items. Render thread.
+//! A struct in game memory as controls, built from its schema and read fresh each frame. Honours
+//! `[Label]`, `[Range]`, `[ReadOnly]`, `[Hidden]`, `[Flatten]` and `[Choices]`. Render thread.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -247,7 +242,6 @@ fn enumChoices(r: Ref) []const TweakFields.Choice {
 var enum_buf: [256]TweakFields.Choice = undefined;
 
 /// Where the game has `type_name` now, through its `[Instance]`. Null till the game makes it.
-/// The scan goes through `Names`, which keeps what it found and waits a bit before trying a miss again.
 pub fn instanceOf(schema: *const Schema, type_name: []const u8) ?usize {
     const t = schema.findType(type_name) orelse return null;
     const found = schema.staticOf(t, "instance") orelse return null;
@@ -273,8 +267,7 @@ var lists: [8]Choices = @splat(.{});
 var next_list: usize = 0;
 const reread_ns = 2 * std.time.ns_per_s;
 
-/// What `[Choices(path)]` lists now, by its items' `id` and `name`, or the fields named after the
-/// path. Empty till the game has it.
+/// What `[Choices(path)]` lists now, by its items' `id` and `name`. Empty till the game has it.
 pub fn choicesOf(schema: *const Schema, owner: []const u8, a: *const Schema.Annotation) []const TweakFields.Choice {
     const path = if (a.args.len > 0 and a.args[0] == .string) a.args[0].string else return &.{};
     const key = std.hash.Wyhash.hash(@intFromPtr(schema) +% std.hash.Wyhash.hash(0, owner), path);
@@ -359,8 +352,7 @@ fn withoutLabel(notes: []const Schema.Annotation) []const Schema.Annotation {
     return if (Schema.findAnnotation(notes, "wraith", "Label") != null) &.{} else notes;
 }
 
-/// `[Label]`'s, else the name for people, so `gourmet_points` and `gourmetPoints` are both
-/// "Gourmet points".
+/// `[Label]`'s, else the name for people: `gourmet_points` and `gourmetPoints` give "Gourmet points".
 pub fn labelOf(buf: []u8, name: []const u8, notes: []const Schema.Annotation) []const u8 {
     if (Schema.findAnnotation(notes, "wraith", "Label")) |a| if (a.args.len == 1 and a.args[0] == .string) return a.args[0].string;
     return ui.humanName(buf, name);

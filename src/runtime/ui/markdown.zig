@@ -1,6 +1,5 @@
-//! Just enough markdown for the notices Wraith ships. Headings, tables, links, code fences and
-//! paragraphs. Every other line draws as it is, wrapped, so plain text like a license reads fine
-//! too. Render thread.
+//! Just enough markdown for the notices Wraith ships: headings, tables, links, code fences and
+//! paragraphs. Other lines draw wrapped as they are. Render thread.
 
 const std = @import("std");
 

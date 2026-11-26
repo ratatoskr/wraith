@@ -1,5 +1,4 @@
-//! The runtime's own UI. That's the welcome, the overlay's bar and windows and the workbench, plus
-//! the settings and keys they register.
+//! The runtime's own UI: the welcome, the overlay's bar and windows, the workbench, and their settings and keys.
 
 const Shell = @This();
 
@@ -46,12 +45,10 @@ pub const overlay_key_default: Chord = .{ .key = .insert };
 pub const workbench_key_default: Chord = .{ .key = .home, .mods = .{ .ctrl = true } };
 
 pub const Options = struct {
-    /// Where its settings and keys are kept. Without one it makes its own that saves nothing, like
-    /// in tests.
+    /// Where its settings and keys are kept. Null makes one that saves nothing.
     registry: ?*Registry = null,
     themes: ?*const Themes = null,
-    /// The game's own state, like its project, tweaks and address keys. Must outlive the shell.
-    /// Without it, like in tests, there's no project and no welcome.
+    /// The game's own state. Must outlive the shell. Null means no project and no welcome.
     game: ?*core.Config(GameSettings) = null,
     /// The workbench's address list and layout are only kept with this.
     io: ?std.Io = null,
@@ -68,7 +65,6 @@ registry: *Registry,
 owns_registry: bool,
 overlay_key: *Registry.Setting = undefined,
 workbench_key: *Registry.Setting = undefined,
-/// For Settings.
 dev_plugins: DevPlugins = .{},
 /// Its settings in the registry.
 own: ShellSettings = undefined,
@@ -275,8 +271,7 @@ pub fn destroy(self: *Shell) void {
     self.allocator.destroy(self);
 }
 
-/// Waits for any window using it. Set null before the loader goes away. Script sessions come and
-/// go with it.
+/// Waits for any window using it. Set null before the loader goes away.
 pub fn setLoader(self: *Shell, loader: ?*PluginLoader) void {
     const gone = blk: {
         self.loader_lock.lock();
@@ -306,14 +301,12 @@ fn readModProjects(self: *Shell, io: std.Io) void {
     self.refreshModProjects(io, loader);
 }
 
-/// Gives tweaks the installed projects for this game again, after one's installed, updated or
-/// removed. Not the render thread.
+/// Reloads installed projects for tweaks after one's installed, updated or removed. Not the render thread.
 pub fn refreshModProjects(self: *Shell, io: std.Io, loader: *PluginLoader) void {
     const tweaks = self.tweaks orelse return;
     ModProjects.refresh(tweaks, self.allocator, io, loader.plugins_dir, loader.cache_dir, loader.here());
 }
 
-/// Whether scripts and tweaks can run.
 pub fn scriptsReady(self: *Shell) bool {
     self.loader_lock.lockShared();
     defer self.loader_lock.unlockShared();
@@ -393,14 +386,12 @@ pub fn toggleWorkbench(self: *Shell) void {
     self.workbench.toggle();
 }
 
-/// Whether a plugin gets a Settings button, on the Mods page and under its button on the bar: one
-/// of its own, or for its settings in Wraith's. `title` is what it's shown as.
+/// Whether a plugin gets a Settings button: its own, or for its settings in Wraith's.
 pub fn pluginHasSettings(self: *Shell, name: []const u8, title: []const u8) bool {
     return ui_area.hasSettings(name) or self.registry.listsAny(title);
 }
 
-/// What its Settings button does. Its own if it has one, else its heading in Wraith's Settings.
-/// Render thread, in a frame.
+/// Its own settings if it has one, else its heading in Wraith's. Render thread, in a frame.
 pub fn openPluginSettings(self: *Shell, name: []const u8, title: []const u8) void {
     if (ui_area.openSettings(name)) return;
     self.windows.settings.showGroup(title);
@@ -522,8 +513,7 @@ pub fn finishWelcome(self: *Shell, choices: Welcome.Choices) void {
     self.registry.set(self.own.welcome_seen, .{ .toggle = true }) catch |err| log.warn("Couldn't save that the welcome's been seen: {t}", .{err});
 }
 
-/// Saved, and applied to the overlay and the workbench by the setting's hook. Null follows
-/// Windows. Any thread.
+/// Saved and applied by the setting's hook. Null follows Windows. Any thread.
 pub fn setTheme(self: *Shell, choice: ?*const Themes.Theme) void {
     const name = if (choice) |t| t.name else ShellSettings.match_windows;
     self.registry.set(self.own.theme, .{ .choice = name }) catch |err| log.warn("Couldn't set the theme: {t}", .{err});
@@ -546,8 +536,7 @@ fn applyTheme(self: *Shell, theme: *const Themes.Theme) void {
     self.workbench.setTheme(theme);
 }
 
-/// Once a key's on more than one thing, they all fire, so it warns once about each new clash.
-/// Render thread.
+/// Warns once about each new key clash, since all keys on a clash fire. Render thread.
 fn watchClashes(self: *Shell) void {
     const now = self.keybinds.changes.load(.acquire);
     if (now == self.keys_seen) return;
@@ -599,8 +588,7 @@ pub fn frameSettings(self: *Shell) Settings.FrameStats {
     return self.own.frameStats();
 }
 
-/// Takes effect now. `save` writes it on a worker, so pass it once an edit's done, not every frame
-/// of a drag. Any thread.
+/// Takes effect now. `save` writes on a worker, so pass it once an edit's done. Any thread.
 pub fn setFrameSettings(self: *Shell, value: Settings.FrameStats, save: bool) void {
     self.registry.setWith(self.own.frame_window, .{ .number = value.window_seconds }, .{ .save = save }) catch {};
     self.registry.setWith(self.own.frame_hitch, .{ .number = value.hitch_factor }, .{ .save = save }) catch {};
@@ -705,8 +693,7 @@ const tests = struct {
         return x *% 5 +% 2;
     }
 
-    /// Waits up to 30 s by the clock, failing if it never happens. Loaded CI machines can be slow
-    /// to open and draw a real window.
+    /// Waits up to 30 s, failing if it never happens. Loaded CI machines can be slow.
     fn waitUntil(what: []const u8, ctx: anytype, comptime check: fn (@TypeOf(ctx)) bool) !void {
         const start = core.timing.now();
         while (core.timing.now() - start < 30 * std.time.ns_per_s) {
@@ -757,8 +744,7 @@ const tests = struct {
                         return w.memory_in_front.load(.acquire);
                     }
                 };
-                // Asks again now and then, since the desktop giving the window focus back can put
-                // the last focused tab in front again. This is only the setup
+                // Asks again now and then, since the desktop refocusing can put the last tab in front again
                 const start = core.timing.now();
                 while (!Front.memory(wb) and core.timing.now() - start < 30 * std.time.ns_per_s) {
                     wb.remote().openMemory(at, 16, null);

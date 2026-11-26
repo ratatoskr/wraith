@@ -1,5 +1,4 @@
-//! The `Ui` area, from `ui.sal`, and the `ImDrawList` objects it gives. ImGui itself is the `ImGui`
-//! area, a table that calls dcimgui's functions straight, see `wraith.zig`.
+//! The `Ui` area, from `ui.sal`, and its `ImDrawList` objects. The `ImGui` area is in `wraith.zig`.
 
 const std = @import("std");
 
@@ -101,8 +100,8 @@ comptime {
     std.debug.assert(FilePromise == FolderPromise);
 }
 
-/// A file or folder dialog on a thread of its own, since it blocks till it's closed. It only enters
-/// the plugin's owner to hand back the path, so unloading doesn't wait for someone to close it.
+/// A file or folder dialog on its own thread, since it blocks. Only enters the owner to hand back the
+/// path, so unloading doesn't wait for it.
 const Dialog = struct {
     arena: std.heap.ArenaAllocator,
     owner: *sal.Owner,

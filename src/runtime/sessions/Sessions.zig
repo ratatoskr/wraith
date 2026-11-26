@@ -1,11 +1,5 @@
-//! The workbench's script sessions, in JS or Lua on Salamander. Requests come as runtime messages,
-//! and each session is a script of its own that keeps its state between runs, with Wraith's areas
-//! as globals like `threads` and `hooks`, and every loaded plugin's services under its namespace,
-//! like `Unreal.engine()`. Tweaks run in them too, each in a session of its own. Each is for a
-//! project, and starts with its schemas and names, see `host.projects`.
-//!
-//! Each session runs on the game thread or the render thread, as its runs ask. Game thread ones are
-//! looked after in a tick, render thread ones in a task the render queue runs once a frame.
+//! The workbench's JS/Lua script sessions, which keep state between runs; tweaks run in them too.
+//! Each runs on the game thread (in a tick) or the render thread (once a frame), as its runs ask.
 
 const Sessions = @This();
 
@@ -66,7 +60,7 @@ pub const Session = struct {
     thread: Thread = .game,
     /// Null after a reset.
     live: ?*Live = null,
-    /// Runs a tweak, which gets to clean up when it stops.
+    /// Runs a tweak.
     tweak: bool = false,
     /// What's on of a group's file, each in a scope of its own. The shared part's first, unnamed.
     parts: std.ArrayList(Part) = .empty,
@@ -161,7 +155,7 @@ pub fn create(gpa: std.mem.Allocator, config_dir: []const u8, game_config_dir: [
     return self;
 }
 
-/// Stops every session, letting tweaks clean up first.
+/// Lets tweaks clean up first.
 pub fn destroy(self: *Sessions) void {
     if (self.subscription) |s| s.unsubscribe();
     // Waits for a tick that's in
@@ -196,7 +190,7 @@ fn pumpNow(self: *Sessions) void {
     self.report();
 }
 
-/// Once a tick, on the game thread.
+/// On the game thread.
 fn tickNow(self: *Sessions) void {
     // It doesn't hold up the game either, so with the render thread in it's next tick
     if (!self.work.tryLock()) return;
@@ -317,8 +311,7 @@ pub fn find(self: *Sessions, id: u32) ?*Session {
     return null;
 }
 
-/// Under both locks. A run goes where it asks. Anything else goes where its session is, or will be
-/// once a run that's ahead of it starts it.
+/// Under both locks. A run goes where it asks, anything else where its session is or will be.
 fn threadFor(self: *Sessions, r: Request, ahead: []const Request) Thread {
     if (r.op == .run) return r.thread;
     var i = ahead.len;
@@ -384,9 +377,7 @@ fn runAwaiting(self: *Sessions, live: *Live, id: u32, code: []const u8, buf: []u
     }
 }
 
-/// A `.rwt` tweak, in a session of its own. A group's file shares one, where `part` is the path
-/// of the `@tweak` or `@group` to turn on. Its file's shared part comes up with the first, and
-/// a nested one's group has to be on already. Says where their data went, or what went wrong.
+/// A `.rwt` tweak in its own session; a group's file shares one, with `part` the path to turn on.
 fn runTweak(self: *Sessions, r: Request) void {
     const id = r.session;
     const part = r.part;
@@ -445,8 +436,7 @@ fn openTweak(self: *Sessions, id: u32, name: []const u8, language: Language, pro
     return session;
 }
 
-/// A group's parts each get a scope of their own, kept as one of the session's if it comes up.
-/// One that throws is stopped there, so nothing of it stays. A lone tweak runs as the script's own.
+/// Each group part gets its own scope; one that throws is stopped so nothing of it stays.
 fn runPart(self: *Sessions, session: *Session, a: std.mem.Allocator, source: []const u8, file: tweak.File, part: tweak.Part, values: []const tweak.Value, part_name: []const u8) engine.Evaluated {
     const live = session.live.?;
     live.script.enter();
@@ -538,8 +528,7 @@ fn sendState(self: *Sessions, a: std.mem.Allocator, id: u32, part: []const u8, j
     publish(a, protocol.topics.tweak, protocol.TweakState{ .session = id, .part = part, .fields = state.fields, .names = state.names });
 }
 
-/// One of a group's tweaks or nested groups, with everything under it. Each runs its `off`, then
-/// what it made goes, innermost first. The rest stay on.
+/// One of a group's tweaks or nested groups, with everything under it, innermost first.
 fn stopPart(self: *Sessions, session: *Session, name: []const u8) void {
     const i = session.findPart(name) orelse return;
     const is_group = session.parts.items[i].group;
@@ -611,8 +600,7 @@ fn open(self: *Sessions, id: u32, name: []const u8, language: Language, thread: 
     return session;
 }
 
-/// Its script, owning what it makes like a plugin does, with Wraith's areas and its project's
-/// schemas in scope.
+/// Its script, owning what it makes like a plugin does.
 fn makeLive(self: *Sessions, session: *Session, project: []const u8) !*Live {
     const gpa = self.gpa;
     const live = try gpa.create(Live);
@@ -656,9 +644,7 @@ fn makeLive(self: *Sessions, session: *Session, project: []const u8) !*Live {
     return live;
 }
 
-/// Its project's schemas as its own, like a plugin's, with those of every plugin that offers
-/// services. Ones that don't check out are left out, since the project says why. Under the
-/// loader's lock.
+/// Its project's schemas plus those of every plugin offering services. Under the loader's lock.
 fn useProject(live: *Live, gpa: std.mem.Allocator, project: []const u8, loader: ?*PluginLoader) !void {
     live.loaded.project = try gpa.dupe(u8, project);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -695,8 +681,7 @@ fn useProject(live: *Live, gpa: std.mem.Allocator, project: []const u8, loader: 
     live.project_text = try gpa.dupe(u8, host.projects.bundle(project, a));
 }
 
-/// What each loaded plugin offers, like `Unreal.objects()`, the way plugins that depend on it get
-/// them. Under the loader's lock. What's called once its plugin's gone just fails with `Gone`.
+/// Each loaded plugin's services. Under the loader's lock; calls after a plugin's gone fail with `Gone`.
 fn servicesOf(loader: *PluginLoader, gpa: std.mem.Allocator, out: *std.ArrayList(scripts.Exposed.Service)) !void {
     for (loader.known.items.items) |k| {
         const loaded = k.loaded orelse continue;

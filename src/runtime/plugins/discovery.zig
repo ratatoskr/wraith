@@ -161,6 +161,7 @@ pub fn scan(loader: *PluginLoader) !void {
             k.last_error = null;
         }
     }
+    markSuperseded(loader);
 }
 
 /// Its wraith.json says it's a project, which the Workbench opens rather than the loader.
@@ -201,6 +202,8 @@ pub const Support = enum {
     revoked,
     /// It doesn't say which `apiVersion` it's for, or it's for one this Wraith doesn't load any more.
     outdated_api,
+    /// A game engine plugin the game's own plugin stands in for here, see `supersedes`.
+    superseded,
 
     pub fn reason(self: Support) ?anyerror {
         return switch (self) {
@@ -210,6 +213,7 @@ pub const Support = enum {
             .newer_wraith => error.NeedsNewerWraith,
             .revoked => error.Revoked,
             .outdated_api => error.OutdatedApi,
+            .superseded => error.Superseded,
         };
     }
 };
@@ -234,6 +238,10 @@ pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
     loader.known.lock.lock();
     defer loader.known.lock.unlock();
     try known.setDepends(loader.allocator, manifest.value.depends);
+    try known.setSupersedes(loader.allocator, manifest.value.supersedesHere());
+    known.for_game = manifest.value.game != null;
+    known.for_engine = manifest.value.gameEngine != null;
+    known.superseded_by = .{};
     known.about = .of(manifest);
     known.auto_load = manifest.value.autoLoad;
     known.clr_mode = manifest.value.clrMode;
@@ -251,7 +259,47 @@ pub fn readManifest(loader: *PluginLoader, known: *Known) !Support {
         .newer => return .newer_wraith,
     }
     if (isRevoked(loader, source_dir)) return .revoked;
+    if (supersederLocked(loader, known)) |by| {
+        known.superseded_by.set(by.name);
+        return .superseded;
+    }
     return .yes;
+}
+
+/// The game plugin standing in for engine plugin `known`, if it's on or about to be. Needs the list's lock.
+pub fn supersederLocked(loader: *PluginLoader, known: *const Known) ?*Known {
+    if (!known.for_engine) return null;
+    for (loader.known.items.items) |k| {
+        if (k == known or !k.for_game or !lists(k.supersedes, known.name)) continue;
+        // Built on it, so it can't stand in for it
+        if (k.dependsOn(known.name)) continue;
+        const on = switch (k.state) {
+            .loaded, .loading, .waiting => true,
+            // Its manifest says it's for this game, or it'd be unsupported
+            .unloaded => loader.starting and k.auto_load and !isListed(loader.skipping, k.name),
+            .unloading, .failed, .unsupported => false,
+        };
+        if (on) return k;
+    }
+    return null;
+}
+
+fn lists(names: []const []u8, name: []const u8) bool {
+    for (names) |n| if (std.ascii.eqlIgnoreCase(n, name)) return true;
+    return false;
+}
+
+/// After every manifest's read, since a game plugin can come after its engine plugin. Needs `op_lock`.
+fn markSuperseded(loader: *PluginLoader) void {
+    loader.known.lock.lock();
+    defer loader.known.lock.unlock();
+    for (loader.known.items.items) |k| {
+        if (k.loaded != null or k.state != .unloaded) continue;
+        const by = supersederLocked(loader, k) orelse continue;
+        k.state = .unsupported;
+        k.last_error = error.Superseded;
+        k.superseded_by.set(by.name);
+    }
 }
 
 /// What the cached revoked list has to be signed with. Tests swap it.
@@ -263,8 +311,7 @@ pub fn cachedRevoked(arena: std.mem.Allocator, io: std.Io, cache_dir: []const u8
     return registry.cachedRevoked(arena, io, .{ .cache_dir = cache, .key = revoked_key }) catch &.{};
 }
 
-/// Whether the copy in `mods_dir/name` is one the hub pulled. Only ones installed from the hub
-/// have a hash to check.
+/// Whether the copy in `mods_dir/name` is one the hub pulled. Only hub installs have a hash.
 pub fn installedRevoked(arena: std.mem.Allocator, io: std.Io, revoked: []const []const u8, mods_dir: []const u8, name: []const u8) bool {
     if (revoked.len == 0) return false;
     const have = (registry.installed(arena, io, mods_dir, name) catch return false) orelse return false;

@@ -1,5 +1,5 @@
-// The overlay: drawing with Dear ImGui in a draw callback, toasts, the cursor and the game's input,
-// and the overlay's menu. ImGui itself is the `imgui` area, from imgui.sal.
+// The overlay: ImGui drawing helpers, toasts, the cursor and game input, and Wraith's own UI.
+// ImGui itself is the `imgui` area.
 
 namespace Wraith;
 
@@ -12,47 +12,42 @@ struct Toast {
     // Empty shows the plugin's name
     string title;
     string text;
-    // Not counting while it's hovered. 0 keeps it up till it's clicked or dismissed.
+    // Paused while hovered. 0 stays till clicked or dismissed.
     f32 seconds;
 }
 
 error DialogError { Failed = 1 }
 
 namespace WorkbenchPanel {
-    // Draws a Workbench panel, on the Workbench's own thread inside its ImGui frame. Not the render
-    // thread or the game thread, so only touch what's safe from any thread. Read what your game-thread
-    // code left for you and queue changes for it, rather than calling into the game.
+    // On the Workbench's own thread, not the render or game thread. Read what game-thread code left
+    // and queue changes for it, rather than calling into the game.
     fn void Draw();
 
     struct Options {
         // Its tab's label
         string title;
-        // In the game engine's group with Classes, like Unity's, rather than with the other plugins'
-        // panels
+        // In the engine's group with Classes rather than with plugin panels
         bool engine;
     }
 }
 
 // A panel of the plugin's in the Workbench.
 trait WorkbenchPanel {
-    // Whether its tab's open
     bool isOpen();
     // Opens it and brings its tab to the front
     void focus();
-    // Takes it out of the Workbench. Waits for a draw under way, so a native plugin can free what it
-    // draws with after. It doesn't wait from inside a draw, or from a script, which never needs to.
-    // Fine to call twice.
+    // Waits for a draw under way, except from inside a draw or a script. Fine to call twice.
     void remove();
 }
 
 namespace Window {
-    // Draws what's in a window, on the render thread between its Begin and End.
+    // Draws a window's contents, on the render thread between its Begin and End.
     fn void Draw();
 
     struct Options {
-        // Its title, which also tells it apart from the plugin's other windows
+        // Also tells it apart from the plugin's other windows
         string title;
-        // How big it starts the first time, unscaled. Zero lets ImGui pick
+        // Starting size, unscaled. Zero lets ImGui pick
         ImVec2 size;
         ImVec2 min_size;
         // Zero for no limit that way
@@ -62,8 +57,7 @@ namespace Window {
         bool no_close;
         // Esc doesn't close it
         bool keep_on_escape;
-        // An entry under the plugin's button on the overlay's bar that opens and closes it. Empty for
-        // none
+        // An entry under the plugin's button on the overlay's bar that toggles it. Empty for none
         string menu;
         // The plugin's Settings button on the Mods page opens it
         bool settings;
@@ -76,18 +70,17 @@ trait Window {
     void setOpen(bool open);
     // Opens it and brings it to the front
     void focus();
-    // A dot in its title, for changes that aren't saved yet
+    // A dot in its title, for unsaved changes
     void setUnsaved(bool unsaved);
-    // Never shows again. Fine to call twice, or from inside its draw.
+    // Fine to call twice, or from inside its draw.
     void remove();
 }
 
-// An entry under the plugin's own button on the overlay's bar, which opens and closes something of
-// the plugin's.
+// An entry under the plugin's own button on the overlay's bar.
 trait MenuItem {
     bool isOpen();
     void setOpen(bool open);
-    // Takes it out of the menu. Fine to call twice.
+    // Fine to call twice.
     void remove();
 }
 
@@ -95,29 +88,24 @@ namespace Gizmo {
     enum Tool : u8 { move, rotate, scale }
 }
 
-// Handles over the game, drawn by Wraith on the render thread with the camera the game's plugin
-// sets. Only one shows at a time, the one shown last, so posing's and yours never both do. Every
-// call's fine from any thread, like your game tick. Draggable while the overlay has the mouse.
+// Handles over the game, drawn with the game plugin's camera. Only the last shown one shows. Any
+// thread. Draggable while the overlay has the mouse.
 trait Gizmo {
-    // Shows it, in front of any other, like when something's picked for it. It needs a `place`.
+    // Shows it in front of any other. Needs a `place`.
     void show();
-    // Till the next `show`, like when what it's for isn't picked or its panel's closed. Whichever
-    // was shown before it shows again.
+    // Till the next `show`. Whichever was shown before shows again.
     void hide();
-    // Where it is in the world, each tick so it keeps up. Row-vector, like `Frame.View`. While it's
-    // dragged it stays where it's dragged to.
+    // Its world transform, each tick, row-vector. Ignored while it's dragged.
     void place(Mat4 world);
     void setTool(Tool tool);
     // Along the world's axes rather than its own
     void setWorldAxes(bool on);
-    // Where it's been dragged to since you last asked, or null. Move yours there, and keep placing
-    // it as usual. The end of a drag comes through too.
+    // Where it's been dragged to since last asked, or null, including a drag's end. Move yours there.
     ?Mat4 moved();
-    // Being dragged right now.
     bool dragging();
     // The mouse was on it last frame, so a click there is for it.
     bool hovered();
-    // Never shows again. Fine to call twice.
+    // Fine to call twice.
     void remove();
 }
 
@@ -127,14 +115,12 @@ namespace Ui {
     // What the overlay can take from the game.
     enum InputDevice : u8 { keyboard, mouse, gamepad }
 
-    // How a table's sorted.
     struct SortSpec {
         // In the order its columns were set up
         i32 column;
         bool descending;
     }
 
-    // A file to open.
     struct FileDialog {
         bool save;
         string title;
@@ -144,7 +130,6 @@ namespace Ui {
         string extension;
     }
 
-    // A folder to open.
     struct FolderDialog {
         string title;
         string folder;
@@ -153,45 +138,41 @@ namespace Ui {
     // One row of a clipped list.
     fn void ClipRow(u32 index);
 
-    // What the Mods page's Settings button calls, on the render thread inside a frame. Open your
-    // settings window from it.
+    // The Mods page's Settings button, on the render thread inside a frame.
     fn void OpenSettings();
 }
 
-// Plugins built against an older order still work, since tables are matched up by name
+// Plugins built against an older order still work, since tables are matched by name
 trait Ui {
     // The overlay
 
-    // Whether there's an overlay to draw in, which games whose graphics it can't hook don't have
+    // False in games whose graphics it can't hook
     bool available();
     // The game window's size in pixels. Zero outside a draw callback.
     ImVec2 displaySize();
 
     // Drawing, only in a draw callback
 
-    // Where the current window draws, or everything in front of or behind the windows. Null
-    // outside a draw callback.
+    // The current window's, foreground's or background's. Null outside a draw callback.
     ?ImDrawList windowDrawList();
     ?ImDrawList foregroundDrawList();
     ?ImDrawList backgroundDrawList();
-    // A text box of any length, which gives what's in it now. While it's being typed in it keeps the
-    // edit, by `label`, so `text` only shows once it's left.
+    // Any length. Keeps the edit by `label` while typing, so `text` only shows once it's left.
     string inputText(cstring label, string text, ImGuiInputTextFlags flags);
     string inputMultiline(cstring label, string text, ImVec2 size, ImGuiInputTextFlags flags);
-    // Text with a button to copy it
+    // Text with a copy button
     void copyableText(cstring id, string text);
-    // Calls `row` for each of `count` rows of the same height that's on screen, for long lists
+    // Calls `row` for each on-screen row of `count` equal-height rows
     void clip(u32 count, ClipRow row);
-    // How the current table's sorted, once the user's sorted it. Null otherwise.
+    // How the current table's sorted, or null if the user hasn't sorted it.
     ?SortSpec tableSortedBy();
-    // A struct from the plugin's schemas as controls, read and written live. [Label], [Range],
-    // [ReadOnly] and [Hidden] on its fields change how they show. 0 for `address` uses its
-    // [Instance]. False if the schemas don't have it, or the game hasn't made it yet
+    // A schema struct as live controls, shaped by [Label], [Range], [ReadOnly] and [Hidden]. 0
+    // `address` uses its [Instance]. False if it's unknown or not made yet
     bool editStruct(string type, usize address);
 
     // Toasts
 
-    // Gives its id, or 0 without an overlay
+    // Its id, or 0 without an overlay
     u32 toast(Toast toast);
     // False once it's gone
     bool updateToast(u32 id, Toast toast);
@@ -199,57 +180,49 @@ trait Ui {
 
     // The cursor and the game's input
 
-    // Shows the mouse cursor while any plugin asks
+    // While any plugin asks
     void showCursor(bool show);
     void setCursorHint(CursorHint hint);
-    // The game leaves its cursor free while it shows, like FFXIV, so Wraith's windows leave the
-    // game the mouse and keyboard, and only take clicks over them and keys typed into them. For
-    // game plugins. The player's setting can say otherwise
+    // For games that leave the cursor free, like FFXIV: Wraith only takes input over its windows.
+    // For game plugins; the player's setting can override
     void setMouseFree(bool free);
-    // Keeps the game from seeing it while any plugin asks
+    // Hides it from the game while any plugin asks
     void takeInput(InputDevice device, bool take);
     bool inputTaken(InputDevice device);
-    // Keeps the cursor still and hidden in the middle of the game window while any plugin asks,
-    // from the next frame, for turning something with the mouse. Lets go where it was.
+    // Locks the cursor hidden in the window centre from next frame while any plugin asks, for mouse-look.
     void holdMouse(bool hold);
-    // How far the mouse was pushed since last frame while it's held, in pixels. Right and down are
-    // positive. In a draw callback.
+    // Pixels moved since last frame while held, right and down positive. In a draw callback.
     Point mouseMotion();
 
-    // Handles over the game for moving, turning or scaling something of yours, drawn by Wraith with
-    // the game's camera. Gone with the plugin. Any thread.
+    // Handles for moving, turning or scaling something. Gone with the plugin. Any thread.
     Gizmo addGizmo();
 
     // Wraith's own UI
 
-    // A window on the overlay, drawn by `draw` while it's open. Close buttons, Esc, its menu entry
-    // and the Settings button all work without any code of yours. Gone with the plugin. Any thread.
+    // Drawn by `draw` while open; close, Esc, menu entry and Settings button all just work. Gone with
+    // the plugin. Any thread.
     Window addWindow(Window.Options options, keep Window.Draw draw);
-    // Under the plugin's own button on the overlay's bar, named after it
+    // Under the plugin's own button on the overlay's bar
     MenuItem addMenuItem(string label);
-    // What the plugin's Settings button on the Mods page does, like opening a window of its own.
-    // Without one, it shows the plugin's settings in Wraith's Settings. A second call replaces the
-    // first, and it's gone with the plugin
+    // What the plugin's Settings button on the Mods page does, else Wraith's Settings. Replaces any
+    // earlier one. Gone with the plugin
     void onOpenSettings(keep OpenSettings open);
 
     // The Workbench
 
-    // A panel in the Workbench, drawn by `draw` on the Workbench's thread whenever it's showing.
-    // Gone with the plugin. Any thread.
+    // Drawn by `draw` on the Workbench's thread while showing. Gone with the plugin. Any thread.
     WorkbenchPanel addWorkbenchPanel(WorkbenchPanel.Options options, keep WorkbenchPanel.Draw draw);
-    // Opens the Workbench's Classes on a C# class by full name, like `UnityEngine.Transform`. Any
-    // thread.
+    // Opens the Workbench's Classes on a C# class by full name. Any thread.
     void showClass(string class_name);
 
-    // Windows' own dialogs, over the game. The full path, or null if it's cancelled. The game keeps
-    // running while it's open. One at a time per plugin, another fails while one's up.
+    // Windows' own dialogs. The full path, or null if cancelled. One at a time per plugin.
     async ?string!DialogError pickFile(FileDialog options);
     async ?string!DialogError pickFolder(FolderDialog options);
 
-    // Native code that binds Dear ImGui itself
+    // For native code that binds Dear ImGui itself
 
     // A dcimgui function's address by name, or 0
     usize imguiProc(string name);
-    // The Dear ImGui it hosts, like 19250
+    // The hosted Dear ImGui version, like 19250
     u32 imguiVersion();
 }

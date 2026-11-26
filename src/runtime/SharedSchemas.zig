@@ -1,5 +1,4 @@
-//! `.sal` text plugins and scripts load, so the Addresses panel can use their types too. Only text
-//! is kept, each view parses its own copy. Any thread.
+//! `.sal` text plugins and scripts load, for the Addresses panel. Only text is kept. Any thread.
 
 const SharedSchemas = @This();
 

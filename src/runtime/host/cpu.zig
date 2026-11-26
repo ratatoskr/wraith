@@ -1,5 +1,4 @@
-//! `cpu.sal`'s `Cpu`, which is laid out like tuft's `CpuContext` on each kind of code, so hooks and
-//! watches hand theirs over as is.
+//! `cpu.sal`'s `Cpu`, laid out like tuft's `CpuContext`, so hooks and watches hand theirs over as is.
 
 const std = @import("std");
 

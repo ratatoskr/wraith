@@ -1,10 +1,5 @@
-//! The built-in `js` and `lua` kinds, on Salamander's hosts. A script plugin's folder has `main.js` or
-//! `main.lua`, and imports what it uses from the `wraith` module, like `Wraith.settings()`.
-//!
-//! Each runs its main file as it starts, then gets pumped once a frame on the render thread, which
-//! never waits for it, and neither does the game thread. A tick that finds the script busy skips
-//! it. Other threads calling in wait their turn. After an await it carries on on the thread the
-//! promise settled on, see `Lanes`.
+//! The built-in `js` and `lua` kinds, on Salamander's hosts. Pumped once a frame on the render thread,
+//! which never waits: a busy tick is skipped. After an await it resumes per `Lanes`.
 
 const std = @import("std");
 
@@ -85,8 +80,7 @@ const Running = struct {
         return r;
     }
 
-    /// Every namespace at the top in the `wraith` module, Wraith's areas like `Wraith.ui()`, and
-    /// what each plugin it depends on offers, like `Freecam.camera()`.
+    /// Puts Wraith's areas and what each dependency offers in the `wraith` module.
     fn expose(r: *Running, guest: host.wraith.Guest) !void {
         var services: std.ArrayList(Exposed.Service) = .empty;
         defer services.deinit(allocator);
@@ -107,8 +101,7 @@ const Running = struct {
         r.schedule();
     }
 
-    /// Salamander's native modules, like `salamander`, come first. Then the plugin's own files, then
-    /// libraries shared through `Libraries`, like the runtime's `ce`.
+    /// Salamander's native modules first, then the plugin's own files, then `Libraries`.
     fn resolve(ctx: ?*anyopaque, buf: []u8, from: []const u8, name: []const u8) ?[]const u8 {
         const r: *Running = @ptrCast(@alignCast(ctx.?));
         if (r.ownFile(buf, from, name)) |own| {
@@ -172,10 +165,8 @@ pub const Exposed = struct {
     arena: ?std.heap.ArenaAllocator = null,
     language: hosts.Language = .js,
 
-    /// A script whose memory and declared names go through Wraith. `self` has to stay put. After a
-    /// native promise it carries on through `lanes`, which outlive it, on the thread the promise says.
-    /// It reads `schema`, the bundle `expose` gets, with each plugin's files in its namespace, and
-    /// names it's given as text are looked for in namespace `home` first, like `Kai`.
+    /// A script whose memory and names go through Wraith. `self` has to stay put, `lanes` outlives it.
+    /// Text names are looked for in namespace `home` first.
     pub fn create(self: *Exposed, language: hosts.Language, gpa: std.mem.Allocator, resolver: hosts.Resolver, report: hosts.Report, lanes: ?*Lanes, schema: []const u8, home: []const u8) !hosts.Script {
         self.arena = .init(allocator);
         self.language = language;
@@ -197,10 +188,8 @@ pub const Exposed = struct {
         self.arena = null;
     }
 
-    /// Each namespace at the top of its schemas in the `wraith` module, like `Wraith` and `Kai`,
-    /// with Wraith's areas as `Wraith.ui()` and so on, and each of `services` like
-    /// `Freecam.camera()`. Hooks get the typed `hook` and `hookAt`. With `bare`, like in Workbench
-    /// scripts and tweaks, the namespaces are globals and so are the areas by their own names.
+    /// Puts its namespaces, Wraith's areas and `services` in the `wraith` module. With `bare`, like in
+    /// Workbench scripts, they're globals instead.
     pub fn expose(self: *Exposed, script: hosts.Script, wraith: @FieldType(host.wraith.Guest, "wraith"), schema: []const u8, bare: bool, services: []const Service) !void {
         const types = try script.schema(if (schema.len > 0) schema else api.wraith_sal);
         self.types = types;
@@ -265,10 +254,8 @@ pub fn policy(_: ?*anyopaque) engine.Gate.How {
     return if (host.frame.onRenderThread() or host.frame.onGameThread()) .try_ else .block;
 }
 
-/// Where a script carries on once a native promise it awaited settles: on the thread that settled
-/// it, which Wraith makes the one that awaited, or a hop's. One queue for each thread, pumped there
-/// only when something's in it. Kept for good, like the host's queues, since a promise can still
-/// settle after its script's gone.
+/// Where a script resumes after an awaited native promise: one queue per thread, pumped there.
+/// Kept for good, since a promise can settle after its script's gone.
 pub const Lanes = struct {
     lanes: [3]Lane,
 

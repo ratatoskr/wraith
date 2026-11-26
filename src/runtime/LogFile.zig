@@ -1,5 +1,4 @@
-//! The runtime's log file, one per game process. Callers only copy the line into a queue, so a render thread
-//! never waits on the disk. A thread of ours writes it out within a few ms, and `flush` empties it on a crash.
+//! The runtime's log file. Callers only queue lines, so nobody waits on the disk; `flush` on a crash.
 
 const LogFile = @This();
 
