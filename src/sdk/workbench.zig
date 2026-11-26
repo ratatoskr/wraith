@@ -2,7 +2,7 @@
 //! draws on the Workbench's own thread: not the render thread or the game thread.
 //!
 //! A panel mustn't call into the game while it draws. Have your game-thread code, like an
-//! `sdk.frame.onTick`, work out what the panel shows and `publish` it to a `Latest`, which the panel
+//! `sdk.threads.onTick`, work out what the panel shows and `publish` it to a `Latest`, which the panel
 //! `read`s. Changes go the other way through a `Queue`, which the game-thread code `drain`s. Neither
 //! ever waits on the game thread, so a slow panel can't hold up the game.
 //!

@@ -460,7 +460,7 @@ test "typings for Wraith's whole schema and a plugin's" {
     };
     const want = [_]struct { Language, []const u8, []const u8 }{
         .{ .js, "wraith.d.ts", "declare module \"wraith\" {\nnamespace Wraith {" },
-        .{ .js, "wraith.d.ts", "    frame(): Wraith.Frame;" },
+        .{ .js, "wraith.d.ts", "    threads(): Wraith.Threads;" },
         .{ .js, "wraith.d.ts", "Given<Wraith.Tweaks.Definition>" },
         .{ .js, "salamander.d.ts", "declare const salamander: typeof import(\"salamander\");" },
         .{ .js, "wraith.d.ts", "\nnamespace Kai {" },

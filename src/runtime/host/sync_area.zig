@@ -139,7 +139,7 @@ pub const SyncImpl = struct {
 
     pub fn lock(loaded: *Loaded, l: Lock) LockPromise {
         const pair = LockPromise.make() catch return .{};
-        const back: Resolver = .of(pair.resolver);
+        const back: Resolver = .of(pair.resolver, loaded);
         var after: After = .{};
         defer after.run();
         const lease = cleanup.lease(&loaded.owner) orelse {

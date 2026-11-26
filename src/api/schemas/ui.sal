@@ -1,4 +1,4 @@
-// The overlay: drawing with Dear ImGui in a frame callback, toasts, the cursor and the game's input,
+// The overlay: drawing with Dear ImGui in a draw callback, toasts, the cursor and the game's input,
 // and the overlay's menu. ImGui itself is the `imgui` area, from imgui.sal.
 
 namespace Wraith;
@@ -164,13 +164,13 @@ trait Ui {
 
     // Whether there's an overlay to draw in, which games whose graphics it can't hook don't have
     bool available();
-    // The game window's size in pixels. Zero outside a frame callback.
+    // The game window's size in pixels. Zero outside a draw callback.
     ImVec2 displaySize();
 
-    // Drawing, only in a frame callback
+    // Drawing, only in a draw callback
 
     // Where the current window draws, or everything in front of or behind the windows. Null
-    // outside a frame callback.
+    // outside a draw callback.
     ?ImDrawList windowDrawList();
     ?ImDrawList foregroundDrawList();
     ?ImDrawList backgroundDrawList();
@@ -213,7 +213,7 @@ trait Ui {
     // from the next frame, for turning something with the mouse. Lets go where it was.
     void holdMouse(bool hold);
     // How far the mouse was pushed since last frame while it's held, in pixels. Right and down are
-    // positive. In a frame callback.
+    // positive. In a draw callback.
     Point mouseMotion();
 
     // Handles over the game for moving, turning or scaling something of yours, drawn by Wraith with

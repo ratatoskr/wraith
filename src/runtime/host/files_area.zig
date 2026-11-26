@@ -142,7 +142,7 @@ pub const ImagesImpl = struct {
             pair.resolver.drop();
             return pair.promise;
         };
-        const resolver: LoadResolver = .of(pair.resolver);
+        const resolver: LoadResolver = .of(pair.resolver, loaded);
         const full = if (std.fs.path.isAbsolute(path))
             allocator.dupe(u8, path)
         else

@@ -31,7 +31,7 @@ pub const Plugin = struct {
 
     pub fn start(self: *Plugin, ctx: *sdk.Context) !void {
         try ctx.addWindow(&self.panel);
-        _ = try ctx.onFrame(self, draw);
+        _ = try ctx.onDraw(self, draw);
         try ctx.spawn(drawFromTask, .{ctx.io});
         const area = sdk.wraith.root().?.ui();
         area.setCursorHint(.visible);
@@ -47,7 +47,7 @@ pub const Plugin = struct {
     /// Carries on each frame on the render thread, so it can draw.
     fn drawFromTask(io: std.Io) !void {
         while (true) {
-            try sdk.frame.next(io);
+            try sdk.threads.nextDraw(io);
             if (sdk.ui.window("task", .{})) |w| {
                 defer w.end();
                 sdk.ui.text("from a task", .{});

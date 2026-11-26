@@ -77,7 +77,7 @@ pub const Impl = struct {
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
-        job.* = .{ .owner = t.owner, .resolver = .of(pair.resolver) };
+        job.* = .{ .owner = t.owner, .resolver = .of(pair.resolver, loaded) };
         const thread = std.Thread.spawn(.{}, RunningWait.run, .{job}) catch {
             std.heap.page_allocator.destroy(job);
             pair.resolver.fail(error.Failed);

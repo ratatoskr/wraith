@@ -427,15 +427,15 @@ Lua 5.1's `unpack`, and every constant from CE's `defines.lua`, like `vtDword` a
 
 | Name | CE signature | Used | Status | Wraith, or why not |
 |---|---|---|---|---|
-| `sleep` | `sleep(milliseconds)` | 25 (12) | partial | `frame:next():await()` till `frame:now()` passes it. Only in a thread, timer or main script, since it can't stop the game |
+| `sleep` | `sleep(milliseconds)` | 25 (12) | partial | `threads:nextDraw():await()` till `threads:now()` passes it. Only in a thread, timer or main script, since it can't stop the game |
 | `getThreadlist` | `getThreadlist(List)` | 0 (0) | stub | Everything runs on the game's frame, there's one thread |
-| `getTickCount` | `getTickCount()` | 0 (0) | partial | `frame:now()`, so it counts from the script's start, not Windows' |
+| `getTickCount` | `getTickCount()` | 0 (0) | partial | `threads:now()`, so it counts from the script's start, not Windows' |
 | `processMessages` | `processMessages()` | 0 (0) | implemented | Does nothing |
 | `inMainThread` | `inMainThread()` | 0 (0) | implemented | Always true, everything runs on the game's frame |
 | `synchronize` | `synchronize(function(...)` | 40 (2) | implemented | Calls it right away, it's already on the main thread |
-| `queue` | `queue(function(...)` | 0 (0) | implemented | `frame:onFrame` |
+| `queue` | `queue(function(...)` | 0 (0) | implemented | `threads:onDraw` |
 | `checkSynchronize` | `checkSynchronize(timeout OPTIONAL)` | 0 (0) | implemented | Does nothing |
-| `createTimer` | `createTimer(delay, function(...)` | 102 (29) | implemented | Checked each frame with `frame:onFrame` and `frame:now()`, re-armed when Interval, Enabled or OnTimer change. Each tick runs in a task, so it can sleep |
+| `createTimer` | `createTimer(delay, function(...)` | 102 (29) | implemented | Checked each frame with `threads:onDraw` and `threads:now()`, re-armed when Interval, Enabled or OnTimer change. Each tick runs in a task, so it can sleep |
 | `createThread` | `createThread(function(Thread,...)` | 1 (1) | partial | `task.spawn`. Runs on the game's frame, so it has to sleep to let the game go on |
 | `createThreadSuspended` | `createThreadSuspended(function(Thread,...)` | 0 (0) | partial | Same as createThread, started by resume() |
 | `createThreadNewState` | `createThreadNewState(scripttext)` | 0 (0) | stub | Everything runs on the game's frame, there's one thread |
@@ -1072,7 +1072,7 @@ so `.Count` counts every class that has one.
 | `Result` | `Result` | 0 (0) | implemented |  |
 | `freeOnTerminate` | `freeOnTerminate(state)` | 0 (0) | implemented |  |
 | `synchronize` | `synchronize(function(thread, ...)` | 0 (0) | implemented |  |
-| `waitfor` | `waitfor()` | 0 (0) | partial | `frame:next():await()`, only in a task |
+| `waitfor` | `waitfor()` | 0 (0) | partial | `threads:nextDraw():await()`, only in a task |
 | `suspend` | `suspend()` | 0 (0) | stub | Raises |
 | `resume` | `resume()` | 0 (0) | implemented |  |
 | `terminate` | `terminate()` | 0 (0) | implemented |  |

@@ -36,15 +36,16 @@ pub const Clipboard = W.Clipboard;
 pub const Settings = W.Settings;
 pub const Setting = W.Setting;
 pub const Config = W.Config;
-pub const Frame = W.Frame;
+pub const Threads = W.Threads;
+pub const Display = W.Display;
 pub const Game = game_area.Game;
 pub const FreeCamera = photo_area.FreeCamera;
 pub const Posing = photo_area.Posing;
 pub const Lists = W.Lists;
 pub const ItemList = W.ItemList;
 pub const SchemaArea = host.schemas.Area;
-pub const FrameSubscription = W.Frame.Subscription;
-pub const TickDriver = W.Frame.TickDriver;
+pub const FrameSubscription = W.Threads.Subscription;
+pub const TickDriver = W.Threads.TickDriver;
 pub const Input = W.Input;
 pub const Keybind = W.Keybind;
 pub const Library = W.Libraries;
@@ -98,7 +99,8 @@ pub const Tables = struct {
     setting: *const sal.Table(Setting),
     config: *const sal.Table(Config),
     diagnostics: *const sal.Table(Diagnostics),
-    frame: *const sal.Table(Frame),
+    threads: *const sal.Table(Threads),
+    display: *const sal.Table(Display),
     game: *const sal.Table(Game),
     camera: *const sal.Table(FreeCamera),
     posing: *const sal.Table(Posing),
@@ -107,7 +109,7 @@ pub const Tables = struct {
     schema: *const sal.Table(SchemaArea),
     frame_subscription: *const sal.Table(FrameSubscription),
     tick_driver: *const sal.Table(TickDriver),
-    done: *const sal.Table(W.Frame.WindDown),
+    done: *const sal.Table(W.Threads.WindDown),
     input: *const sal.Table(Input),
     keybind: *const sal.Table(Keybind),
     libraries: *const sal.Table(Library),
@@ -143,9 +145,11 @@ pub const Tables = struct {
     hook: *const sal.Table(Hook),
     watches: *const sal.Table(Watches),
     watch: *const sal.Table(Watch),
+    /// Where its code carries on on the render thread, see `frame.PluginQueue`.
+    render_queue: *const sal.Table(sal.core.Queue),
 };
 
-/// Every ImGui function calls dcimgui's, only while the plugin's drawing in a frame callback.
+/// Every ImGui function calls dcimgui's, only while the plugin's drawing in a draw callback.
 const imgui_table = sal.forwarding(ImGui, struct {
     pub fn allowed() bool {
         return host.ui.inFrame();
@@ -177,7 +181,8 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .setting = h.adopt(Setting, sal.implement(Setting, SettingImpl), o) catch return null,
         .config = h.adopt(Config, sal.implement(Config, ConfigImpl), o) catch return null,
         .diagnostics = h.adopt(Diagnostics, sal.implement(Diagnostics, DiagnosticsImpl), o) catch return null,
-        .frame = h.adopt(Frame, sal.implement(Frame, FrameImpl), o) catch return null,
+        .threads = h.adopt(Threads, sal.implement(Threads, ThreadsImpl), o) catch return null,
+        .display = h.adopt(Display, sal.implement(Display, DisplayImpl), o) catch return null,
         .game = h.adopt(Game, sal.implement(Game, game_area.Impl), o) catch return null,
         .camera = h.adopt(FreeCamera, sal.implement(FreeCamera, photo_area.CameraImpl), o) catch return null,
         .posing = h.adopt(Posing, sal.implement(Posing, photo_area.PosingImpl), o) catch return null,
@@ -186,7 +191,7 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .schema = h.adopt(SchemaArea, sal.implement(SchemaArea, host.schemas.SchemaImpl), o) catch return null,
         .frame_subscription = h.adopt(FrameSubscription, sal.implement(FrameSubscription, SubscriptionImpl), o) catch return null,
         .tick_driver = h.adopt(TickDriver, sal.implement(TickDriver, TickDriverImpl), o) catch return null,
-        .done = h.adopt(W.Frame.WindDown, sal.implement(W.Frame.WindDown, DoneImpl), o) catch return null,
+        .done = h.adopt(W.Threads.WindDown, sal.implement(W.Threads.WindDown, DoneImpl), o) catch return null,
         .input = h.adopt(Input, sal.implement(Input, InputImpl), o) catch return null,
         .keybind = h.adopt(Keybind, sal.implement(Keybind, KeybindImpl), o) catch return null,
         .libraries = h.adopt(Library, sal.implement(Library, LibrariesImpl), o) catch return null,
@@ -218,6 +223,7 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .hook = h.adopt(Hook, sal.implement(Hook, hooks_area.HookImpl), o) catch return null,
         .watches = h.adopt(Watches, sal.implement(Watches, hooks_area.WatchesImpl), o) catch return null,
         .watch = h.adopt(Watch, sal.implement(Watch, hooks_area.WatchImpl), o) catch return null,
+        .render_queue = h.adopt(sal.core.Queue, sal.implement(sal.core.Queue, frame.PluginQueue), o) catch return null,
     };
     loaded.wraith = t;
     return t;
@@ -260,8 +266,12 @@ const Root = struct {
         return area(loaded, Config, "config");
     }
 
-    pub fn frame(loaded: *Loaded) sal.Object(Frame) {
-        return area(loaded, Frame, "frame");
+    pub fn threads(loaded: *Loaded) sal.Object(Threads) {
+        return area(loaded, Threads, "threads");
+    }
+
+    pub fn display(loaded: *Loaded) sal.Object(Display) {
+        return area(loaded, Display, "display");
     }
 
     pub fn game(loaded: *Loaded) sal.Object(Game) {
@@ -410,7 +420,7 @@ const ClipboardImpl = struct {
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
-        job.* = .{ .owner = t.owner, .work = .{ .read = .of(pair.resolver) } };
+        job.* = .{ .owner = t.owner, .work = .{ .read = .of(pair.resolver, loaded) } };
         if (!job.start()) {
             allocator.destroy(job);
             pair.resolver.fail(error.Failed);
@@ -434,7 +444,7 @@ const ClipboardImpl = struct {
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
-        job.* = .{ .owner = t.owner, .work = .{ .write = .{ .resolver = .of(pair.resolver), .text = copy } } };
+        job.* = .{ .owner = t.owner, .work = .{ .write = .{ .resolver = .of(pair.resolver, loaded), .text = copy } } };
         if (!job.start()) {
             allocator.free(copy);
             allocator.destroy(job);
@@ -617,23 +627,23 @@ const ConfigImpl = struct {
     }
 };
 
-// Frame
+// Threads
 
-const FrameImpl = struct {
+const ThreadsImpl = struct {
     fn frameError(err: api.FrameError) error{ NoFrames, Failed } {
         return if (err == error.NoFrames) error.NoFrames else error.Failed;
     }
 
-    pub fn onFrame(loaded: *Loaded, tick: frame.Tick) sal.Plain(Frame, "onFrame") {
+    pub fn onDraw(loaded: *Loaded, draw: frame.Draw) sal.Plain(Threads, "onDraw") {
         const t = tablesOf(loaded) orelse {
-            tick.release();
+            draw.release();
             return error.Failed;
         };
-        const f = frame.onFrame(loaded, tick) catch |err| return frameError(err);
+        const f = frame.onDraw(loaded, draw) catch |err| return frameError(err);
         return .init(f, t.frame_subscription);
     }
 
-    pub fn onTick(loaded: *Loaded, tick: frame.GameTick) sal.Plain(Frame, "onTick") {
+    pub fn onTick(loaded: *Loaded, tick: frame.Tick) sal.Plain(Threads, "onTick") {
         const t = tablesOf(loaded) orelse {
             tick.release();
             return error.Failed;
@@ -642,7 +652,7 @@ const FrameImpl = struct {
         return .init(f, t.frame_subscription);
     }
 
-    pub fn onStopping(loaded: *Loaded, stopping: frame.Stopping) sal.Plain(Frame, "onStopping") {
+    pub fn onStopping(loaded: *Loaded, stopping: frame.Stopping) sal.Plain(Threads, "onStopping") {
         const t = tablesOf(loaded) orelse {
             stopping.release();
             return error.Failed;
@@ -651,7 +661,7 @@ const FrameImpl = struct {
         return .init(f, t.frame_subscription);
     }
 
-    pub fn driveTicks(loaded: *Loaded) sal.Plain(Frame, "driveTicks") {
+    pub fn driveTicks(loaded: *Loaded) sal.Plain(Threads, "driveTicks") {
         const t = tablesOf(loaded) orelse return error.Failed;
         const d = frame.driveTicks(loaded) catch |err| return frameError(err);
         return .init(d, t.tick_driver);
@@ -661,46 +671,12 @@ const FrameImpl = struct {
         return frame.onGameThread();
     }
 
-    pub fn setView(_: *Loaded, view_: W.Mat4, projection: W.Mat4) void {
-        frame.setView(view_, projection);
-    }
-
-    pub fn gameView(_: *Loaded) W.Frame.View {
-        return frame.view();
-    }
-
-    pub fn setColorSpace(loaded: *Loaded, space: W.ColorSpace) void {
-        frame.setColorSpace(loaded, space);
-    }
-
-    pub fn post(loaded: *Loaded, task: frame.Task) sal.Plain(Frame, "post") {
+    pub fn post(loaded: *Loaded, task: frame.Task) sal.Plain(Threads, "post") {
         frame.post(loaded, task) catch |err| return frameError(err);
     }
 
-    pub fn capture(loaded: *Loaded, point: W.Capture.Point) sal.Plain(Frame, "capture") {
-        return host.capture.capture(loaded, switch (point) {
-            .before_overlay => .before_overlay,
-            else => .after_overlay,
-        });
-    }
-
-    pub fn frameStats(loaded: *Loaded) W.Frame.Stats {
-        const Out = W.Frame.Stats;
-        const s = host.ui.frameStats(loaded);
-        var out: Out = .{};
-        inline for (comptime std.meta.fieldNames(api.FrameStats)) |n| {
-            @field(out, n) = if (comptime std.mem.eql(u8, n, "total_frames")) @intCast(@field(s, n)) else @field(s, n);
-        }
-        return out;
-    }
-
-    pub fn times(loaded: *Loaded) []const f32 {
-        const out = scratch.begin().alloc(f32, max_times) catch return &.{};
-        return out[0..host.ui.frameTimes(loaded, out)];
-    }
-
-    pub fn next(loaded: *Loaded) sal.Plain(Frame, "next") {
-        const P = sal.Plain(Frame, "next");
+    pub fn nextDraw(loaded: *Loaded) sal.Plain(Threads, "nextDraw") {
+        const P = sal.Plain(Threads, "nextDraw");
         const pair = P.make() catch return .{};
         frame.postNext(loaded, pair.resolver) catch |err| pair.resolver.fail(frameError(err));
         return pair.promise;
@@ -710,31 +686,31 @@ const FrameImpl = struct {
         return @as(f64, @floatFromInt(@import("wraith_core").timing.now())) / std.time.ns_per_ms;
     }
 
-    pub fn toRender(_: *Loaded) sal.Plain(Frame, "toRender") {
-        return hop("toRender", .render, false);
+    pub fn toRender(loaded: *Loaded) sal.Plain(Threads, "toRender") {
+        return hop("toRender", loaded, .render, false);
     }
 
-    pub fn toGame(_: *Loaded) sal.Plain(Frame, "toGame") {
-        return hop("toGame", .game, false);
+    pub fn toGame(loaded: *Loaded) sal.Plain(Threads, "toGame") {
+        return hop("toGame", loaded, .game, false);
     }
 
-    pub fn toWorker(_: *Loaded) sal.Plain(Frame, "toWorker") {
-        return hop("toWorker", .worker, false);
+    pub fn toWorker(loaded: *Loaded) sal.Plain(Threads, "toWorker") {
+        return hop("toWorker", loaded, .worker, false);
     }
 
-    pub fn nextTick(_: *Loaded) sal.Plain(Frame, "nextTick") {
-        return hop("nextTick", .game, true);
+    pub fn nextTick(loaded: *Loaded) sal.Plain(Threads, "nextTick") {
+        return hop("nextTick", loaded, .game, true);
     }
 
-    pub fn delay(_: *Loaded, ms: u32) sal.Plain(Frame, "delay") {
-        const P = sal.Plain(Frame, "delay");
+    pub fn delay(loaded: *Loaded, ms: u32) sal.Plain(Threads, "delay") {
+        const P = sal.Plain(Threads, "delay");
         const pair = P.make() catch return .{};
         // Delays are checked each frame and tick
         if (!threads.reachable(.game)) {
             pair.resolver.fail(error.NoFrames);
             return pair.promise;
         }
-        threads.carryOn(pair.resolver, threads.here());
+        threads.carryOn(pair.resolver, loaded, threads.here());
         const Due = struct {
             r: ResolverOf(P),
             fn run(d: *@This()) void {
@@ -754,9 +730,10 @@ const FrameImpl = struct {
         return pair.promise;
     }
 
-    /// Carries on on `to`, right here if it's there already unless `always`.
-    fn hop(comptime name: []const u8, to: threads.Thread, always: bool) sal.Plain(Frame, name) {
-        const P = sal.Plain(Frame, name);
+    /// Carries on on `to`, right here if it's there already unless `always`. On the render thread,
+    /// inside the plugin's frame, so it can draw.
+    fn hop(comptime name: []const u8, loaded: *Loaded, to: threads.Thread, always: bool) sal.Plain(Threads, name) {
+        const P = sal.Plain(Threads, name);
         const pair = P.make() catch return .{};
         if (!always and threads.isHere(to)) {
             pair.resolver.settle({});
@@ -767,14 +744,52 @@ const FrameImpl = struct {
             return pair.promise;
         }
         // Settled now, and whoever waits carries on there, however soon they come
-        pair.resolver.carryOn(threads.queueOf(to));
+        pair.resolver.carryOn(threads.queueFor(loaded, to));
         pair.resolver.settle({});
         return pair.promise;
     }
 };
 
-/// What `Frame.next` settles.
-pub const NextResolver = ResolverOf(sal.Plain(Frame, "next"));
+/// What `Threads.nextDraw` settles.
+pub const NextResolver = ResolverOf(sal.Plain(Threads, "nextDraw"));
+
+// Display
+
+const DisplayImpl = struct {
+    pub fn setView(_: *Loaded, view_: W.Mat4, projection: W.Mat4) void {
+        frame.setView(view_, projection);
+    }
+
+    pub fn gameView(_: *Loaded) W.Display.View {
+        return frame.view();
+    }
+
+    pub fn setColorSpace(loaded: *Loaded, space: W.ColorSpace) void {
+        frame.setColorSpace(loaded, space);
+    }
+
+    pub fn capture(loaded: *Loaded, point: W.Capture.Point) sal.Plain(Display, "capture") {
+        return host.capture.capture(loaded, switch (point) {
+            .before_overlay => .before_overlay,
+            else => .after_overlay,
+        });
+    }
+
+    pub fn frameStats(loaded: *Loaded) W.Display.Stats {
+        const Out = W.Display.Stats;
+        const s = host.ui.frameStats(loaded);
+        var out: Out = .{};
+        inline for (comptime std.meta.fieldNames(api.FrameStats)) |n| {
+            @field(out, n) = if (comptime std.mem.eql(u8, n, "total_frames")) @intCast(@field(s, n)) else @field(s, n);
+        }
+        return out;
+    }
+
+    pub fn times(loaded: *Loaded) []const f32 {
+        const out = scratch.begin().alloc(f32, max_times) catch return &.{};
+        return out[0..host.ui.frameTimes(loaded, out)];
+    }
+};
 
 const DoneImpl = struct {
     pub fn done(f: *frame.Frame) void {
@@ -1208,9 +1223,9 @@ const tests = struct {
         try testing.expectEqual(null, input.mousePos());
         try testing.expectError(error.Unavailable, input.bind(.{ .id = "toggle", .chord = .{ .key = .f8 } }, W.Keybind.Fired.init(&counts, Counts.fired)));
 
-        const fr = w.frame();
-        const sub = try fr.onFrame(W.Frame.Tick.init(&counts, Counts.tick));
-        try fr.post(W.Frame.Task.init(&counts, Counts.post));
+        const fr = w.threads();
+        const sub = try fr.onDraw(W.Threads.Draw.init(&counts, Counts.tick));
+        try fr.post(W.Threads.Task.init(&counts, Counts.post));
         frame.run();
         try testing.expectEqual(1, counts.ticks);
         try testing.expectEqual(1, counts.posts);
@@ -1221,11 +1236,11 @@ const tests = struct {
         sub.cancel();
         frame.run();
         try testing.expectEqual(2, counts.ticks);
-        _ = fr.frameStats();
-        try testing.expectEqual(0, fr.times().len);
+        _ = w.display().frameStats();
+        try testing.expectEqual(0, w.display().times().len);
 
         // What's left waiting never runs, and what it shared goes with it
-        try fr.post(W.Frame.Task.init(&counts, Counts.post));
+        try fr.post(W.Threads.Task.init(&counts, Counts.post));
         loaded.deinitForTest();
         forget(&loaded);
         frame.run();

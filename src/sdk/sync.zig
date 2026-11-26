@@ -1,6 +1,6 @@
 //! Locks within a plugin. `Mutex` works with tasks: a task that has to wait parks, and carries on once
 //! it's handed the lock, without holding up the render thread or its fiber. Anywhere else, like a
-//! hook on a game thread or a frame callback, the thread waits. For short work, like copying a few
+//! hook on a game thread or a draw callback, the thread waits. For short work, like copying a few
 //! things in or out. Not reentrant. `RwLock` and `Signal` are tuft's, for plain threads. To share a
 //! lock with other plugins, see the `sync` area.
 
@@ -30,7 +30,7 @@ pub const Mutex = struct {
         // Before it's in line, so a wake straight after isn't missed
         t.prepareSignal();
         if (self.inner.lockOr(&w.waiter)) return;
-        t.park(t.where, .{ .signal = true }) catch |err| {
+        t.parkUntilWoken(t.where) catch |err| {
             if (self.inner.cancel(&w.waiter)) return err;
             // It was handed over as it gave up, so pass it on
             w.waitHanded();
@@ -70,7 +70,7 @@ const TaskWaiter = struct {
 
 const tests = struct {
     const testing = std.testing;
-    const frame = @import("frame.zig");
+    const threads = @import("threads.zig");
     const Owner = @import("Owner.zig");
     const Fake = @import("testing.zig").Fake;
 
@@ -86,9 +86,9 @@ const tests = struct {
                 }
             }
         };
-        var threads: [4]std.Thread = undefined;
-        for (&threads) |*t| t.* = try std.Thread.spawn(.{}, Adder.run, .{ &m, &count });
-        for (threads) |t| t.join();
+        var workers: [4]std.Thread = undefined;
+        for (&workers) |*t| t.* = try std.Thread.spawn(.{}, Adder.run, .{ &m, &count });
+        for (workers) |t| t.join();
         try testing.expectEqual(40_000, count);
         try testing.expect(m.tryLock());
         try testing.expect(!m.tryLock());

@@ -246,14 +246,14 @@ pub const Impl = struct {
             return pair.promise;
         };
         switch (GameInfo.global.hash_state.load(.acquire)) {
-            .done => settleHash(.of(pair.resolver)),
+            .done => settleHash(.of(pair.resolver, loaded)),
             .idle, .failed => pair.resolver.fail(error.Failed),
             .hashing => {
                 const job = allocator.create(HashWait) catch {
                     pair.resolver.fail(error.Failed);
                     return pair.promise;
                 };
-                job.* = .{ .owner = t.owner, .resolver = .of(pair.resolver) };
+                job.* = .{ .owner = t.owner, .resolver = .of(pair.resolver, loaded) };
                 const thread = std.Thread.spawn(.{}, HashWait.run, .{job}) catch {
                     allocator.destroy(job);
                     pair.resolver.fail(error.Failed);

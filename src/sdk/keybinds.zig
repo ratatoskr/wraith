@@ -8,7 +8,7 @@ const input = @import("wraith_platform").input;
 
 const api = @import("wraith_api");
 const Owner = @import("Owner.zig");
-const frame = @import("frame.zig");
+const threads = @import("threads.zig");
 const tasks = @import("tasks.zig");
 
 pub const Key = input.Key;
@@ -71,7 +71,7 @@ pub const Presses = struct {
     }
 
     /// Waits for a press since the last `next` returned, so ones while you were busy aren't lost.
-    /// From one task at a time. A task carries on on the render thread at the frame of the press.
+    /// From one task at a time. A task carries on on the render thread at the frame after the press.
     /// Other threads block, so never the render thread, where presses come in, or the game thread.
     pub fn next(self: *Presses, io: std.Io) (std.Io.Cancelable || error{ OnRenderThread, OnGameThread })!void {
         if (tasks.current()) |t| {
@@ -85,14 +85,14 @@ pub const Presses = struct {
                 self.waiter.store(t, .release);
                 // A press between the check and here would be missed otherwise
                 if (self.count.load(.acquire) == now) {
-                    const parked = t.park(.render, .{ .signal = true });
+                    const parked = t.parkUntilWoken(.render);
                     self.waiter.store(null, .release);
                     try parked;
                 } else self.waiter.store(null, .release);
             }
         }
-        if (frame.onRenderThread()) return error.OnRenderThread;
-        if (frame.onGameThread()) return error.OnGameThread;
+        if (threads.onRenderThread()) return error.OnRenderThread;
+        if (threads.onGameThread()) return error.OnGameThread;
         while (true) {
             const now = self.count.load(.acquire);
             if (now != self.seen) {

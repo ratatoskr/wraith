@@ -1,7 +1,7 @@
 //! Wraith's API from `src/api/schemas`, the same areas scripts get, with real methods. A plugin has
 //! it as `ctx.wraith`:
 //!
-//!     const stats = ctx.wraith.frame().stats();
+//!     const stats = ctx.wraith.threads().stats();
 //!     const fov = try ctx.wraith.settings().add(.{ .id = .init("fov"), .kind = .number, .min = 60, .max = 120 }, null);
 //!
 //! `root()` gives the same where there's no `ctx` to hand.

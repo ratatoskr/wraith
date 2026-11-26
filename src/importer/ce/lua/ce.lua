@@ -435,7 +435,7 @@ end
 function M.install(env, options)
   options = options or {}
   local w = options.wraith or M.areas(Wraith)
-  local memory, log, frame = w.memory, w.log, w.frame
+  local memory, log, threads = w.memory, w.log, w.threads
 
   -- Memory's bytes as a string, like CE's tables work with
   local function bytes_at(a, count)
@@ -1157,7 +1157,7 @@ function M.install(env, options)
   -- Due callbacks by id, checked each frame from one frame callback
   local due, next_due, ticking = {}, 1, nil
   local function tick()
-    local now = frame:now()
+    local now = threads:now()
     local ids = {}
     for id, d in pairs(due) do
       if now >= d.at then ids[#ids + 1] = id end
@@ -1173,10 +1173,10 @@ function M.install(env, options)
   end
   -- Runs `f` in a task after `ms`, then every `ms` if `every`
   local function later(f, ms, every)
-    ticking = ticking or frame:onFrame(tick)
+    ticking = ticking or threads:onDraw(tick)
     local id = next_due
     next_due = id + 1
-    due[id] = { f = f, at = frame:now() + ms, every = every and ms or nil }
+    due[id] = { f = f, at = threads:now() + ms, every = every and ms or nil }
     return id
   end
 
@@ -1275,11 +1275,11 @@ function M.install(env, options)
     if not coroutine.isyieldable() then
       error("CE sleep only works in a thread, timer or the table's main script in Wraith, since it can't stop the game", 2)
     end
-    local until_ms = frame:now() + ms
-    repeat frame:next():await() until frame:now() >= until_ms
+    local until_ms = threads:now() + ms
+    repeat threads:nextDraw():await() until threads:now() >= until_ms
   end
   def("sleep", sleep)
-  def("getTickCount", function() return floor(frame:now()) end)
+  def("getTickCount", function() return floor(threads:now()) end)
   -- Wraith's game speed, which keeps Wraith and its scripts on real time like CE's does
   def("speedhack_setSpeed", function(speed) w.game:setSpeed(tonumber(speed) or 1) end)
   def("speedhack_getSpeed", function() return w.game:speed() end)
@@ -1311,7 +1311,7 @@ function M.install(env, options)
         if not coroutine.isyieldable() then
           error("CE Thread.waitfor only works in a thread, timer or the table's main script in Wraith", 2)
         end
-        repeat frame:next():await() until o[STATE].finished
+        repeat threads:nextDraw():await() until o[STATE].finished
       end,
       resume = function(o)
         local st = o[STATE]

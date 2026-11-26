@@ -254,6 +254,71 @@ const tests = struct {
         try testing.expectEqual(.loaded, install.info("fixture").?.state);
     }
 
+    test "a C plugin starts, its tweak runs and fails like any, and goes when it unloads" {
+        const options = @import("test_options");
+        const api = @import("wraith_api");
+        const tweaks = @import("host/root.zig").tweaks;
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "c_fixture", options.c_plugin }} });
+        defer install.deinit();
+        const loader = &install.loader;
+        try (try loader.load("c_fixture")).wait();
+        try testing.expectEqual(.loaded, install.info("c_fixture").?.state);
+        const loaded = loader.find("c_fixture").?;
+        const count_at = tuft_sys.module.findExport(loaded.library(), "wraith_c_count") orelse return error.ExportNotFound;
+        const countNow: *const fn () callconv(.c) u32 = @ptrFromInt(count_at);
+
+        var problem: api.TweakProblem = .{};
+        try testing.expectEqual(.ok, tweaks.call("c_fixture:count", .{ .kind = .changed, .field = "step", .value = 3 }, &problem));
+        try testing.expectEqual(.ok, tweaks.call("c_fixture:count", .{ .kind = .on }, &problem));
+        try testing.expectEqual(3, countNow());
+        // Its error code comes back as the error, which says why
+        _ = tweaks.call("c_fixture:count", .{ .kind = .changed, .field = "step", .value = 0 }, &problem);
+        try testing.expectEqual(.failed, tweaks.call("c_fixture:count", .{ .kind = .on }, &problem));
+        try testing.expect(problem.message().len > 0);
+        try testing.expectEqual(3, countNow());
+
+        try (try loader.unload("c_fixture")).wait();
+        try testing.expectEqual(.gone, tweaks.call("c_fixture:count", .{ .kind = .on }, &problem));
+    }
+
+    test "a C plugin uses what a plugin it depends on offers, and offers its own" {
+        const options = @import("test_options");
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        const Out = extern struct { n: u32 = 0 };
+        var out: Out = .{};
+
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{ .{ "fixture", options.fixture_plugin }, .{ "c_fixture", options.c_plugin } } });
+        defer install.deinit();
+        const io = testing.io;
+        // The schemas they were built with, which Wraith reads as they load
+        try install.tmp.dir.createDirPath(io, "plugins/fixture/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/fixture/schemas/fixture.sal", .data = @embedFile("testing/schemas/fixture.sal") });
+        try install.tmp.dir.createDirPath(io, "plugins/c_fixture/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/c_fixture/schemas/c.sal", .data = @embedFile("testing/c_schemas/c.sal") });
+        try install.pluginManifest("c_fixture", "\"depends\": [\"fixture\"]");
+        // And a Lua one using the C one's
+        try install.tmp.dir.createDirPath(io, "plugins/user");
+        try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"c_fixture\"]");
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local C = require("wraith").CFixture
+            \\C.Out.at({d}).n = C.cService():total()
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/main.lua", .data = lua });
+
+        const loader = &install.loader;
+        try loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("c_fixture").?.state);
+        try testing.expectEqual(.loaded, install.info("user").?.state);
+        // The fixture's second `next`, through C to Lua
+        try testing.expectEqual(2, out.n);
+        try testing.expectEqual(1, loader.find("c_fixture").?.services.items.len);
+    }
+
     test "plugins share Salamander objects, which stop when the plugin unloads" {
         const options = @import("test_options");
         const sal = @import("salamander_runtime");
@@ -320,11 +385,11 @@ const tests = struct {
                 "hello_js", "js", "main.js",
                 \\import { Wraith } from "wraith";
                 \\import { double } from "shared";
-                \\const settings = Wraith.settings(), frame = Wraith.frame(), log = Wraith.log();
+                \\const settings = Wraith.settings(), threads = Wraith.threads(), log = Wraith.log();
                 \\const fov = settings.add({ id: "fov", kind: "number", min: 60, max: 120, has_default: true, default_value: { number: 90 } }, null);
                 \\let ticks = 0;
-                \\frame.onFrame(() => { ticks++; fov.set({ number: double(30) + ticks }); });
-                \\frame.post(() => log.info("posted"));
+                \\threads.onDraw(() => { ticks++; fov.set({ number: double(30) + ticks }); });
+                \\threads.post(() => log.info("posted"));
             },
             .{
                 "hello_lua", "lua", "main.lua",
@@ -333,7 +398,7 @@ const tests = struct {
                 \\local shared = require("shared")
                 \\settings:add({ id = "speed", kind = "toggle", has_default = true, default_value = { toggle = true } }, nil)
                 \\local count = settings:add({ id = "count", kind = "number", min = 0, max = 100 }, nil)
-                \\Wraith.frame():post(function() count:set({ number = shared.double(21) }) end)
+                \\Wraith.threads():post(function() count:set({ number = shared.double(21) }) end)
             },
             .{ "broken", "js", "main.js", "throw new Error('nope');" },
         };
@@ -735,14 +800,14 @@ const tests = struct {
         const js = try std.fmt.allocPrint(testing.allocator,
             \\import {{ native }} from "salamander";
             \\import {{ Wraith, HopJs }} from "wraith";
-            \\const frame = Wraith.frame(), Out = HopJs.Out;
+            \\const threads = Wraith.threads(), Out = HopJs.Out;
             \\const where = native("fn u32 ()", {d});
             \\const out = Out.at({d});
             \\(async () => {{
-            \\    await frame.toWorker(); out.worker = where();
-            \\    await frame.toGame(); out.game = where();
-            \\    await frame.toRender(); out.render = where();
-            \\    await frame.delay(1); out.later = where();
+            \\    await threads.toWorker(); out.worker = where();
+            \\    await threads.toGame(); out.game = where();
+            \\    await threads.toRender(); out.render = where();
+            \\    await threads.delay(1); out.later = where();
             \\    out.done = 1;
             \\}})();
         , .{ @intFromPtr(&whereAmI), @intFromPtr(&js_out) });
@@ -753,14 +818,14 @@ const tests = struct {
         try install.pluginManifest("hop_lua", "\"provider\": \"lua\"");
         const lua = try std.fmt.allocPrint(testing.allocator,
             \\local wraith = require("wraith")
-            \\local frame = wraith.Wraith.frame()
+            \\local threads = wraith.Wraith.threads()
             \\local where = require("salamander").native("fn u32 ()", {d})
             \\local out = wraith.HopLua.Out.at({d})
             \\task.spawn(function()
-            \\    frame:toWorker():await(); out.worker = where()
-            \\    frame:toGame():await(); out.game = where()
-            \\    frame:toRender():await(); out.render = where()
-            \\    frame:delay(1):await(); out.later = where()
+            \\    threads:toWorker():await(); out.worker = where()
+            \\    threads:toGame():await(); out.game = where()
+            \\    threads:toRender():await(); out.render = where()
+            \\    threads:delay(1):await(); out.later = where()
             \\    out.done = 1
             \\end)
         , .{ @intFromPtr(&whereAmI), @intFromPtr(&lua_out) });

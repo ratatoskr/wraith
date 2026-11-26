@@ -1,12 +1,12 @@
-//! Per-frame callbacks and posts on the render thread, per-tick callbacks on the game thread, and
-//! waits for tasks.
+//! Where plugin code runs. Draw callbacks and posts run on the render thread, where UI works, tick
+//! callbacks on the game thread, where the game's own code runs. And waits for tasks.
 //!
-//! In a task from `ctx.spawn`, waits like `try frame.next(io)` carry on at the same point in a later
-//! frame, on the render thread, so the code after them can draw. `frame.toWorker` moves the task to a
-//! worker for slow or blocking work, `frame.toGame` to the game thread, and `frame.toRender` brings
-//! it back.
+//! In a task from `ctx.spawn`, waits like `try threads.nextDraw(io)` carry on at the same point in a
+//! later frame, on the render thread, so the code after them can draw. `threads.toWorker` moves the
+//! task to a worker for slow or blocking work, `threads.toGame` to the game thread, and
+//! `threads.toRender` brings it back.
 //!
-//! Ticks run on the game thread. That's the render thread just before each frame, unless a game
+//! Ticks run on the game thread. That's the render thread just before each draw, unless a game
 //! engine or game plugin drives them from the game's own thread with `driveTicks`.
 //!
 //! On any other thread, like from `io.concurrent`, waits block that thread. So never wait on the
@@ -22,8 +22,6 @@ const tasks = @import("tasks.zig");
 
 const sal = api.salamander;
 const W = api.wraith;
-const Mat4 = @import("tuft_math").Mat4;
-const Vec3 = @import("tuft_math").Vec3;
 
 pub const PostStatus = api.PostStatus;
 
@@ -53,26 +51,26 @@ fn seenRenderThread() void {
     render_thread.store(std.Thread.getCurrentId(), .monotonic);
 }
 
-/// True inside frame callbacks, posts and anything else on the render thread once a frame's run.
+/// True inside draw callbacks, posts and anything else on the render thread once a frame's run.
 pub fn onRenderThread() bool {
     const id = render_thread.load(.monotonic);
     return id != 0 and id == std.Thread.getCurrentId();
 }
 
-pub const FrameSubscription = struct {
-    object: W.Frame.Subscription,
+pub const Subscription = struct {
+    object: W.Threads.Subscription,
 
     /// Waits for a call in flight, unless it's from inside one.
-    pub fn unsubscribe(self: FrameSubscription) void {
+    pub fn unsubscribe(self: Subscription) void {
         self.object.cancel();
     }
 };
 
 /// Calls `func(target)` once a frame on the render thread, inside an ImGui frame, so it can update and
 /// draw UI. When the overlay can't draw, the ImGui frame is a headless one nobody sees, so UI calls do nothing.
-pub fn onFrame(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!FrameSubscription {
+pub fn onDraw(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!Subscription {
     const T = @TypeOf(target);
-    if (@typeInfo(T) != .pointer) @compileError("onFrame expects a pointer, found " ++ @typeName(T));
+    if (@typeInfo(T) != .pointer) @compileError("onDraw expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
 
     const Wrap = struct {
@@ -81,8 +79,8 @@ pub fn onFrame(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!
             func(t);
         }
     };
-    const tick = W.Frame.Tick.init(target, Wrap.call);
-    const sub = owner.root.frame().onFrame(tick) catch |err| return frameError(err);
+    const draw = W.Threads.Draw.init(target, Wrap.call);
+    const sub = owner.root.threads().onDraw(draw) catch |err| return frameError(err);
     return .{ .object = sub };
 }
 
@@ -90,24 +88,24 @@ pub fn onFrame(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!
 /// while a new driver's waiting for its first.
 pub fn onGameThread() bool {
     const owner = Owner.current() orelse return false;
-    return owner.root.frame().onGameThread();
+    return owner.root.threads().onGameThread();
 }
 
 /// Calls `func(target)` once a tick on the game thread, where the game's own code runs, like a
 /// game engine's main thread. No drawing. That's the render thread just before each frame unless a
 /// plugin drives ticks.
-pub fn onTick(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!FrameSubscription {
+pub fn onTick(target: anytype, comptime func: fn (@TypeOf(target)) void) Error!Subscription {
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("onTick expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
-    const tick = W.Frame.GameTick.init(target, func);
-    const sub = owner.root.frame().onTick(tick) catch |err| return frameError(err);
+    const tick = W.Threads.Tick.init(target, func);
+    const sub = owner.root.threads().onTick(tick) catch |err| return frameError(err);
     return .{ .object = sub };
 }
 
 /// Ticks from the game's own thread, from `driveTicks`.
 pub const TickDriver = struct {
-    object: W.Frame.TickDriver,
+    object: W.Threads.TickDriver,
 
     /// Once a game frame, on the game's thread. Runs every `onTick`, and tasks waiting for one.
     /// Does nothing unless it's active.
@@ -132,61 +130,18 @@ pub const TickDriver = struct {
 /// for its first `tick`, so ask in `start`, before anything subscribes.
 pub fn driveTicks() Error!TickDriver {
     const owner = Owner.current() orelse return error.OwnerGone;
-    const d = owner.root.frame().driveTicks() catch |err| return frameError(err);
+    const d = owner.root.threads().driveTicks() catch |err| return frameError(err);
     return .{ .object = d };
 }
 
-/// What the game's camera shows, for drawing over the world, like a gizmo or a label over a
-/// character. Row-vector style, the way Direct3D has it: the camera looks down +z and depth goes
-/// from 0 to 1.
-pub const View = struct {
-    view: Mat4,
-    projection: Mat4,
-
-    pub fn viewProjection(self: View) Mat4 {
-        return self.view.mul(self.projection);
-    }
-
-    /// Where `point` in the world is on a window `size` pixels big, from its top left. Null if it's
-    /// behind the camera.
-    pub fn project(self: View, point: Vec3, size: [2]f32) ?[2]f32 {
-        const clip = self.viewProjection().transformVec4(point.withW(1));
-        if (clip.w < 0.01) return null;
-        return .{ (clip.x / clip.w * 0.5 + 0.5) * size[0], (0.5 - clip.y / clip.w * 0.5) * size[1] };
-    }
-};
-
-/// For a game or game engine plugin, each frame once the camera's where it'll be drawn from, after
-/// the free camera has moved it. Any thread.
-pub fn setView(view_: Mat4, projection: Mat4) void {
-    const owner = Owner.current() orelse return;
-    owner.root.frame().setView(view_, projection);
-}
-
-/// For a game or game engine plugin that knows how the game's output is encoded, like HDR10 when
-/// the game's HDR is on. Wraith goes by it where the swap chain can't say, like a 10-bit one Wraith
-/// joined late. What the game sets on its swap chain itself still wins. Any thread.
-pub fn setColorSpace(space: W.ColorSpace) void {
-    const owner = Owner.current() orelse return;
-    owner.root.frame().setColorSpace(space);
-}
-
-/// The game's camera as its plugin last set it, or null if it hasn't lately. Any thread.
-pub fn view() ?View {
-    const owner = Owner.current() orelse return null;
-    const v = owner.root.frame().gameView();
-    if (!v.known) return null;
-    return .{ .view = v.viewMatrix, .projection = v.projection };
-}
-
-/// Runs once next frame, from any thread, or with `.cancelled` if the plugin's going first.
+/// Runs once at the next draw, from any thread, or with `.cancelled` if the plugin's going first.
 /// Never called on error.
 pub fn post(target: anytype, comptime func: fn (@TypeOf(target), PostStatus) void) Error!void {
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("post expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
 
-    const Next = sal.Plain(W.Frame, "next");
+    const Next = sal.Plain(W.Threads, "nextDraw");
     const Posted = struct {
         target: T,
         promise: Next,
@@ -202,7 +157,7 @@ pub fn post(target: anytype, comptime func: fn (@TypeOf(target), PostStatus) voi
             func(t, if (ran) .run else .cancelled);
         }
     };
-    const promise = owner.root.frame().next();
+    const promise = owner.root.threads().nextDraw();
     if (promise.table == null) return error.OwnerGone;
     // Refused straight away, like with no frames
     if (promise.isSettled()) {
@@ -222,14 +177,14 @@ fn ReturnOf(comptime func: anytype) type {
     return @typeInfo(@TypeOf(func)).@"fn".return_type.?;
 }
 
-/// Runs `func(args...)` on the render thread at the start of the next frame and gives back what it returned.
-/// It's inside the frame's ImGui frame, so it can draw UI like a frame callback.
-/// Cancelling it before it starts means it won't run.
+/// Runs `func(args...)` on the render thread and gives back what it returned. It's inside the
+/// plugin's frame, so it can draw UI like a draw callback. From a task that's right away if it's
+/// there already, else at the next frame. Cancelling it before it starts means it won't run.
 pub fn onRender(io: std.Io, comptime func: anytype, args: std.meta.ArgsTuple(@TypeOf(func))) WaitError!ReturnOf(func) {
     // A task goes there itself, then back where it was
     if (tasks.current()) |t| {
         const was = t.where;
-        try t.park(.render, .{ .frame = t.scheduler.frameCount() + 1 });
+        toRender(io) catch |err| return moveError(err);
         const result = @call(.auto, func, args);
         switch (was) {
             .worker => toWorker(io) catch {},
@@ -286,24 +241,38 @@ pub fn onRender(io: std.Io, comptime func: anytype, args: std.meta.ArgsTuple(@Ty
 
 fn nothing() void {}
 
-/// Waits for the next frame. A task carries on there on the render thread, and can draw.
-pub fn next(io: std.Io) WaitError!void {
-    return wait(io, 1);
+/// Waits for the next draw. A task carries on there on the render thread, inside the plugin's
+/// frame, and can draw.
+pub fn nextDraw(io: std.Io) WaitError!void {
+    if (tasks.current()) |t| {
+        const owner = Owner.current() orelse return error.OwnerGone;
+        return hop(t, owner.root.threads().nextDraw(), .render) catch |err| switch (err) {
+            error.Canceled => error.Canceled,
+            else => frameError(err),
+        };
+    }
+    return onRender(io, nothing, .{});
 }
 
-/// Waits `frames` frames.
-pub fn wait(io: std.Io, frames: u32) WaitError!void {
-    if (frames == 0) return;
-    if (tasks.current()) |t| return t.park(.render, .{ .frame = t.scheduler.frameCount() + frames });
-    for (0..frames) |_| try onRender(io, nothing, .{});
+/// Waits `draws` draws.
+pub fn waitDraws(io: std.Io, draws: u32) WaitError!void {
+    for (0..draws) |_| try nextDraw(io);
 }
 
-/// A task carries on at the first frame after `duration`, on the render thread. Elsewhere it's `io.sleep`
-/// on the awake clock. To sleep on a worker without leaving it, use `io.sleep`.
+/// A task carries on where it was once `duration`'s gone by, at the first frame or tick after
+/// for the render or game thread. Elsewhere, and on the plugin's own workers, it's `io.sleep` on
+/// the awake clock, so cancelling reaches it.
 pub fn delay(io: std.Io, duration: std.Io.Duration) std.Io.Cancelable!void {
     if (tasks.current()) |t| {
-        const ns: u64 = @intCast(@max(0, duration.toNanoseconds()));
-        return t.park(.render, .{ .deadline = timing.now() +| ns });
+        if (t.where != .worker) if (Owner.current()) |owner| {
+            const ns = @max(0, duration.toNanoseconds());
+            const ms: u32 = @intCast(@min(@divFloor(ns + std.time.ns_per_ms - 1, std.time.ns_per_ms), std.math.maxInt(u32)));
+            if (hop(t, owner.root.threads().delay(ms), t.where)) |_| return else |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                // Nothing to wait for it with, like without frames
+                else => {},
+            }
+        };
     }
     return io.sleep(duration, .awake);
 }
@@ -311,29 +280,56 @@ pub fn delay(io: std.Io, duration: std.Io.Duration) std.Io.Cancelable!void {
 pub const MoveError = std.Io.Cancelable || error{
     /// Only tasks from `ctx.spawn` can move.
     NotInTask,
-    /// Couldn't get a worker thread, so it's still on the render thread.
+    /// Couldn't get a worker thread, so it's still where it was.
     NoWorker,
+    /// Nothing runs that thread, so it's still where it was. Only without frames, like when the
+    /// overlay can't hook the game, and with no plugin driving ticks, since ticks otherwise run on
+    /// the render thread.
+    NoFrames,
 };
 
-/// Moves the task to a worker thread, keeping its fiber stack. Blocking and slow work is fine. Drawing isn't.
+/// Waits for one of `threads.sal`'s hops, carrying on on `to`. If it fails it never went.
+fn hop(t: *tasks.Task, promise: anytype, to: tasks.Where) anyerror!void {
+    const was = t.where;
+    try tasks.park(t, promise, to);
+    promise.take().? catch |err| {
+        t.where = was;
+        return err;
+    };
+}
+
+fn moveError(err: MoveError) WaitError {
+    return switch (err) {
+        error.Canceled => error.Canceled,
+        error.NotInTask, error.NoWorker => error.Failed,
+        error.NoFrames => error.NoFrames,
+    };
+}
+
+fn hopTo(comptime name: []const u8, to: tasks.Where, always: bool) MoveError!void {
+    const t = tasks.current() orelse return error.NotInTask;
+    if (!always and t.where == to) return;
+    const owner = Owner.current() orelse return error.Canceled;
+    const promise = @field(W.Threads, name)(owner.root.threads());
+    hop(t, promise, to) catch |err| return switch (err) {
+        error.Canceled => error.Canceled,
+        else => error.NoFrames,
+    };
+}
+
+/// Moves the task to one of the plugin's own workers, keeping its fiber stack. Blocking and slow
+/// work is fine. Drawing isn't.
 pub fn toWorker(io: std.Io) MoveError!void {
     _ = io;
     const t = tasks.current() orelse return error.NotInTask;
-    if (t.where == .worker) return;
-    try t.park(.worker, .{ .now = true });
-    if (t.no_worker) {
-        t.no_worker = false;
-        return error.NoWorker;
-    }
+    return tasks.toOwnWorker(t);
 }
 
-/// Moves the task back to the render thread, where it can draw. It carries on at the next frame's
-/// task point, which may still be this frame's.
+/// Moves the task back to the render thread, where it can draw, at the next frame inside the
+/// plugin's frame.
 pub fn toRender(io: std.Io) MoveError!void {
     _ = io;
-    const t = tasks.current() orelse return error.NotInTask;
-    if (t.where == .render) return;
-    try t.park(.render, .{ .now = true });
+    return hopTo("toRender", .render, false);
 }
 
 /// Moves the task to the game thread, where the game's own code runs, at its next tick. Engine
@@ -341,16 +337,13 @@ pub fn toRender(io: std.Io) MoveError!void {
 /// Frame waits like `next` carry on on the render thread, so come back after them.
 pub fn toGame(io: std.Io) MoveError!void {
     _ = io;
-    const t = tasks.current() orelse return error.NotInTask;
-    if (t.where == .game) return;
-    try t.park(.game, .{ .now = true });
+    return hopTo("toGame", .game, false);
 }
 
 /// Waits for the next tick. A task carries on there on the game thread.
 pub fn nextTick(io: std.Io) MoveError!void {
     _ = io;
-    const t = tasks.current() orelse return error.NotInTask;
-    try t.park(.game, .{ .now = true });
+    return hopTo("nextTick", .game, true);
 }
 
 pub const UntilOptions = struct {
@@ -362,18 +355,12 @@ pub const UntilOptions = struct {
 pub fn until(io: std.Io, comptime predicate: anytype, args: std.meta.ArgsTuple(@TypeOf(predicate)), options: UntilOptions) (WaitError || error{Timeout})!void {
     if (ReturnOf(predicate) != bool) @compileError("until wants a predicate that returns bool");
     const deadline: ?u64 = if (options.timeout) |t| timing.now() +| @as(u64, @intCast(@max(0, t.toNanoseconds()))) else null;
-    if (tasks.current()) |task| {
-        // Lives on the task's stack, which stays put while it's parked
-        const Check = struct {
-            args: @TypeOf(args),
-            fn call(ctx: *anyopaque) bool {
-                const self: *@This() = @ptrCast(@alignCast(ctx));
-                return @call(.auto, predicate, self.args);
-            }
-        };
-        var check: Check = .{ .args = args };
-        try task.park(.render, .{ .predicate = .{ .ctx = &check, .func = Check.call }, .deadline = deadline });
-        if (task.timed_out) return error.Timeout;
+    if (tasks.current() != null) {
+        toRender(io) catch |err| return moveError(err);
+        while (!@call(.auto, predicate, args)) {
+            if (deadline) |d| if (timing.now() >= d) return error.Timeout;
+            try nextDraw(io);
+        }
         return;
     }
     while (!try onRender(io, predicate, args)) {
@@ -389,7 +376,7 @@ const tests = struct {
         ran: u32 = 0,
         cancelled: u32 = 0,
 
-        fn onFrame(self: *Seen) void {
+        fn onDraw(self: *Seen) void {
             self.frames += 1;
         }
 
@@ -398,29 +385,13 @@ const tests = struct {
         }
     };
 
-    test "a point in front lands on screen, one behind doesn't" {
-        // Looking down +z, a quarter turn wide
-        const near: f32 = 0.1;
-        const far: f32 = 100;
-        const projection: Mat4 = .{ .m = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, far / (far - near), 1, 0, 0, -near * far / (far - near), 0 } };
-        const v: View = .{ .view = .identity, .projection = projection };
-        const middle = v.project(.{ .z = 5 }, .{ 800, 600 }).?;
-        try std.testing.expectApproxEqAbs(400, middle[0], 1e-3);
-        try std.testing.expectApproxEqAbs(300, middle[1], 1e-3);
-        // Up and right is up and right on screen
-        const corner = v.project(.{ .x = 5, .y = 5, .z = 5 }, .{ 800, 600 }).?;
-        try std.testing.expectApproxEqAbs(800, corner[0], 1e-3);
-        try std.testing.expectApproxEqAbs(0, corner[1], 1e-3);
-        try std.testing.expectEqual(null, v.project(.{ .z = -5 }, .{ 800, 600 }));
-    }
-
-    test "frames and posts" {
+    test "draws and posts" {
         var fake: Fake = .{};
         fake.attach();
         defer fake.detach();
 
         var seen: Seen = .{};
-        const sub = try onFrame(&seen, Seen.onFrame);
+        const sub = try onDraw(&seen, Seen.onDraw);
         try post(&seen, Seen.onPost);
         fake.runFrame();
         fake.runFrame();
@@ -443,7 +414,7 @@ const tests = struct {
         defer fake.detach();
         var seen: Seen = .{};
         try std.testing.expectError(error.NoFrames, post(&seen, Seen.onPost));
-        try std.testing.expectError(error.NoFrames, onFrame(&seen, Seen.onFrame));
+        try std.testing.expectError(error.NoFrames, onDraw(&seen, Seen.onDraw));
     }
 
     const Task = struct {
@@ -460,15 +431,15 @@ const tests = struct {
 
         fn awaits(self: *Task, io: std.Io) (WaitError || error{Timeout})!u32 {
             defer self.done.store(true, .release);
-            try next(io);
-            try wait(io, 2);
+            try nextDraw(io);
+            try waitDraws(io, 2);
             try until(io, readyAt, .{ self, 3 }, .{});
             return onRender(io, add, .{ 2, 3 });
         }
 
         fn waitsForever(self: *Task, io: std.Io) WaitError!void {
             defer self.done.store(true, .release);
-            return next(io);
+            return nextDraw(io);
         }
 
         fn timesOut(self: *Task, io: std.Io) (WaitError || error{Timeout})!void {
@@ -499,7 +470,7 @@ const tests = struct {
 
         // This thread runs the frames now
         try std.testing.expect(onRenderThread());
-        try std.testing.expectError(error.OnRenderThread, next(io));
+        try std.testing.expectError(error.OnRenderThread, nextDraw(io));
 
         var slow: Task = .{};
         var timing_out = try io.concurrent(Task.timesOut, .{ &slow, io });

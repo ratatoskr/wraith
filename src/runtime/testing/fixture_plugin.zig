@@ -61,7 +61,7 @@ pub const Plugin = struct {
     }
 
     fn waitForever(self: *Plugin, io: std.Io) !void {
-        sdk.frame.delay(io, .fromSeconds(3600)) catch |err| {
+        sdk.threads.delay(io, .fromSeconds(3600)) catch |err| {
             self.settings.value.cancelled_tasks += 1;
             return err;
         };

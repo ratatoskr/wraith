@@ -64,6 +64,113 @@ pub const Plugin = struct {
         };
     }
 
+    pub const COptions = struct {
+        name: []const u8,
+        /// Its C files, from the project root.
+        sources: []const []const u8,
+        target: std.Build.ResolvedTarget,
+        optimize: std.builtin.OptimizeMode,
+        flags: []const []const u8 = &.{ "-std=c11", "-Wall", "-Wextra" },
+        /// Its `.sal` files, as `schema.h`. Null means schemas/ in the project root.
+        schemas: ?std.Build.LazyPath = null,
+        /// Null means wraith.json in the project root.
+        manifest: ?std.Build.LazyPath = null,
+    };
+
+    /// A C plugin, compiled by Zig. It includes `wraith.h`, Wraith's API made from its schemas,
+    /// `wraith_plugin.h` for its `wraith_plugin` export, and `schema.h` for its own schemas and the
+    /// ones of plugins it depends on, found like a Zig plugin's: their types, and each function and
+    /// static's name and pointer type. Names are in each one's namespace, like
+    /// `ExampleC_Player_heal_name`. Wraith's types, like `Wraith_Vec3`, come from `wraith.h`.
+    pub fn initC(b: *std.Build, options: COptions) Plugin {
+        const targets = targetsOf(b, options.target);
+        const depends = dependsOf(b);
+        const schemas = options.schemas orelse findSchemas(b.path("plugin.c"));
+        const arches = b.allocator.alloc(Arch, targets.len) catch @panic("OOM");
+        for (targets, arches) |target, *arch| {
+            const wraith = b.dependencyFromBuildZig(wraith_build, .{ .target = target, .optimize = options.optimize });
+            const salamander = wraith.builder.dependency("salamander", .{ .target = target, .optimize = options.optimize });
+            const module = cModule(b, salamander, .{ .api = wraith.path("src/api/schemas"), .include = wraith.path("src/sdk/c") }, .{
+                .name = options.name,
+                .root = b.path("."),
+                .sources = options.sources,
+                .flags = options.flags,
+                .target = target,
+                .optimize = options.optimize,
+                .schemas = schemas,
+                .depends = depends,
+            });
+            arch.* = .{
+                .target = target,
+                .lib = b.addLibrary(.{ .name = b.fmt("wraith_{s}_{s}", .{ options.name, archName(target) }), .linkage = .dynamic, .root_module = module }),
+                .mod = module,
+                .sdk = Sdk.of(wraith).sdk,
+            };
+        }
+        return .{
+            .name = options.name,
+            .manifest = options.manifest orelse b.path("wraith.json"),
+            .schemas = schemas,
+            .arches = arches,
+        };
+    }
+
+    fn archName(target: std.Build.ResolvedTarget) []const u8 {
+        return if (target.result.cpu.arch == .x86) "x86" else "x64";
+    }
+
+    /// Where Wraith's own C pieces are: its schemas, and `wraith_plugin.h`'s folder.
+    const CPaths = struct { api: std.Build.LazyPath, include: std.Build.LazyPath };
+
+    const CModule = struct {
+        name: []const u8,
+        root: std.Build.LazyPath,
+        sources: []const []const u8,
+        flags: []const []const u8,
+        target: std.Build.ResolvedTarget,
+        optimize: std.builtin.OptimizeMode,
+        schemas: ?std.Build.LazyPath,
+        /// The plugins it depends on, whose schemas go in its `schema.h` under their namespaces.
+        depends: []const Salamander.ZigOptions.With = &.{},
+    };
+
+    /// A C plugin's module, with `wraith.h`, `wraith_plugin.h` and its `schema.h` to include.
+    fn cModule(b: *std.Build, salamander: *std.Build.Dependency, paths: CPaths, options: CModule) *std.Build.Module {
+        const module = b.createModule(.{ .target = options.target, .optimize = options.optimize, .link_libc = true });
+        module.addCSourceFiles(.{ .root = options.root, .files = options.sources, .flags = options.flags });
+        const api = Salamander.bundle(salamander, paths.api);
+        module.addIncludePath(Salamander.cHeaders(salamander, .{ .source = api, .target = options.target, .name = "wraith.h" }));
+        module.addIncludePath(paths.include);
+        // Its own schemas and its dependencies', set up like a Zig plugin's. Wraith's types are in
+        // scope, and come from wraith.h
+        const own: Salamander.ZigOptions.With = .{ .name = "wraith", .folder = paths.api };
+        // Without any of its own, the first dependency's folder stands in
+        const folder = options.schemas orelse if (options.depends.len > 0) options.depends[0].folder else null;
+        if (folder) |dir| {
+            const rest = if (options.schemas != null) options.depends else options.depends[1..];
+            const global_uses = b.allocator.alloc([]const u8, options.depends.len + 1) catch @panic("OOM");
+            const file_namespaces = b.allocator.alloc([]const u8, options.depends.len) catch @panic("OOM");
+            global_uses[0] = "Wraith";
+            for (options.depends, global_uses[1..], file_namespaces) |d, *u, *f| {
+                u.* = namespaceOf(b, d.name);
+                f.* = b.fmt("{s}/={s}", .{ d.name, u.* });
+            }
+            module.addIncludePath(Salamander.cHeaders(salamander, .{
+                .folder = dir,
+                .target = options.target,
+                .name = "schema.h",
+                .uses = &.{"wraith"},
+                .global_uses = global_uses,
+                .namespace = namespaceOf(b, options.name),
+                .file_namespaces = file_namespaces,
+                .instances = &.{instance_tag},
+                .with = std.mem.concat(b.allocator, Salamander.ZigOptions.With, &.{ &.{own}, rest }) catch @panic("OOM"),
+                .aliases = &.{.{ .prefix = "wraith/", .include = "wraith.h" }},
+            }));
+        }
+        return module;
+    }
+
     /// The one tests run on.
     pub fn main(self: Plugin) Arch {
         return self.arches[0];
@@ -333,6 +440,21 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/runtime/testing/foreign.zig"), .target = target, .optimize = optimize }),
     }).getEmittedBin());
     test_options.addOptionPath("crashhandler", addCrashHandler(b, main).getEmittedBin());
+    // A C one, made like `Plugin.initC` makes them
+    test_options.addOptionPath("c_plugin", b.addLibrary(.{
+        .name = b.fmt("wraith_c_fixture_{s}", .{Plugin.archName(target)}),
+        .linkage = .dynamic,
+        .root_module = Plugin.cModule(b, b.dependency("salamander", .{ .target = target, .optimize = optimize }), .{ .api = b.path("src/api/schemas"), .include = b.path("src/sdk/c") }, .{
+            .name = "c_fixture",
+            .root = b.path("src/runtime/testing"),
+            .sources = &.{"c_plugin.c"},
+            .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror" },
+            .target = target,
+            .optimize = optimize,
+            .schemas = b.path("src/runtime/testing/c_schemas"),
+            .depends = &.{.{ .name = "fixture", .folder = b.path("src/runtime/testing/schemas") }},
+        }),
+    }).getEmittedBin());
     addCsPlugin(b, main, test_options);
     main.runtime.addOptions("test_options", test_options);
     {

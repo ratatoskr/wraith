@@ -28,7 +28,7 @@ pub fn isAvailable(_: *Loaded) bool {
     return overlay != null;
 }
 
-/// Runs a plugin's frame callback in the current ImGui frame, scoped to the plugin, with what it
+/// Runs a plugin's draw callback in the current ImGui frame, scoped to the plugin, with what it
 /// leaves open unwound after. Without an ImGui context, like in tests, it just calls it. The render
 /// thread, or the Workbench's for its panels.
 pub fn runAs(loaded: *Loaded, warned: *bool, ctx: *anyopaque, func: *const fn (ctx: ?*anyopaque) callconv(.c) void) void {
@@ -417,7 +417,7 @@ const tests = struct {
             .{
                 "imgui_js", "js", "main.js",
                 \\import { Wraith } from "wraith";
-                \\const frame = Wraith.frame(), imgui = Wraith.imgui(), ui = Wraith.ui(), log = Wraith.log();
+                \\const threads = Wraith.threads(), imgui = Wraith.imgui(), ui = Wraith.ui(), log = Wraith.log();
                 \\// Outside a frame it does nothing
                 \\if (imgui.Begin("Early", null, 0) !== false) throw new Error("drew outside a frame");
                 \\if (ui.windowDrawList() !== null) throw new Error("a draw list outside a frame");
@@ -429,7 +429,7 @@ const tests = struct {
                 \\const speed = { value: 1.5 };
                 \\let name = "bob";
                 \\let toasted = false;
-                \\frame.onFrame(() => {
+                \\threads.onDraw(() => {
                 \\    if (!item.isOpen()) return;
                 \\    if (imgui.Begin("Stats", open, 0)) {
                 \\        imgui.TextUnformatted("hello");
@@ -445,11 +445,11 @@ const tests = struct {
             .{
                 "imgui_lua", "lua", "main.lua",
                 \\local Wraith = require("wraith").Wraith
-                \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), frame = Wraith.frame() }
+                \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), threads = Wraith.threads() }
                 \\local imgui = wraith.imgui
                 \\local on = { value = false }
                 \\wraith.ui:onOpenSettings(function() on.value = true end)
-                \\wraith.frame:onFrame(function()
+                \\wraith.threads:onDraw(function()
                 \\    if imgui:Begin("Panel", nil, 0) then
                 \\        imgui:Checkbox("on", on)
                 \\        imgui:TextUnformatted("hi")
@@ -530,7 +530,7 @@ const tests = struct {
             .{
                 "window_lua", "lua", "main.lua",
                 \\local Wraith = require("wraith").Wraith
-                \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), frame = Wraith.frame() }
+                \\local wraith = { imgui = Wraith.imgui(), ui = Wraith.ui(), threads = Wraith.threads() }
                 \\local w = wraith.ui:addWindow({ title = "Panel" }, function()
                 \\    wraith.imgui:TextUnformatted("hi")
                 \\end)

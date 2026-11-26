@@ -130,7 +130,7 @@ const NextResolver = threads.Back(wraith.ResolverOf(NextPromise));
 /// Through `input.sal`. Settles at its next press.
 pub fn next(record: *Record) NextPromise {
     const pair = NextPromise.make() catch return .{};
-    const r: NextResolver = .of(pair.resolver);
+    const r: NextResolver = .of(pair.resolver, record.loaded);
     record.waiting_lock.lock();
     defer record.waiting_lock.unlock();
     if (!record.going()) {

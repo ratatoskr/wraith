@@ -1,18 +1,20 @@
-//! Plugin tasks as fibers. A task starts on the render thread at the next frame. Waiting for a frame,
-//! a message, a key or a capture parks it, and it carries on at the same point in a later frame, still
-//! able to draw. `frame.toWorker` moves it to a worker thread for slow or blocking work,
-//! `frame.toGame` to the game thread at its next tick, and `frame.toRender` brings it back. Code on
-//! the render and game threads holds up the game, so never block there.
+//! Plugin tasks as fibers, over Wraith's own scheduling. A task starts on the render thread at the
+//! next frame. Waiting parks it on one of Wraith's promises, like `threads.nextDraw` or `threads.toGame`, and
+//! whichever thread Wraith carries that promise on resumes it there, at the same point: the render
+//! thread inside the plugin's frame, so it can still draw, the game thread at a tick, or a worker.
+//! `threads.toWorker` moves it to one of the plugin's own workers, so cancelling reaches its blocking
+//! calls. Code on the render and game threads holds up the game, so never block there.
+//!
+//! What's here is only the fibers. Other languages do the same with their own `await`.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const sys = @import("tuft_sys");
-const atomic = @import("tuft_arch").atomic;
 
 const Owner = @import("Owner.zig");
 const rt = @import("salamander_runtime");
-const frame = @import("frame.zig");
+const threads = @import("threads.zig");
 const timing = @import("timing.zig");
 
 const log = @import("log.zig").scoped(.wraith_sdk);
@@ -21,32 +23,43 @@ pub const Where = enum(u8) { render, worker, game };
 
 pub const SpawnError = error{ OutOfMemory, FiberFailed, Canceled, OwnerGone };
 
-/// What a parked task waits for. Any one of them resumes it.
-pub const Wait = struct {
-    /// Right away, at the next chance.
-    now: bool = false,
-    /// Once this many frames have run in all.
-    frame: ?u64 = null,
-    /// `timing.now()`. With `predicate` it's a timeout.
-    deadline: ?u64 = null,
-    /// Checked on the render thread each frame.
-    predicate: ?Predicate = null,
-    /// Once `wake` is called.
-    signal: bool = false,
-};
-
-pub const Predicate = struct {
-    ctx: *anyopaque,
-    func: *const fn (ctx: *anyopaque) bool,
-};
-
 threadlocal var running: ?*Task = null;
+/// Set on the plugin's own workers, to their scheduler.
+threadlocal var own_worker: ?*Scheduler = null;
 
 /// The task running on this thread, if it's one of ours. Not inlined, since a task can move threads
 /// and a cached thread-local address would be the old thread's.
 pub noinline fn current() ?*Task {
     return running;
 }
+
+noinline fn ownWorker() ?*Scheduler {
+    return own_worker;
+}
+
+/// What a parked task is waiting for.
+const Park = union(enum) {
+    /// A promise from Wraith, which carries on where Wraith says. The task takes it.
+    promise: rt.core.Promise,
+    /// The scheduler's own, to get a woken task where it waited. Settled once it's carried on there.
+    hop: rt.core.Promise,
+    /// `wake`, from anywhere.
+    signal,
+    /// One of the plugin's own workers.
+    worker,
+    /// Not parked.
+    none,
+};
+
+const State = enum(u8) {
+    /// Someone's running it, or about to.
+    running,
+    /// Parked on a promise, with `waiter` listening.
+    awaiting,
+    /// Parked till `wake`, or with nowhere to go once cancelled. Whoever claims it runs it.
+    parked,
+    done,
+};
 
 pub const Task = struct {
     fiber: sys.fiber.Fiber = undefined,
@@ -55,34 +68,40 @@ pub const Task = struct {
     free: *const fn (task: *Task) void,
     /// Where it runs, or will once it's resumed.
     where: Where = .render,
-    wait: Wait = .{ .now = true },
+    park_on: Park = .none,
+    state: Atomic(State) = .init(.running),
+    /// Under `awaiting`.
+    waiter: ?*Waiter = null,
+    /// For a `signal` park.
     ready: Atomic(bool) = .init(false),
-    state: Atomic(State) = .init(.parked),
-    /// Set when a `predicate` wait ran out of time.
-    timed_out: bool = false,
     /// Set when it couldn't get to a worker.
     no_worker: bool = false,
 
-    const State = enum(u8) { parked, running, on_worker, done };
-
-    /// From inside it. Resumes on `where` once `until` says. The scheduler stopping ends every wait.
-    pub fn park(self: *Task, where: Where, until: Wait) error{Canceled}!void {
-        if (self.scheduler.canceled.load(.acquire)) return error.Canceled;
-        self.where = where;
-        self.wait = until;
-        self.timed_out = false;
-        self.fiber.yield();
-        if (self.scheduler.canceled.load(.acquire)) return error.Canceled;
+    /// From inside it. Comes back once it's on `where` again, woken by `wake`. The scheduler
+    /// stopping ends the wait.
+    pub fn parkUntilWoken(self: *Task, where: Where) error{Canceled}!void {
+        return self.yield(.signal, where);
     }
 
-    /// Before handing out `wake`, for a `signal` wait.
+    /// Before handing out `wake`, for `parkUntilWoken`.
     pub fn prepareSignal(self: *Task) void {
         self.ready.store(false, .release);
     }
 
-    /// Any thread. Resumes a `signal` wait at the next frame.
+    /// Any thread. Resumes `parkUntilWoken` where it asked, at the next frame or tick, or on a worker.
     pub fn wake(self: *Task) void {
         self.ready.store(true, .release);
+        if (self.state.cmpxchgStrong(.parked, .running, .acq_rel, .acquire) != null) return;
+        if (self.scheduler.route(self)) self.scheduler.step(self);
+    }
+
+    /// From inside it: off its stack till `park` says, then back on `where`.
+    fn yield(self: *Task, on: Park, where: Where) error{Canceled}!void {
+        if (self.scheduler.canceled.load(.acquire)) return error.Canceled;
+        self.park_on = on;
+        self.where = where;
+        self.fiber.yield();
+        if (self.scheduler.canceled.load(.acquire)) return error.Canceled;
     }
 
     fn entry(f: *sys.fiber.Fiber) void {
@@ -90,17 +109,55 @@ pub const Task = struct {
         self.run(self);
     }
 
-    const Woke = enum { ok, timed_out };
+    /// Lets go of what it parked on, once it's carrying on.
+    fn unpark(self: *Task) void {
+        switch (self.park_on) {
+            .hop => |h| {
+                _ = h.take(null);
+                h.release();
+            },
+            else => {},
+        }
+        self.park_on = .none;
+    }
+};
 
-    fn due(self: *Task, now: u64, frames: u64) ?Woke {
-        if (self.scheduler.canceled.load(.acquire)) return .ok;
-        const w = self.wait;
-        if (w.now) return .ok;
-        if (w.signal and self.ready.load(.acquire)) return .ok;
-        if (w.frame) |f| if (frames >= f) return .ok;
-        if (w.predicate) |p| if (p.func(p.ctx)) return .ok;
-        if (w.deadline) |d| if (now >= d) return if (w.predicate != null) .timed_out else .ok;
-        return null;
+/// Listens for the promise a task parked on. On the heap, since a queue may still run it after the
+/// task's gone. Whoever moves it from `parked` to `claimed` runs the task.
+const Waiter = struct {
+    task: *Task,
+    state: Atomic(Phase) = .init(.registering),
+    /// The thread registering it, where settling straight away just goes round again.
+    on: std.Thread.Id,
+    /// The promise's and the task's.
+    refs: Atomic(u8) = .init(2),
+
+    const Phase = enum(u8) { registering, parked, woken, claimed };
+    const gpa = std.heap.smp_allocator;
+
+    fn settled(w: *Waiter) void {
+        defer w.release();
+        while (true) switch (w.state.load(.acquire)) {
+            .registering => {
+                if (w.on == std.Thread.getCurrentId() and w.state.cmpxchgStrong(.registering, .woken, .acq_rel, .acquire) == null) return;
+                std.atomic.spinLoopHint();
+            },
+            .parked => {
+                const task = w.task;
+                const scheduler = task.scheduler;
+                // Left parked, so cancelling takes it on its own thread
+                if (scheduler.canceled.load(.acquire)) return;
+                if (w.state.cmpxchgStrong(.parked, .claimed, .acq_rel, .acquire) != null) continue;
+                scheduler.claimed(task, w);
+                if (scheduler.route(task)) scheduler.step(task);
+                return;
+            },
+            .woken, .claimed => return,
+        };
+    }
+
+    fn release(w: *Waiter) void {
+        if (w.refs.fetchSub(1, .acq_rel) == 1) gpa.destroy(w);
     }
 };
 
@@ -108,27 +165,12 @@ pub const Scheduler = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     owner: Owner,
-    /// Worker hops run in it, so cancelling it reaches blocking calls on workers.
+    /// The plugin's own workers, so cancelling it reaches blocking calls on them.
     group: *std.Io.Group,
     stack_size: usize = std.Thread.SpawnConfig.default_stack_size,
     lock: sys.sync.RwLock = .{},
     /// Under `lock`.
     tasks: std.ArrayList(*Task) = .empty,
-    /// Render thread.
-    batch: std.ArrayList(*Task) = .empty,
-    /// Game thread.
-    tick_batch: std.ArrayList(*Task) = .empty,
-    /// Pumps with a batch out, under `lock`. Done tasks are only freed when it's 0, since a batch
-    /// on the other thread could still point at them.
-    pumping: u32 = 0,
-    /// Frames run so far.
-    frames: atomic.Value(u64) = .init(0),
-    /// Under `lock`.
-    subscription: ?frame.FrameSubscription = null,
-    /// Under `lock`.
-    tick_subscription: ?frame.FrameSubscription = null,
-    /// No frames here, so tasks start on workers and render waits only end by cancelling.
-    no_frames: bool = false,
     canceled: Atomic(bool) = .init(false),
     /// Inside the host's frame zone, so Timings shows what time went to resumed tasks.
     resumed_zone: timing.Zone = .init("task resumed"),
@@ -143,16 +185,10 @@ pub const Scheduler = struct {
     /// After `cancel`.
     pub fn deinit(self: *Scheduler) void {
         self.tasks.deinit(self.allocator);
-        self.batch.deinit(self.allocator);
-        self.tick_batch.deinit(self.allocator);
     }
 
-    pub fn frameCount(self: *const Scheduler) u64 {
-        return self.frames.load(.acquire);
-    }
-
-    /// Runs `func(args...)` as a task, from the next frame. `func` returns `void` or an error union,
-    /// whose errors get logged.
+    /// Runs `func(args...)` as a task, from the next frame, or on a worker without frames. `func`
+    /// returns `void` or an error union, whose errors get logged.
     pub fn spawn(self: *Scheduler, comptime func: anytype, args: std.meta.ArgsTuple(@TypeOf(func))) SpawnError!void {
         if (self.canceled.load(.acquire)) return error.Canceled;
         const Args = @TypeOf(args);
@@ -188,191 +224,224 @@ pub const Scheduler = struct {
             c.task.fiber.deinit();
             self.allocator.destroy(c);
         }
-
-        self.lock.lock();
-        const start_on_worker = blk: {
-            defer self.lock.unlock();
-            if (self.subscription == null and !self.no_frames) {
-                const acting = self.owner.enter();
-                defer acting.end();
-                if (!self.zones_listed) {
-                    timing.list(&self.resumed_zone);
-                    timing.list(&self.worker_zone);
-                    self.zones_listed = true;
-                }
-                self.subscription = frame.onFrame(self, pump) catch |err| switch (err) {
-                    error.NoFrames, error.Unsupported, error.Failed => sub: {
-                        self.no_frames = true;
-                        break :sub null;
-                    },
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.OwnerGone => return error.OwnerGone,
-                };
-                // Without ticks, like an older Wraith, `toGame` waits till it's cancelled
-                self.tick_subscription = frame.onTick(self, pumpTicks) catch null;
-            }
-            try self.tasks.append(self.allocator, &c.task);
-            break :blk self.no_frames;
-        };
-        if (start_on_worker) self.sendToWorker(&c.task);
-    }
-
-    /// Render thread, once a frame, as the owner.
-    fn pump(self: *Scheduler) void {
-        const frames = self.frames.fetchAdd(1, .acq_rel) + 1;
-        self.runDue(&self.batch, .render, frames);
-    }
-
-    /// Game thread, once a tick.
-    fn pumpTicks(self: *Scheduler) void {
         const acting = self.owner.enter();
         defer acting.end();
-        self.runDue(&self.tick_batch, .game, self.frameCount());
-    }
-
-    fn runDue(self: *Scheduler, batch: *std.ArrayList(*Task), where: Where, frames: u64) void {
-        const now = timing.now();
         {
             self.lock.lock();
             defer self.lock.unlock();
-            batch.clearRetainingCapacity();
-            batch.appendSlice(self.allocator, self.tasks.items) catch return;
-            self.pumping += 1;
-        }
-        // Ones resumed here and parked again wait for the next frame or tick
-        for (batch.items) |task| {
-            // Claimed first, since the other pump can pick it up the moment it parks there
-            if (task.state.cmpxchgStrong(.parked, .running, .acq_rel, .acquire) != null) continue;
-            const woke = if (task.where == where) task.due(now, frames) else null;
-            if (woke == null) {
-                task.state.store(.parked, .release);
-                continue;
+            if (!self.zones_listed) {
+                timing.list(&self.resumed_zone);
+                timing.list(&self.worker_zone);
+                self.zones_listed = true;
             }
-            task.timed_out = woke.? == .timed_out;
-            const timed = self.resumed_zone.begin();
-            defer timed.end();
-            self.step(task);
+            try self.tasks.append(self.allocator, &c.task);
         }
-        self.reap();
-    }
-
-    /// Runs it on this thread till it parks or ends, then sends it where it asked to go.
-    fn step(self: *Scheduler, task: *Task) void {
-        const previous = running;
-        running = task;
-        task.state.store(.running, .release);
-        task.fiber.resumeHere();
-        running = previous;
-        // Only now is it off this thread, so only now can another pick it up
-        if (task.fiber.finished) {
-            task.state.store(.done, .release);
-        } else if (task.where == .worker) {
-            self.sendToWorker(task);
-        } else {
-            task.state.store(.parked, .release);
-        }
-    }
-
-    fn sendToWorker(self: *Scheduler, task: *Task) void {
-        task.state.store(.on_worker, .release);
-        if (!self.canceled.load(.acquire)) {
-            if (self.group.concurrent(self.io, hop, .{ self, task })) |_| return else |_| {}
-            task.no_worker = true;
-        }
-        // It carries on on the render thread instead
-        task.where = .render;
-        task.wait = .{ .now = true };
-        task.state.store(.parked, .release);
-    }
-
-    fn hop(self: *Scheduler, task: *Task) void {
-        const acting = self.owner.enter();
-        defer acting.end();
-        while (true) {
-            const previous = running;
-            running = task;
-            task.state.store(.running, .release);
-            {
-                const timed = self.worker_zone.begin();
-                defer timed.end();
-                task.fiber.resumeHere();
-            }
-            running = previous;
-            if (task.fiber.finished) {
-                task.state.store(.done, .release);
-                return;
-            }
-            // Asked for a worker again while on one, so keep it here
-            if (task.where == .worker and !self.canceled.load(.acquire)) continue;
-            if (task.where == .worker) task.where = .render;
-            task.state.store(.parked, .release);
+        const task = &c.task;
+        const start = self.owner.root.threads().nextDraw();
+        // Refused straight away, like with no frames
+        if (start.table == null or start.isSettled()) {
+            if (start.table != null) _ = start.take();
+            task.where = .worker;
+            if (self.toOwnWorker(task)) self.step(task);
             return;
         }
+        const raw: rt.core.Promise = .{ .data = start.data, .table = start.table };
+        task.park_on = .{ .hop = raw };
+        if (self.listen(task, raw)) self.step(task);
     }
 
-    /// Ends a pump's batch, and frees what's done if no other pump has one out.
-    fn reap(self: *Scheduler) void {
-        self.lock.lock();
-        defer self.lock.unlock();
-        self.pumping -= 1;
-        if (self.pumping > 0) return;
-        var i: usize = 0;
-        while (i < self.tasks.items.len) {
-            const task = self.tasks.items[i];
-            if (task.state.load(.acquire) != .done) {
-                i += 1;
-                continue;
+    /// Runs `task`, which this thread has claimed, till it parks or ends.
+    fn step(self: *Scheduler, task: *Task) void {
+        const acting = self.owner.enter();
+        defer acting.end();
+        const zone = if (ownWorker() == self) &self.worker_zone else &self.resumed_zone;
+        while (true) {
+            {
+                const timed = zone.begin();
+                defer timed.end();
+                const previous = running;
+                running = task;
+                task.fiber.resumeHere();
+                running = previous;
             }
-            _ = self.tasks.swapRemove(i);
-            task.fiber.deinit();
-            task.free(task);
+            if (task.fiber.finished) return self.finish(task);
+            // Off its stack now, so whatever it parked on can resume it anywhere
+            if (!self.parked(task)) return;
         }
     }
 
-    /// Ends every task. Their waits fail with `error.Canceled` so their `defer`s run, here on this thread.
-    /// Call before the plugin's `stop`, and once nothing else will spawn.
+    /// Just after `task` parked on this thread. True if it carries on right here.
+    fn parked(self: *Scheduler, task: *Task) bool {
+        switch (task.park_on) {
+            .worker => return self.toOwnWorker(task),
+            .none => return true,
+            .promise, .hop => |p| return self.listen(task, p),
+            .signal => {
+                task.state.store(.parked, .release);
+                // Woken before it was off its stack
+                if (!task.ready.load(.acquire)) return false;
+                if (task.state.cmpxchgStrong(.parked, .running, .acq_rel, .acquire) != null) return false;
+                return self.route(task);
+            },
+        }
+    }
+
+    /// Waits for `p`. True if it settled while registering, so `task` carries on right here.
+    fn listen(self: *Scheduler, task: *Task, p: rt.core.Promise) bool {
+        _ = self;
+        const w = Waiter.gpa.create(Waiter) catch {
+            // Out of memory, so it waits right here
+            while (!p.isSettled()) std.Thread.yield() catch {};
+            task.unpark();
+            return true;
+        };
+        w.* = .{ .task = task, .on = std.Thread.getCurrentId() };
+        task.waiter = w;
+        task.state.store(.awaiting, .release);
+        p.then(rt.Task.init(w, Waiter.settled), .{});
+        if (w.state.cmpxchgStrong(.registering, .parked, .acq_rel, .acquire) == null) return false;
+        task.state.store(.running, .release);
+        task.waiter = null;
+        w.release();
+        task.unpark();
+        return true;
+    }
+
+    /// `task` was claimed through `w`.
+    fn claimed(self: *Scheduler, task: *Task, w: *Waiter) void {
+        _ = self;
+        task.waiter = null;
+        task.state.store(.running, .release);
+        w.release();
+        task.unpark();
+    }
+
+    /// Gets a claimed `task` to where it carries on. True if that's right here, so the caller runs it.
+    fn route(self: *Scheduler, task: *Task) bool {
+        if (self.canceled.load(.acquire)) {
+            // Cancelling takes it from here
+            task.state.store(.parked, .release);
+            return false;
+        }
+        if (task.where == .worker) {
+            if (ownWorker() == self) return true;
+            return self.toOwnWorker(task);
+        }
+        // A promise from Wraith carries on where it should. A wake can come from anywhere, so it
+        // goes there at the next frame or tick, like a frame wait.
+        if (task.park_on != .signal) return true;
+        const f = self.owner.root.threads();
+        const hop = if (task.where == .render) f.nextDraw() else f.nextTick();
+        if (hop.table == null) return true;
+        const raw: rt.core.Promise = .{ .data = hop.data, .table = hop.table };
+        task.park_on = .{ .hop = raw };
+        return self.listen(task, raw);
+    }
+
+    /// Sends `task` to one of the plugin's workers. True if it couldn't, so it carries on here.
+    fn toOwnWorker(self: *Scheduler, task: *Task) bool {
+        task.state.store(.running, .release);
+        if (!self.canceled.load(.acquire)) {
+            if (self.group.concurrent(self.io, onWorker, .{ self, task })) |_| return false else |_| {}
+        }
+        task.no_worker = true;
+        if (self.canceled.load(.acquire)) {
+            task.state.store(.parked, .release);
+            return false;
+        }
+        return true;
+    }
+
+    fn onWorker(self: *Scheduler, task: *Task) void {
+        const previous = own_worker;
+        own_worker = self;
+        defer own_worker = previous;
+        task.where = .worker;
+        self.step(task);
+    }
+
+    /// Frees it unless `cancel` has it.
+    fn finish(self: *Scheduler, task: *Task) void {
+        const mine = blk: {
+            self.lock.lock();
+            defer self.lock.unlock();
+            const i = std.mem.indexOfScalar(*Task, self.tasks.items, task) orelse break :blk false;
+            _ = self.tasks.swapRemove(i);
+            break :blk true;
+        };
+        if (!mine) return task.state.store(.done, .release);
+        task.fiber.deinit();
+        task.free(task);
+    }
+
+    /// Ends every task. Their waits fail with `error.Canceled` so their `defer`s run, here on this
+    /// thread. Call before the plugin's `stop`, and once nothing else will spawn.
     pub fn cancel(self: *Scheduler) void {
         if (self.canceled.swap(true, .acq_rel)) return;
         const acting = self.owner.enter();
         defer acting.end();
-        // Waits for a frame or tick in flight
-        const subscription, const tick_subscription = blk: {
-            self.lock.lock();
-            defer self.lock.unlock();
-            const s = .{ self.subscription, self.tick_subscription };
-            self.subscription = null;
-            self.tick_subscription = null;
-            break :blk s;
-        };
-        if (subscription) |s| s.unsubscribe();
-        if (tick_subscription) |s| s.unsubscribe();
-        // Workers too, with their blocking calls cancelled
+        // Workers first, with their blocking calls cancelled
         self.group.cancel(self.io);
-        if (self.zones_listed) {
-            timing.unlist(&self.resumed_zone);
-            timing.unlist(&self.worker_zone);
-            self.zones_listed = false;
-        }
-
         var left: std.ArrayList(*Task) = .empty;
         defer left.deinit(self.allocator);
         {
             self.lock.lock();
             defer self.lock.unlock();
             std.mem.swap(std.ArrayList(*Task), &left, &self.tasks);
+            if (self.zones_listed) {
+                timing.unlist(&self.resumed_zone);
+                timing.unlist(&self.worker_zone);
+                self.zones_listed = false;
+            }
         }
         for (left.items) |task| {
-            var tries: u32 = 0;
-            while (!task.fiber.finished and tries < 1000) : (tries += 1) {
-                const previous = running;
-                running = task;
-                task.fiber.resumeHere();
-                running = previous;
-            }
-            if (!task.fiber.finished) log.warn("A task kept going after being cancelled, so it was dropped mid-way", .{});
+            if (self.take(task)) self.unwind(task);
             task.fiber.deinit();
             task.free(task);
         }
+    }
+
+    /// Claims `task` for `cancel` once it's parked, waiting for it to get there. False if it ended.
+    fn take(self: *Scheduler, task: *Task) bool {
+        _ = self;
+        var tries: u32 = 0;
+        while (true) : (tries += 1) {
+            switch (task.state.load(.acquire)) {
+                .done => return false,
+                .parked => if (task.state.cmpxchgStrong(.parked, .running, .acq_rel, .acquire) == null) return true,
+                .awaiting => if (task.waiter) |w| if (w.state.cmpxchgStrong(.parked, .claimed, .acq_rel, .acquire) == null) {
+                    // Its waiter may never run now
+                    const p = switch (task.park_on) {
+                        .promise, .hop => |p| p,
+                        else => null,
+                    };
+                    task.waiter = null;
+                    task.state.store(.running, .release);
+                    w.release();
+                    if (task.park_on == .hop) {
+                        p.?.cancel();
+                        task.park_on = .none;
+                    }
+                    return true;
+                },
+                .running => {},
+            }
+            if (tries == 5000) log.warn("Waiting for a task to stop running so it can be cancelled", .{});
+            std.Thread.yield() catch {};
+        }
+    }
+
+    /// Runs a cancelled task here till it ends. Its waits fail straight away.
+    fn unwind(self: *Scheduler, task: *Task) void {
+        _ = self;
+        var tries: u32 = 0;
+        while (!task.fiber.finished and tries < 1000) : (tries += 1) {
+            const previous = running;
+            running = task;
+            task.fiber.resumeHere();
+            running = previous;
+        }
+        if (!task.fiber.finished) log.warn("A task kept going after being cancelled, so it was dropped mid-way", .{});
     }
 };
 
@@ -386,56 +455,41 @@ pub fn Waited(comptime P: type) type {
     };
 }
 
-/// Waits for an `async` call into Wraith, like `try sdk.tasks.wait(w.frame().next())`. A task parks
-/// and carries on where it was: at the frame after it settles on the render thread, at the tick after
-/// on the game thread, and a task on a worker just waits there. Elsewhere it blocks, so never on the
-/// render or game thread. A task that's cancelled lets go of it.
+/// Waits for an `async` call into Wraith, like `try sdk.tasks.wait(w.images().load(path))`. A task
+/// parks and carries on where Wraith says, which for most calls is where it was. Elsewhere it
+/// blocks, so never on the render or game thread. A task that's cancelled lets go of it.
 pub fn wait(promise: anytype) Waited(@TypeOf(promise)) {
     if (promise.table == null) return promise.take().?;
     const t = current() orelse {
-        if (frame.onRenderThread()) return error.OnRenderThread;
-        if (frame.onGameThread()) return error.OnGameThread;
+        if (threads.onRenderThread()) return error.OnRenderThread;
+        if (threads.onGameThread()) return error.OnGameThread;
         return promise.wait();
     };
-    if (t.where == .worker) {
-        // Workers can block, which keeps it on one, but cancelling still ends it
-        while (!promise.isSettled()) {
-            if (t.scheduler.canceled.load(.acquire)) {
-                promise.cancel();
-                return error.Canceled;
-            }
-            t.scheduler.io.sleep(.fromMilliseconds(1), .awake) catch {};
-        }
-        return promise.take().?;
-    }
-    if (!promise.isSettled()) {
-        // On the heap, since the promise can settle after a cancelled task's gone
-        const Waiter = struct {
-            task: *Task,
-            refs: Atomic(u8) = .init(2),
-            const gpa = std.heap.smp_allocator;
-
-            fn settled(self: *@This()) void {
-                self.task.wake();
-                self.release();
-            }
-
-            fn release(self: *@This()) void {
-                if (self.refs.fetchSub(1, .acq_rel) == 1) gpa.destroy(self);
-            }
-        };
-        const waiter = Waiter.gpa.create(Waiter) catch return promise.wait();
-        waiter.* = .{ .task = t };
-        t.prepareSignal();
-        promise.then(waiter, Waiter.settled, .now);
-        const parked = t.park(if (t.where == .game) .game else .render, .{ .signal = true });
-        waiter.release();
-        parked catch |err| {
-            promise.cancel();
-            return err;
-        };
-    }
+    if (!promise.isSettled()) try park(t, promise, t.where);
     return promise.take().?;
+}
+
+/// Parks `t` on `promise`, carrying on on `to`, like a hop in `threads.sal`. Even when it's settled,
+/// since it says where to go. `t` takes it after.
+pub fn park(t: *Task, promise: anytype, to: Where) error{Canceled}!void {
+    const was = t.where;
+    t.yield(.{ .promise = .{ .data = promise.data, .table = promise.table } }, to) catch |err| {
+        promise.cancel();
+        t.where = was;
+        return err;
+    };
+}
+
+/// From inside a task: on to one of the plugin's own workers. Error if it couldn't get one.
+pub fn toOwnWorker(t: *Task) error{ Canceled, NoWorker }!void {
+    if (t.where == .worker) return;
+    const was = t.where;
+    try t.yield(.worker, .worker);
+    if (t.no_worker) {
+        t.no_worker = false;
+        t.where = was;
+        return error.NoWorker;
+    }
 }
 
 const tests = struct {
@@ -446,6 +500,8 @@ const tests = struct {
         fake: Fake = .{},
         group: std.Io.Group = .init,
         scheduler: Scheduler = undefined,
+        /// Frames run so far.
+        frames: Atomic(u32) = .init(0),
 
         fn init(self: *Rig) void {
             self.fake.attach();
@@ -458,11 +514,16 @@ const tests = struct {
             self.fake.detach();
         }
 
+        fn frame(self: *Rig) void {
+            _ = self.frames.fetchAdd(1, .acq_rel);
+            self.fake.runFrame();
+        }
+
         /// Frames on this thread, the render thread here, till `done` or it gives up.
         fn runUntil(self: *Rig, done: *const Atomic(bool)) !void {
             for (0..2000) |_| {
                 if (done.load(.acquire)) return;
-                self.fake.runFrame();
+                self.frame();
                 try testing.io.sleep(.fromMilliseconds(1), .awake);
             }
             return error.TimedOut;
@@ -474,15 +535,15 @@ const tests = struct {
     }
 
     const Flow = struct {
-        frames: [8]u64 = @splat(0),
+        frames: [8]u32 = @splat(0),
         threads: [8]u32 = @splat(0),
         n: usize = 0,
         sum: u32 = 0,
         go: Atomic(bool) = .init(false),
         done: Atomic(bool) = .init(false),
 
-        fn note(self: *Flow, s: *Scheduler) void {
-            self.frames[self.n] = s.frameCount();
+        fn note(self: *Flow, rig: *Rig) void {
+            self.frames[self.n] = rig.frames.load(.acquire);
             self.threads[self.n] = threadId();
             self.n += 1;
         }
@@ -495,22 +556,22 @@ const tests = struct {
             return self.go.load(.acquire);
         }
 
-        fn run(self: *Flow, s: *Scheduler, io: std.Io) !void {
+        fn run(self: *Flow, rig: *Rig, io: std.Io) !void {
             defer self.done.store(true, .release);
-            self.note(s);
-            try frame.next(io);
-            self.note(s);
-            try frame.wait(io, 2);
-            self.note(s);
-            try frame.toWorker(io);
-            self.note(s);
+            self.note(rig);
+            try threads.nextDraw(io);
+            self.note(rig);
+            try threads.waitDraws(io, 2);
+            self.note(rig);
+            try threads.toWorker(io);
+            self.note(rig);
             // Back to the render thread to run it, then back here
-            self.sum = try frame.onRender(io, add, .{ 2, 3 });
-            self.note(s);
-            try frame.toRender(io);
-            self.note(s);
-            try frame.until(io, going, .{self}, .{});
-            self.note(s);
+            self.sum = try threads.onRender(io, add, .{ 2, 3 });
+            self.note(rig);
+            try threads.toRender(io);
+            self.note(rig);
+            try threads.until(io, going, .{self}, .{});
+            self.note(rig);
         }
     };
 
@@ -519,19 +580,19 @@ const tests = struct {
         rig.init();
         defer rig.deinit();
         var flow: Flow = .{};
-        try rig.scheduler.spawn(Flow.run, .{ &flow, &rig.scheduler, testing.io });
+        try rig.scheduler.spawn(Flow.run, .{ &flow, &rig, testing.io });
         // Nothing runs till a frame does
         try testing.expectEqual(0, flow.n);
 
-        rig.fake.runFrame();
-        rig.fake.runFrame();
+        rig.frame();
+        rig.frame();
         try testing.expectEqual(2, flow.n);
-        try testing.expectEqualSlices(u64, &.{ 1, 2 }, flow.frames[0..2]);
-        rig.fake.runFrame();
-        rig.fake.runFrame();
+        try testing.expectEqualSlices(u32, &.{ 1, 2 }, flow.frames[0..2]);
+        rig.frame();
+        rig.frame();
         try testing.expectEqual(4, flow.frames[2]);
         while (flow.n < 6) {
-            rig.fake.runFrame();
+            rig.frame();
             try testing.io.sleep(.fromMilliseconds(1), .awake);
         }
         flow.go.store(true, .release);
@@ -557,21 +618,21 @@ const tests = struct {
 
         fn note(self: *GameHop) void {
             self.threads[self.n] = threadId();
-            self.on_game[self.n] = frame.onGameThread();
+            self.on_game[self.n] = threads.onGameThread();
             self.n += 1;
         }
 
         fn run(self: *GameHop, io: std.Io) !void {
             defer self.done.store(true, .release);
-            try frame.toGame(io);
+            try threads.toGame(io);
             self.note();
             // Frame waits carry on on the render thread
-            try frame.next(io);
+            try threads.nextDraw(io);
             self.note();
-            try frame.toGame(io);
-            try frame.nextTick(io);
+            try threads.toGame(io);
+            try threads.nextTick(io);
             self.note();
-            try frame.toRender(io);
+            try threads.toRender(io);
             self.note();
         }
 
@@ -623,10 +684,10 @@ const tests = struct {
 
             fn run(self: *@This(), io: std.Io) !void {
                 defer self.done.store(true, .release);
-                try frame.toWorker(io);
+                try threads.toWorker(io);
                 self.thread = threadId();
                 self.sum = useStack();
-                try frame.toRender(io);
+                try threads.toRender(io);
             }
         };
         var rig: Rig = .{};
@@ -640,12 +701,12 @@ const tests = struct {
     }
 
     const Forever = struct {
-        cleaned_up: bool = false,
+        cleaned_up: Atomic(bool) = .init(false),
         err: ?anyerror = null,
 
         fn run(self: *Forever, io: std.Io) !void {
-            defer self.cleaned_up = true;
-            frame.delay(io, .fromSeconds(3600)) catch |err| {
+            defer self.cleaned_up.store(true, .release);
+            threads.delay(io, .fromSeconds(3600)) catch |err| {
                 self.err = err;
                 return err;
             };
@@ -658,18 +719,18 @@ const tests = struct {
         defer rig.deinit();
         var forever: Forever = .{};
         try rig.scheduler.spawn(Forever.run, .{ &forever, testing.io });
-        rig.fake.runFrame();
-        rig.fake.runFrame();
-        try testing.expect(!forever.cleaned_up);
+        rig.frame();
+        rig.frame();
+        try testing.expect(!forever.cleaned_up.load(.acquire));
         const zones = rig.fake.zones;
         rig.scheduler.cancel();
-        try testing.expect(forever.cleaned_up);
+        try testing.expect(forever.cleaned_up.load(.acquire));
         try testing.expectEqual(zones - 2, rig.fake.zones);
         try testing.expectEqual(error.Canceled, forever.err.?);
         try testing.expectError(error.Canceled, rig.scheduler.spawn(Forever.run, .{ &forever, testing.io }));
     }
 
-    test "without frames, tasks start on a worker" {
+    test "without frames, tasks start on a worker, and cancelling reaches their blocking calls" {
         var rig: Rig = .{};
         rig.init();
         defer rig.deinit();
@@ -679,6 +740,7 @@ const tests = struct {
             forever: Forever = .{},
             fn run(self: *@This(), io: std.Io) !void {
                 self.thread.store(threadId(), .release);
+                // Sleeps on the plugin's own worker, on its `io`
                 return self.forever.run(io);
             }
         };
@@ -687,7 +749,8 @@ const tests = struct {
         while (started.thread.load(.acquire) == 0) try testing.io.sleep(.fromMilliseconds(1), .awake);
         try testing.expect(started.thread.load(.acquire) != threadId());
         rig.scheduler.cancel();
-        try testing.expect(started.forever.cleaned_up);
+        try testing.expect(started.forever.cleaned_up.load(.acquire));
+        try testing.expectEqual(error.Canceled, started.forever.err.?);
     }
 
     const Awaiting = struct {
@@ -697,7 +760,7 @@ const tests = struct {
         fn run(self: *Awaiting) !void {
             defer self.done.store(true, .release);
             // Any `async` call, here the next frame's
-            try wait(Owner.current().?.root.frame().next());
+            try wait(Owner.current().?.root.threads().nextDraw());
             self.thread = threadId();
         }
     };
@@ -719,22 +782,56 @@ const tests = struct {
 
         fn run(self: *OnWorker, io: std.Io) !void {
             defer self.done.store(true, .release);
-            try frame.toWorker(io);
+            try threads.toWorker(io);
             self.worker = threadId();
-            try wait(Owner.current().?.root.frame().next());
+            try wait(Owner.current().?.root.threads().nextDraw());
             self.after = threadId();
         }
     };
 
-    test "a task on a worker stays on it while it waits" {
+    test "a task on a worker carries on on one after it waits" {
         var rig: Rig = .{};
         rig.init();
         defer rig.deinit();
         var on: OnWorker = .{};
         try rig.scheduler.spawn(OnWorker.run, .{ &on, testing.io });
         try rig.runUntil(&on.done);
+        try testing.expect(on.worker != threadId());
         try testing.expect(on.after != threadId());
-        try testing.expectEqual(on.worker, on.after);
+    }
+
+    const Woken = struct {
+        task: Atomic(?*Task) = .init(null),
+        thread: u32 = 0,
+        done: Atomic(bool) = .init(false),
+
+        fn run(self: *Woken) !void {
+            defer self.done.store(true, .release);
+            const t = current().?;
+            t.prepareSignal();
+            self.task.store(t, .release);
+            try t.parkUntilWoken(.render);
+            self.thread = threadId();
+        }
+
+        fn wakeIt(self: *Woken) void {
+            while (self.task.load(.acquire) == null) std.Thread.yield() catch {};
+            self.task.load(.acquire).?.wake();
+        }
+    };
+
+    test "a wake from another thread carries on where the task waited, at the next frame" {
+        var rig: Rig = .{};
+        rig.init();
+        defer rig.deinit();
+        var woken: Woken = .{};
+        try rig.scheduler.spawn(Woken.run, .{&woken});
+        rig.frame();
+        const waker = try std.Thread.spawn(.{}, Woken.wakeIt, .{&woken});
+        waker.join();
+        try testing.expect(!woken.done.load(.acquire));
+        try rig.runUntil(&woken.done);
+        try testing.expectEqual(threadId(), woken.thread);
     }
 };
 

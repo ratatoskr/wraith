@@ -9,7 +9,7 @@ const api = @import("wraith_api");
 const Owner = @import("Owner.zig");
 const sdk_log = @import("log.zig");
 const overlay = @import("overlay.zig");
-const frame = @import("frame.zig");
+const threads = @import("threads.zig");
 const timing = @import("timing.zig");
 const signatures = @import("signatures.zig");
 const tasks = @import("tasks.zig");
@@ -34,9 +34,9 @@ pub const Context = struct {
     drawing_windows: *bool,
 
     /// Runs `func(args...)` as a task, as the plugin. It starts on the render thread at the next frame, where
-    /// it can draw, and waits like `sdk.frame.next(io)`, messages, keys and captures carry on there at the
-    /// same point in a later frame. `sdk.frame.toWorker(io)` moves it to a worker for slow or blocking work,
-    /// `toRender` brings it back. Never block on the render thread, the game waits for it.
+    /// it can draw. Waits carry on at the same point: `sdk.threads.nextDraw(io)` at a later frame on the render
+    /// thread, and other async calls where the task was. `sdk.threads.toWorker(io)` moves it to a worker for
+    /// slow or blocking work, `toRender` brings it back. Never block on the render thread, the game waits for it.
     /// Before `stop`, every task is cancelled. Its waits fail with `error.Canceled` so it can wind down.
     /// `func` returns `void` or an error union, whose errors are logged.
     pub fn spawn(self: *Context, comptime func: anytype, args: std.meta.ArgsTuple(@TypeOf(func))) tasks.SpawnError!void {
@@ -44,17 +44,17 @@ pub const Context = struct {
     }
 
     /// Calls `func(target)` once a frame on the render thread, where it can update and draw UI.
-    /// See `sdk.frame.onFrame`.
-    pub fn onFrame(self: *Context, target: anytype, comptime func: fn (@TypeOf(target)) void) frame.Error!frame.FrameSubscription {
+    /// See `sdk.threads.onDraw`.
+    pub fn onDraw(self: *Context, target: anytype, comptime func: fn (@TypeOf(target)) void) threads.Error!threads.Subscription {
         const acting = self.owner.enter();
         defer acting.end();
-        return frame.onFrame(target, func);
+        return threads.onDraw(target, func);
     }
 
     /// `owner` must not move.
     pub fn addWindow(self: *Context, owner: anytype) !void {
         if (!self.drawing_windows.*) {
-            _ = try self.onFrame(self.windows, ui.WindowSystem.draw);
+            _ = try self.onDraw(self.windows, ui.WindowSystem.draw);
             self.drawing_windows.* = true;
         }
         try self.windows.add(owner);
@@ -105,7 +105,7 @@ pub const Context = struct {
             self.allocator.destroy(item);
             return err;
         };
-        _ = try self.onFrame(item, Item.sync);
+        _ = try self.onDraw(item, Item.sync);
     }
 
     /// `T` needs defaults on every field.
@@ -246,17 +246,17 @@ pub fn exportPlugin(comptime P: type) void {
             };
             started = true;
             if (@hasDecl(P, "stopping")) {
-                _ = context.wraith.frame().onStopping(api.wraith.Frame.Stopping.init(&instance, onStopping)) catch |err| log.warn("Can't wind down before stopping: {t}", .{err});
+                _ = context.wraith.threads().onStopping(api.wraith.Threads.Stopping.init(&instance, onStopping)) catch |err| log.warn("Can't wind down before stopping: {t}", .{err});
             }
             return true;
         }
 
         /// `P.stopping` runs as a task, which can move to the game thread to put things back.
-        fn onStopping(_: *P, done: api.wraith.Frame.WindDown) void {
+        fn onStopping(_: *P, done: api.wraith.Threads.WindDown) void {
             context.spawn(windDown, .{done}) catch done.done();
         }
 
-        fn windDown(done: api.wraith.Frame.WindDown) void {
+        fn windDown(done: api.wraith.Threads.WindDown) void {
             defer done.done();
             const result = instance.stopping(&context);
             if (@typeInfo(@TypeOf(result)) == .error_union) {

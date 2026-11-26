@@ -19,14 +19,14 @@ const Bus = core.Event(fn () void);
 pub const Subscription = Bus.Subscription;
 const W = api.wraith;
 const log = core.log.scoped(.wraith_runtime);
-/// From `frame.sal`, kept till it's cancelled.
-pub const Tick = W.Frame.Tick;
-/// From `frame.sal`, kept till it's cancelled.
-pub const GameTick = W.Frame.GameTick;
-/// From `frame.sal`, kept till it runs.
-pub const Task = W.Frame.Task;
-/// From `frame.sal`, kept till the plugin's gone.
-pub const Stopping = W.Frame.Stopping;
+/// From `threads.sal`, kept till it's cancelled.
+pub const Draw = W.Threads.Draw;
+/// From `threads.sal`, kept till it's cancelled.
+pub const Tick = W.Threads.Tick;
+/// From `threads.sal`, kept till it runs.
+pub const Task = W.Threads.Task;
+/// From `threads.sal`, kept till the plugin's gone.
+pub const Stopping = W.Threads.Stopping;
 
 var bus: Bus = .init(std.heap.page_allocator);
 var tick_bus: Bus = .init(std.heap.page_allocator);
@@ -82,7 +82,7 @@ pub fn onGameThread() bool {
 
 /// What the game's camera showed last, from its plugin.
 var view_lock: sync.RwLock = .{};
-var game_view: W.Frame.View = .{ .viewMatrix = .identity, .projection = .identity, .known = false };
+var game_view: W.Display.View = .{ .viewMatrix = .identity, .projection = .identity, .known = false };
 /// `core.timing.now()` when it was set, under `view_lock`.
 var view_at: u64 = 0;
 /// Older than this and it's not known any more, since the plugin's stopped saying.
@@ -95,7 +95,7 @@ pub fn setView(view_: W.Mat4, projection: W.Mat4) void {
     view_at = core.timing.now();
 }
 
-pub fn view() W.Frame.View {
+pub fn view() W.Display.View {
     view_lock.lockShared();
     defer view_lock.unlockShared();
     var v = game_view;
@@ -233,7 +233,7 @@ fn rankOf(loaded: *const Loaded) u8 {
     return 0;
 }
 
-/// Through `frame.sal`.
+/// Through `threads.sal`.
 pub fn driveTicks(loaded: *Loaded) api.FrameError!*Driver {
     const d = try loaded.allocator.create(Driver);
     d.* = .{ .loaded = loaded, .rank = rankOf(loaded), .order = 0 };
@@ -266,9 +266,9 @@ pub const Frame = struct {
 
     pub const Callback = union(enum) {
         /// Render thread, and can draw.
-        frame: Tick,
+        frame: Draw,
         /// Game thread, and can't.
-        game: GameTick,
+        game: Tick,
         /// Once, as the plugin's about to stop. On no bus.
         stopping: Stopping,
     };
@@ -314,19 +314,19 @@ pub const Frame = struct {
 
 var callbacks: host.Owned(Frame) = .{};
 
-/// Its frame callbacks that are still on.
+/// Its draw callbacks that are still on.
 pub fn countOf(loaded: *Loaded) u32 {
     return callbacks.count(&loaded.owner);
 }
 
-/// Through `frame.sal`. Released if it fails.
-pub fn onFrame(loaded: *Loaded, tick: Tick) api.FrameError!*Frame {
+/// Through `threads.sal`. Released if it fails.
+pub fn onDraw(loaded: *Loaded, draw: Draw) api.FrameError!*Frame {
     if (!frames.load(.acquire)) {
-        tick.release();
+        draw.release();
         return error.NoFrames;
     }
-    return subscribe(loaded, .{ .frame = tick }, &bus) catch |err| {
-        tick.release();
+    return subscribe(loaded, .{ .frame = draw }, &bus) catch |err| {
+        draw.release();
         return err;
     };
 }
@@ -336,15 +336,15 @@ pub fn subscribeFrames(ctx: anytype, comptime fire: fn (@TypeOf(ctx)) void) !Bus
     return bus.subscribeUnscoped(ctx, fire);
 }
 
-/// Through `frame.sal`. Released if it fails. Fine without frames, since a driver can tick.
-pub fn onTick(loaded: *Loaded, tick: GameTick) api.FrameError!*Frame {
+/// Through `threads.sal`. Released if it fails. Fine without frames, since a driver can tick.
+pub fn onTick(loaded: *Loaded, tick: Tick) api.FrameError!*Frame {
     return subscribe(loaded, .{ .game = tick }, &tick_bus) catch |err| {
         tick.release();
         return err;
     };
 }
 
-/// Through `frame.sal`. Released if it fails.
+/// Through `threads.sal`. Released if it fails.
 pub fn onStopping(loaded: *Loaded, stopping: Stopping) api.FrameError!*Frame {
     const f = loaded.allocator.create(Frame) catch {
         stopping.release();
@@ -427,6 +427,8 @@ const Posted = union(enum) {
     sal: Task,
     /// `Frame.next`'s promise.
     next: host.wraith.NextResolver,
+    /// Code waiting on a promise, carrying on here. See `PluginQueue`.
+    waiter: api.salamander.Task,
 
     fn run(self: Posted) void {
         switch (self) {
@@ -435,6 +437,7 @@ const Posted = union(enum) {
                 f.release();
             },
             .next => |r| r.resolve({}),
+            .waiter => |t| t.invoke(.{}),
         }
     }
 
@@ -443,11 +446,27 @@ const Posted = union(enum) {
             // The plugin's going, so there's nobody to tell
             .sal => |f| f.release(),
             .next => |r| r.drop(),
+            // Its code's going, so it isn't called
+            .waiter => {},
         }
     }
 };
 
-/// Runs before frame callbacks, so one sees what was posted for its frame.
+/// The plugin's posts as a Salamander queue, adopted for its owner so posting stops once it
+/// closes. What's posted runs at the next frame inside the plugin's frame, like its frame
+/// callbacks, so code carrying on on the render thread can draw.
+pub const PluginQueue = struct {
+    pub fn post(loaded: *Loaded, task: api.salamander.Task) bool {
+        postAny(loaded, .{ .waiter = task }) catch return false;
+        return true;
+    }
+
+    pub fn poll(_: *Loaded) u32 {
+        return 0;
+    }
+};
+
+/// Runs before draw callbacks, so one sees what was posted for its frame.
 const Queue = struct {
     loaded: *Loaded,
     lock: sync.RwLock = .{},
@@ -466,7 +485,7 @@ const Queue = struct {
             if (self.waiting.items.len == 0) return;
             std.mem.swap(std.ArrayList(Posted), &self.waiting, &self.running);
         }
-        // Scoped like frame callbacks, since `onRender` posts can draw
+        // Scoped like draw callbacks, since `onRender` posts can draw
         host.ui.runAs(self.loaded, &self.warned, self, runPosts);
         self.running.clearRetainingCapacity();
     }
@@ -514,7 +533,7 @@ var queues: host.Owned(Queue) = .{};
 /// So two threads posting for one owner don't both make a queue.
 var creating: sync.RwLock = .{};
 
-/// Through `frame.sal`. Released if it fails.
+/// Through `threads.sal`. Released if it fails.
 pub fn post(loaded: *Loaded, task: Task) api.FrameError!void {
     postAny(loaded, .{ .sal = task }) catch |err| {
         task.release();
@@ -574,25 +593,25 @@ const tests = struct {
         repost: bool = false,
         reposted: u32 = 0,
 
-        fn onFrame(self: *Counter) void {
+        fn onDraw(self: *Counter) void {
             self.frames += 1;
         }
 
-        fn onPost(self: *Counter, status: sdk.frame.PostStatus) void {
+        fn onPost(self: *Counter, status: sdk.threads.PostStatus) void {
             switch (status) {
                 .run => {
                     self.ran += 1;
                     self.frames_at_post = self.frames;
                     if (self.repost) {
                         self.repost = false;
-                        sdk.frame.post(self, onReposted) catch unreachable;
+                        sdk.threads.post(self, onReposted) catch unreachable;
                     }
                 },
                 .cancelled => self.cancelled += 1,
             }
         }
 
-        fn onReposted(self: *Counter, status: sdk.frame.PostStatus) void {
+        fn onReposted(self: *Counter, status: sdk.threads.PostStatus) void {
             if (status == .run) self.reposted += 1 else self.cancelled += 1;
         }
     };
@@ -607,8 +626,8 @@ const tests = struct {
         defer acting.end();
 
         var counter: Counter = .{ .repost = true };
-        const sub = try sdk.frame.onFrame(&counter, Counter.onFrame);
-        try sdk.frame.post(&counter, Counter.onPost);
+        const sub = try sdk.threads.onDraw(&counter, Counter.onDraw);
+        try sdk.threads.post(&counter, Counter.onPost);
         try testing.expectEqual(0, counter.ran);
         run();
         try testing.expectEqual(1, counter.frames);
@@ -633,10 +652,10 @@ const tests = struct {
         a.init("a");
         defer a.loaded.deinitForTest();
         const State = struct {
-            done: ?W.Frame.WindDown = null,
+            done: ?W.Threads.WindDown = null,
             calls: Atomic(u32) = .init(0),
 
-            fn stopping(self: *@This(), done: W.Frame.WindDown) void {
+            fn stopping(self: *@This(), done: W.Threads.WindDown) void {
                 self.done = done;
                 _ = self.calls.fetchAdd(1, .acq_rel);
             }
@@ -645,7 +664,7 @@ const tests = struct {
         {
             const acting = a.owner().enter();
             defer acting.end();
-            _ = try sdk.wraith.root().?.frame().onStopping(W.Frame.Stopping.init(&state, State.stopping));
+            _ = try sdk.wraith.root().?.threads().onStopping(W.Threads.Stopping.init(&state, State.stopping));
         }
         // Ticking lately, and this is the game thread, which mustn't wait on itself
         tickForTests();
@@ -680,7 +699,7 @@ const tests = struct {
             fn post(owner: sdk.Owner, c: *Counter) void {
                 const acting = owner.enter();
                 defer acting.end();
-                for (0..10) |_| sdk.frame.post(c, Counter.onPost) catch unreachable;
+                for (0..10) |_| sdk.threads.post(c, Counter.onPost) catch unreachable;
             }
         };
         var threads: [4]std.Thread = undefined;
@@ -699,17 +718,17 @@ const tests = struct {
         {
             const acting = a.owner().enter();
             defer acting.end();
-            _ = try sdk.frame.onFrame(&counter, Counter.onFrame);
-            try sdk.frame.post(&counter, Counter.onPost);
-            try sdk.frame.post(&counter, Counter.onPost);
+            _ = try sdk.threads.onDraw(&counter, Counter.onDraw);
+            try sdk.threads.post(&counter, Counter.onPost);
+            try sdk.threads.post(&counter, Counter.onPost);
         }
         a.loaded.owner.close();
         try testing.expectEqual(2, counter.cancelled);
         {
             const acting = a.owner().enter();
             defer acting.end();
-            try testing.expectError(error.OwnerGone, sdk.frame.post(&counter, Counter.onPost));
-            try testing.expectError(error.OwnerGone, sdk.frame.onFrame(&counter, Counter.onFrame));
+            try testing.expectError(error.OwnerGone, sdk.threads.post(&counter, Counter.onPost));
+            try testing.expectError(error.OwnerGone, sdk.threads.onDraw(&counter, Counter.onDraw));
         }
         run();
         try testing.expectEqual(0, counter.ran);
@@ -724,8 +743,8 @@ const tests = struct {
         const acting = a.owner().enter();
         defer acting.end();
         var counter: Counter = .{};
-        try testing.expectError(error.NoFrames, sdk.frame.post(&counter, Counter.onPost));
-        try testing.expectError(error.NoFrames, sdk.frame.onFrame(&counter, Counter.onFrame));
+        try testing.expectError(error.NoFrames, sdk.threads.post(&counter, Counter.onPost));
+        try testing.expectError(error.NoFrames, sdk.threads.onDraw(&counter, Counter.onDraw));
     }
 
     const Order = struct {
@@ -741,7 +760,7 @@ const tests = struct {
             self.ticked_on = std.Thread.getCurrentId();
         }
 
-        fn onFrame(self: *Order) void {
+        fn onDraw(self: *Order) void {
             self.seen[self.n] = 'f';
             self.n += 1;
         }
@@ -757,18 +776,18 @@ const tests = struct {
         defer acting.end();
 
         var order: Order = .{};
-        const frame_sub = try sdk.frame.onFrame(&order, Order.onFrame);
+        const frame_sub = try sdk.threads.onDraw(&order, Order.onDraw);
         defer frame_sub.unsubscribe();
-        const tick_sub = try sdk.frame.onTick(&order, Order.onTick);
+        const tick_sub = try sdk.threads.onTick(&order, Order.onTick);
         defer tick_sub.unsubscribe();
         run();
         run();
         try testing.expectEqualStrings("tftf", order.seen[0..order.n]);
         try testing.expect(order.game_thread);
-        try testing.expect(sdk.frame.onGameThread());
+        try testing.expect(sdk.threads.onGameThread());
     }
 
-    fn tickOn(driver: sdk.frame.TickDriver) void {
+    fn tickOn(driver: sdk.threads.TickDriver) void {
         driver.tick();
     }
 
@@ -813,7 +832,7 @@ const tests = struct {
         defer b.loaded.deinitForTest();
         const acting = a.owner().enter();
         defer acting.end();
-        const f = sdk.wraith.root().?.frame();
+        const f = sdk.wraith.root().?.threads();
         // Without a driver, this is the render thread and ticks run on it too
         run();
         const me = std.Thread.getCurrentId();
@@ -843,14 +862,14 @@ const tests = struct {
 
         // From a worker back to the render thread, at its next frame
         const Back = struct {
-            fn go(owner: sdk.Owner, out: *Seen(api.salamander.Plain(sdk.api.wraith.Frame, "toRender"))) void {
+            fn go(owner: sdk.Owner, out: *Seen(api.salamander.Plain(sdk.api.wraith.Threads, "toRender"))) void {
                 const on = owner.enter();
                 defer on.end();
-                out.* = seen(sdk.wraith.root().?.frame().toRender());
+                out.* = seen(sdk.wraith.root().?.threads().toRender());
                 out.watch();
             }
         };
-        var back: Seen(api.salamander.Plain(sdk.api.wraith.Frame, "toRender")) = undefined;
+        var back: Seen(api.salamander.Plain(sdk.api.wraith.Threads, "toRender")) = undefined;
         const t = try std.Thread.spawn(.{}, Back.go, .{ a.owner(), &back });
         t.join();
         try testing.expect(!back.done.load(.acquire));
@@ -881,6 +900,51 @@ const tests = struct {
         try testing.expectEqual(me, waited.on.load(.acquire));
     }
 
+    test "carrying on on the render thread is inside the plugin's frame, so it can draw" {
+        setFrames(true);
+        defer setFrames(false);
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        defer host.threads.stop();
+        var a: FakePlugin = undefined;
+        a.init("a");
+        defer a.loaded.deinitForTest();
+        const acting = a.owner().enter();
+        defer acting.end();
+        const Frames = struct {
+            n: Atomic(u32) = .init(0),
+            /// `n` when the hop carried on.
+            at: Atomic(u32) = .init(std.math.maxInt(u32)),
+            promise: api.salamander.Plain(sdk.api.wraith.Threads, "toRender") = .{},
+
+            fn onDraw(self: *@This()) void {
+                _ = self.n.fetchAdd(1, .acq_rel);
+            }
+
+            fn settled(self: *@This()) void {
+                _ = self.promise.take();
+                self.at.store(self.n.load(.acquire), .release);
+            }
+
+            fn go(owner: sdk.Owner, self: *@This()) void {
+                const on = owner.enter();
+                defer on.end();
+                self.promise = sdk.wraith.root().?.threads().toRender();
+                self.promise.then(self, settled, .now);
+            }
+        };
+        var counted: Frames = .{};
+        const sub = try sdk.threads.onDraw(&counted, Frames.onDraw);
+        defer sub.unsubscribe();
+        run();
+        const t = try std.Thread.spawn(.{}, Frames.go, .{ a.owner(), &counted });
+        t.join();
+        run();
+        // With the plugin's posts, which run just before its draw callbacks in the same scope
+        try testing.expectEqual(1, counted.at.load(.acquire));
+        try testing.expectEqual(2, counted.n.load(.acquire));
+    }
+
     test "the game's view, as its plugin last set it, till it's stale" {
         var a: FakePlugin = undefined;
         a.init("a");
@@ -889,14 +953,14 @@ const tests = struct {
         defer acting.end();
         const math = sdk.math;
 
-        try testing.expectEqual(null, sdk.frame.view());
+        try testing.expectEqual(null, sdk.display.view());
         const moved = math.Mat4.translation(.{ .x = 2 });
-        sdk.frame.setView(moved, .identity);
-        const v = sdk.frame.view().?;
+        sdk.display.setView(moved, .identity);
+        const v = sdk.display.view().?;
         try testing.expectEqual(moved, v.view);
         // A plugin that's stopped saying doesn't leave an old one
         view_at -|= 2 * view_ns;
-        try testing.expectEqual(null, sdk.frame.view());
+        try testing.expectEqual(null, sdk.display.view());
     }
 
     test "a plugin's colour space hint goes with it" {
@@ -905,7 +969,7 @@ const tests = struct {
         {
             const acting = a.owner().enter();
             defer acting.end();
-            sdk.frame.setColorSpace(.hdr10);
+            sdk.display.setColorSpace(.hdr10);
         }
         try testing.expectEqual(gfx.ColorSpace.hdr10, gfx.color_space_hint.get().?);
         a.loaded.owner.close();
@@ -930,14 +994,14 @@ const tests = struct {
         const sub = blk: {
             const acting = a.owner().enter();
             defer acting.end();
-            break :blk try sdk.frame.onTick(&order, Order.onTick);
+            break :blk try sdk.threads.onTick(&order, Order.onTick);
         };
         defer sub.unsubscribe();
 
         const engine_driver = blk: {
             const acting = engine.owner().enter();
             defer acting.end();
-            break :blk try sdk.frame.driveTicks();
+            break :blk try sdk.threads.driveTicks();
         };
         try testing.expect(engine_driver.active());
         // Ticks wait for the driver now
@@ -957,7 +1021,7 @@ const tests = struct {
         const plain_driver = blk: {
             const acting = a.owner().enter();
             defer acting.end();
-            break :blk try sdk.frame.driveTicks();
+            break :blk try sdk.threads.driveTicks();
         };
         try testing.expect(!plain_driver.active());
         plain_driver.tick();
@@ -967,7 +1031,7 @@ const tests = struct {
         {
             const acting = game.owner().enter();
             defer acting.end();
-            _ = try sdk.frame.driveTicks();
+            _ = try sdk.threads.driveTicks();
         }
         try testing.expect(!engine_driver.active());
         engine_driver.tick();

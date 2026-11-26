@@ -1,4 +1,4 @@
-//! Dear ImGui through the runtime's, for `sdk.ui`. Draw from `sdk.frame.onFrame`. Toasts, the cursor,
+//! Dear ImGui through the runtime's, for `sdk.ui`. Draw from `sdk.threads.onDraw`. Toasts, the cursor,
 //! the game's input and menu items are `wraith.sal`'s `ui` area.
 
 const std = @import("std");

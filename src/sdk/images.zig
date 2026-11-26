@@ -7,7 +7,7 @@ const api = @import("wraith_api");
 const tuft_image = @import("tuft_image");
 const ui = @import("wraith_ui");
 const Owner = @import("Owner.zig");
-const frame = @import("frame.zig");
+const threads = @import("threads.zig");
 const tasks = @import("tasks.zig");
 
 pub const Image = api.wraith.Image;
@@ -17,7 +17,7 @@ pub const Fit = ui.ImageFit;
 /// Bigger files aren't images we'd want to load.
 pub const max_file = 64 << 20;
 
-pub const LoadError = frame.MoveError || std.Io.Dir.ReadFileAllocError || error{
+pub const LoadError = threads.MoveError || std.Io.Dir.ReadFileAllocError || error{
     InvalidImage,
     TooBig,
     Failed,
@@ -36,13 +36,13 @@ pub const LoadError = frame.MoveError || std.Io.Dir.ReadFileAllocError || error{
 pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) LoadError!Image {
     const task = tasks.current();
     const was = if (task) |t| t.where else null;
-    if (task == null and frame.onRenderThread()) return error.OnRenderThread;
-    if (task == null and frame.onGameThread()) return error.OnGameThread;
+    if (task == null and threads.onRenderThread()) return error.OnRenderThread;
+    if (task == null and threads.onGameThread()) return error.OnGameThread;
     const owner = Owner.current() orelse return error.Gone;
-    if (task != null) try frame.toWorker(io);
+    if (task != null) try threads.toWorker(io);
     defer if (was) |w| switch (w) {
-        .render => frame.toRender(io) catch {},
-        .game => frame.toGame(io) catch {},
+        .render => threads.toRender(io) catch {},
+        .game => threads.toGame(io) catch {},
         .worker => {},
     };
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_file));

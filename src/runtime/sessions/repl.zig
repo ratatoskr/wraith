@@ -79,7 +79,7 @@ fn declarationEnd(line: []const u8) usize {
 const testing = std.testing;
 
 test "only code that awaits" {
-    try testing.expect(awaits("await frame.next()"));
+    try testing.expect(awaits("await threads.nextDraw()"));
     try testing.expect(awaits("const x = (await f());"));
     try testing.expect(!awaits("awaited + my_await"));
     try testing.expect(!awaits("1 + 1"));

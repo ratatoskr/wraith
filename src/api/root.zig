@@ -12,7 +12,7 @@ pub const salamander = @import("salamander_runtime");
 /// Wraith's API as Salamander traits, from every file in `schemas`, bundled. Every plugin and
 /// script sees the same.
 pub const wraith_sal = @embedFile("wraith.sal");
-/// Made from `schemas` as the build runs, with real methods like `root.frame().stats()`. It's all in
+/// Made from `schemas` as the build runs, with real methods like `root.threads().toGame()`. It's all in
 /// `namespace Wraith`.
 pub const wraith = @import("wraith_api_zig").Wraith;
 /// Every type as it crosses, for passing tables around.

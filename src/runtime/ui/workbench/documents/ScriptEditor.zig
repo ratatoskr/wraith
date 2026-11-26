@@ -22,17 +22,17 @@ const example =
     \\// ui, memory, log, keybinds, config and schema are globals here.
     \\// What this starts keeps going until the session's reset (see Sessions)
     \\let frames = 0;
-    \\frame.onFrame(() => {
+    \\threads.onDraw(() => {
     \\    ui.window("Hello", () => ui.text("frames:", ++frames));
     \\});
 ;
 
 /// Lua has no ui yet, so it counts and logs.
 const example_lua =
-    \\-- memory, log, keybinds, config, frame and timers are globals here.
+    \\-- memory, log, keybinds, config, threads and timers are globals here.
     \\-- What this starts keeps going until the session's reset (see Sessions)
     \\frames = 0
-    \\frame.onFrame(function() frames = frames + 1 end)
+    \\threads.onDraw(function() frames = frames + 1 end)
     \\timers.setInterval(function() print("frames:", frames) end, 1000)
 ;
 
@@ -237,7 +237,7 @@ fn drawStatus(self: *ScriptEditor) void {
     const s = scripts.find(self.session);
     if (s != null and s.?.running != null) {
         const r = s.?.running.?;
-        ui.textDisabled("{s} session running on {s}: {d} frame callback(s), {d} keybind(s), {d} hook(s)", .{ title, on, r.frames, r.keybinds, r.hooks });
+        ui.textDisabled("{s} session running on {s}: {d} draw callback(s), {d} keybind(s), {d} hook(s)", .{ title, on, r.frames, r.keybinds, r.hooks });
     } else {
         ui.textDisabled("{s}, on {s}. Ctrl+Enter runs it. Right-click for more", .{ title, on });
     }

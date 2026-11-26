@@ -107,8 +107,8 @@ pub fn failAll() void {
 
 const sal = api.salamander;
 const W = api.wraith;
-/// What `frame.sal`'s `capture` gives.
-pub const Promise = sal.Plain(W.Frame, "capture");
+/// What `display.sal`'s `capture` gives.
+pub const Promise = sal.Plain(W.Display, "capture");
 // Settles back on the thread that asked
 const Request = @import("threads.zig").Back(@import("wraith.zig").ResolverOf(Promise));
 
@@ -239,7 +239,7 @@ const Queue = struct {
 var queues: host.Owned(Queue) = .{};
 var creating: sync.RwLock = .{};
 
-/// Through `frame.sal`. Settles on the render thread once the frame's copied.
+/// Through `display.sal`. Settles on the render thread once the frame's copied.
 pub fn capture(loaded: *Loaded, point: Point) Promise {
     const pair = Promise.make() catch return .{};
     if (!frame.framesOn()) {
@@ -250,7 +250,7 @@ pub fn capture(loaded: *Loaded, point: Point) Promise {
         pair.resolver.fail(error.Failed);
         return pair.promise;
     });
-    queue.capture(point, .of(pair.resolver)) catch pair.resolver.fail(error.Failed);
+    queue.capture(point, .of(pair.resolver, loaded)) catch pair.resolver.fail(error.Failed);
     return pair.promise;
 }
 
@@ -278,10 +278,10 @@ const tests = struct {
     const zeros: [16]u8 = .{ 1, 2, 3, 4 } ++ @as([12]u8, @splat(0));
     const image: api.Image = .{ .width = 4, .height = 1, .pitch = 16, .format = .rgba8, .graphics_api = .d3d11, .pixels = &zeros };
 
-    fn start(loaded: *Loaded) sal.Object(W.Frame) {
+    fn start(loaded: *Loaded) sal.Object(W.Display) {
         loaded.initForTest(testing.allocator, "a");
         sdk.Owner.attach(loaded.root());
-        return sdk.wraith.root().?.frame();
+        return sdk.wraith.root().?.display();
     }
 
     fn stop(loaded: *Loaded) void {

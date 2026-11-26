@@ -252,7 +252,7 @@ fn startFirst(loaded: *Loaded, options: W.Memory.Scan.Options, resolver: wraith.
         step.deinit();
         return error.Failed;
     };
-    try Job.start(s, tables, step, .{ .first = .of(resolver) });
+    try Job.start(s, tables, step, .{ .first = .of(resolver, s.loaded) });
 }
 
 /// A scan's step on a worker. Only enters the plugin's owner to settle, so unloading doesn't wait
@@ -376,7 +376,7 @@ fn startNext(s: *scans.Scan, compare: W.Memory.Scan.Compare, value: []const u8, 
         },
         else => return error.InvalidValue,
     };
-    try Job.start(s, tables, step, .{ .next = .of(resolver) });
+    try Job.start(s, tables, step, .{ .next = .of(resolver, s.loaded) });
 }
 
 /// Names regions' modules, looking each one up once.

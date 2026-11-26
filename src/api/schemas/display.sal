@@ -1,0 +1,119 @@
+// What the game shows: its camera's view, how its output's encoded, copies of its frames and how
+// fast they come.
+
+namespace Wraith;
+
+// How pixels are laid out. Every format here is 4 bytes a pixel except rgba16f's 8.
+enum PixelFormat : u8 {
+    unknown,
+    rgba8,
+    bgra8,
+    // Alpha is junk
+    bgrx8,
+    // Packed in 32 bits from the low bits up: 10 red, 10 green, 10 blue, 2 alpha
+    rgb10a2,
+    // Same with red and blue swapped
+    bgr10a2,
+    // Half floats, usually scRGB
+    rgba16f,
+}
+
+enum ColorSpace : u8 {
+    // SDR, sRGB-encoded
+    srgb,
+    // Linear, Rec.709 primaries, 1.0 is 80 nits and values can go past 0..1
+    scrgb,
+    // Rec.2020 primaries with the PQ curve, 1.0 is 10000 nits
+    hdr10,
+}
+
+enum GraphicsApi : u8 { unknown, d3d9, d3d10, d3d11, d3d12, vulkan, opengl }
+
+namespace Capture {
+    enum Point : u8 {
+        // Just the game, before the overlay draws on it
+        before_overlay,
+        // With the overlay on top, as it's presented
+        after_overlay,
+    }
+}
+
+// A copy of a frame, which whoever takes it owns.
+struct Capture {
+    u32 width;
+    u32 height;
+    // Bytes from one row to the next, top row first. Can be more than a row of pixels.
+    u32 pitch;
+    PixelFormat format;
+    // The graphics API's own format code: DXGI_FORMAT, VkFormat, D3DFORMAT or a GL internal format
+    u32 native_format;
+    GraphicsApi graphics_api;
+    ColorSpace color_space;
+    // SDR white on the game's display, in nits
+    f32 sdr_white_nits;
+    blob pixels;
+}
+
+error CaptureError {
+    NoFrames = 1,
+    // This game's graphics can't be copied, or the overlay can't draw
+    Failed,
+}
+
+namespace Display {
+    // What the game's camera shows, for drawing over the world, like gizmos and labels. Row-vector
+    // style, so clip = [x y z 1] * view * projection, the way Direct3D has it: the camera looks down +z
+    // and depth goes from 0 at the near plane to 1 at the far one. Clip x and y go from -1 to 1 across
+    // the game's window, with y up.
+    struct View {
+        Mat4 viewMatrix;
+        Mat4 projection;
+        // False till a game's plugin sets one, or once the last is more than a second old
+        bool known;
+    }
+
+    struct Stats {
+        // What these cover. Less than the window early on or after a reset.
+        f32 window_seconds;
+        u32 frames;
+        // From the average frame time
+        f32 fps;
+        f32 avg_ms;
+        f32 min_ms;
+        f32 max_ms;
+        f32 p50_ms;
+        f32 p95_ms;
+        f32 p99_ms;
+        // The fps at the 99th and 99.9th percentile frame times
+        f32 low_1_fps;
+        f32 low_01_fps;
+        // Frames over `hitch_factor` times the median
+        u32 hitches;
+        f32 hitch_factor;
+        // Since the game started or the stats were reset
+        u64 total_frames;
+        f32 total_avg_ms;
+        f32 total_min_ms;
+        f32 total_max_ms;
+    }
+}
+
+trait Display {
+    // From a game or game engine plugin each frame, once the camera's where it'll be drawn from,
+    // after the free camera has moved it. See `View` for which way round. Any thread.
+    void setView(Mat4 view, Mat4 projection);
+    // The last view set. Any thread.
+    View gameView();
+    // From a game or game engine plugin that knows how the game's output is encoded, like Unreal
+    // saying HDR's on. Wraith goes by it where the swap chain can't say, like a 10-bit one Wraith
+    // joined late. What the game sets on its swap chain itself still wins. Gone with the plugin.
+    // Any thread.
+    void setColorSpace(ColorSpace space);
+    // The next frame drawn at `point`, copied only because someone asked. Any thread.
+    async Capture!CaptureError capture(Capture.Point point);
+    // Worked out a few times a second, so it's cheap every frame. Any thread.
+    Stats frameStats();
+    // The newest frame times in ms, oldest first. Good till the thread's next call into Wraith.
+    // Any thread.
+    []f32 times();
+}

@@ -1,0 +1,12 @@
+// The C fixture's own: one of Wraith's types, which comes from wraith.h, and a service it offers
+struct Spot {
+    Vec3 at;
+    []Vec3 path;
+}
+
+struct Out { u32 n; }
+
+// What the fixture's service gave it, for plugins that depend on it
+[Service] trait CService {
+    u32 total();
+}

@@ -30,13 +30,18 @@ pub fn partial(comptime Desc: type, comptime Impl: type) *const sal.Table(Desc) 
     }.table;
 }
 
-const Next = sal.Plain(W.Frame, "next");
-const NextResolver = @FieldType(@typeInfo(@typeInfo(@TypeOf(Next.make)).@"fn".return_type.?).error_union.payload, "resolver");
+const Next = sal.Plain(W.Threads, "nextDraw");
+const NextResolver = ResolverOf(Next);
+const Delay = sal.Plain(W.Threads, "delay");
+
+fn ResolverOf(comptime P: type) type {
+    return @FieldType(@typeInfo(@typeInfo(@TypeOf(P.make)).@"fn".return_type.?).error_union.payload, "resolver");
+}
 
 pub const Fake = struct {
-    /// `post` and `onFrame` refuse, like in a game whose frames the overlay can't hook.
+    /// `post` and `onDraw` refuse, like in a game whose frames the overlay can't hook.
     no_frames: bool = false,
-    frame_stats: W.Frame.Stats = std.mem.zeroes(W.Frame.Stats),
+    frame_stats: W.Display.Stats = std.mem.zeroes(W.Display.Stats),
     frame_times: []const f32 = &.{},
     debug_enabled: bool = true,
 
@@ -62,6 +67,21 @@ pub const Fake = struct {
     game_thread: std.Thread.Id = 0,
     lock: std.Io.Mutex = .init,
     nexts: std.ArrayList(NextResolver) = .empty,
+    /// The thread `runFrame` last ran on.
+    render_thread: std.Thread.Id = 0,
+    /// Where hops and delays carry on, like the runtime's: the render thread's in `runFrame`, the
+    /// game thread's in `runTick`. Made on first use.
+    render_queue: sal.Queue = .{},
+    game_queue: sal.Queue = .{},
+    /// Under `lock`.
+    delays: std.ArrayList(Delayed) = .empty,
+
+    const Delayed = struct {
+        at: u64,
+        resolver: ResolverOf(Delay),
+    };
+
+    const Thread = enum { render, game, worker };
 
     const FakeImage = struct {
         size: W.Image.Size,
@@ -75,7 +95,7 @@ pub const Fake = struct {
     }
 
     const Tick = struct {
-        tick: union(enum) { frame: W.Frame.Tick, game: W.Frame.GameTick },
+        tick: union(enum) { frame: W.Threads.Draw, game: W.Threads.Tick },
         live: bool,
     };
 
@@ -94,6 +114,60 @@ pub const Fake = struct {
         Owner.detach();
         self.cancelPosts();
         self.nexts.deinit(gpa);
+        for (self.delays.items) |d| d.resolver.drop();
+        self.delays.deinit(gpa);
+    }
+
+    fn here(self: *Fake) Thread {
+        const me = std.Thread.getCurrentId();
+        if (@atomicLoad(std.Thread.Id, &self.render_thread, .monotonic) == me) return .render;
+        if (@atomicLoad(std.Thread.Id, &self.game_thread, .monotonic) == me) return .game;
+        return .worker;
+    }
+
+    /// Where code carries on on `thread`. Null for a worker, which carries on wherever it settles.
+    fn queueOf(self: *Fake, thread: Thread) ?sal.Queue {
+        self.lock.lockUncancelable(std.testing.io);
+        defer self.lock.unlock(std.testing.io);
+        const q = switch (thread) {
+            .render => &self.render_queue,
+            .game => &self.game_queue,
+            .worker => return null,
+        };
+        if (q.table == null) q.* = sal.host().queue() catch return null;
+        return q.*;
+    }
+
+    fn poll(self: *Fake, thread: Thread) void {
+        const q = blk: {
+            self.lock.lockUncancelable(std.testing.io);
+            defer self.lock.unlock(std.testing.io);
+            break :blk switch (thread) {
+                .render => self.render_queue,
+                .game => self.game_queue,
+                .worker => return,
+            };
+        };
+        if (q.table != null) _ = q.poll();
+    }
+
+    fn checkDelays(self: *Fake) void {
+        const now = @import("timing.zig").now();
+        var due: std.ArrayList(ResolverOf(Delay)) = .empty;
+        defer due.deinit(gpa);
+        {
+            self.lock.lockUncancelable(std.testing.io);
+            defer self.lock.unlock(std.testing.io);
+            var i: usize = 0;
+            while (i < self.delays.items.len) {
+                if (self.delays.items[i].at > now) {
+                    i += 1;
+                    continue;
+                }
+                due.append(gpa, self.delays.swapRemove(i).resolver) catch return;
+            }
+        }
+        for (due.items) |r| r.settle({});
     }
 
     pub fn lastScope(self: *const Fake) []const u8 {
@@ -104,9 +178,10 @@ pub const Fake = struct {
         return self.last_message_buf[0..self.last_message_len];
     }
 
-    /// Ticks unless `driven`, settles what's posted, then runs frame callbacks, like the runtime's
+    /// Ticks unless `driven`, settles what's posted, then runs draw callbacks, like the runtime's
     /// frames.
     pub fn runFrame(self: *Fake) void {
+        @atomicStore(std.Thread.Id, &self.render_thread, std.Thread.getCurrentId(), .monotonic);
         if (!self.driven) self.runTick();
         var due: std.ArrayList(NextResolver) = .empty;
         defer due.deinit(gpa);
@@ -116,6 +191,9 @@ pub const Fake = struct {
             std.mem.swap(std.ArrayList(NextResolver), &self.nexts, &due);
         }
         for (due.items) |r| r.resolve({});
+        // What carries on here goes with the posts, before draw callbacks, like the plugin's own queue
+        self.checkDelays();
+        self.poll(.render);
         var i: usize = 0;
         while (i < self.ticks_len) : (i += 1) {
             if (!self.ticks[i].live) continue;
@@ -137,6 +215,8 @@ pub const Fake = struct {
                 .frame => {},
             }
         }
+        self.checkDelays();
+        self.poll(.game);
     }
 
     /// Drops what's posted, so it's cancelled.
@@ -152,8 +232,12 @@ pub const Fake = struct {
     }
 
     const Areas = struct {
-        pub fn frame(self: *Fake) W.Frame {
-            return .init(self, partial(W.Frame, Frames));
+        pub fn threads(self: *Fake) W.Threads {
+            return .init(self, partial(W.Threads, Threads));
+        }
+
+        pub fn display(self: *Fake) W.Display {
+            return .init(self, partial(W.Display, Display));
         }
 
         pub fn log(self: *Fake) W.Log {
@@ -169,20 +253,20 @@ pub const Fake = struct {
         }
     };
 
-    const Frames = struct {
-        pub fn onFrame(self: *Fake, tick: W.Frame.Tick) sal.Plain(W.Frame, "onFrame") {
+    const Threads = struct {
+        pub fn onDraw(self: *Fake, draw: W.Threads.Draw) sal.Plain(W.Threads, "onDraw") {
             if (self.no_frames) return error.NoFrames;
             if (self.ticks_len == self.ticks.len) return error.Failed;
-            self.ticks[self.ticks_len] = .{ .tick = .{ .frame = tick }, .live = true };
+            self.ticks[self.ticks_len] = .{ .tick = .{ .frame = draw }, .live = true };
             self.ticks_len += 1;
-            return .init(&self.ticks[self.ticks_len - 1], partial(W.Frame.Subscription, Subscription));
+            return .init(&self.ticks[self.ticks_len - 1], partial(W.Threads.Subscription, Subscription));
         }
 
-        pub fn onTick(self: *Fake, tick: W.Frame.GameTick) sal.Plain(W.Frame, "onTick") {
+        pub fn onTick(self: *Fake, tick: W.Threads.Tick) sal.Plain(W.Threads, "onTick") {
             if (self.ticks_len == self.ticks.len) return error.Failed;
             self.ticks[self.ticks_len] = .{ .tick = .{ .game = tick }, .live = true };
             self.ticks_len += 1;
-            return .init(&self.ticks[self.ticks_len - 1], partial(W.Frame.Subscription, Subscription));
+            return .init(&self.ticks[self.ticks_len - 1], partial(W.Threads.Subscription, Subscription));
         }
 
         pub fn onGameThread(self: *Fake) bool {
@@ -190,7 +274,7 @@ pub const Fake = struct {
             return id != 0 and id == std.Thread.getCurrentId();
         }
 
-        pub fn next(self: *Fake) Next {
+        pub fn nextDraw(self: *Fake) Next {
             const pair = Next.make() catch return .{};
             if (self.no_frames) {
                 pair.resolver.fail(error.NoFrames);
@@ -202,7 +286,56 @@ pub const Fake = struct {
             return pair.promise;
         }
 
-        pub fn frameStats(self: *Fake) W.Frame.Stats {
+        pub fn toRender(self: *Fake) sal.Plain(W.Threads, "toRender") {
+            return hop(self, "toRender", .render, false);
+        }
+
+        pub fn toGame(self: *Fake) sal.Plain(W.Threads, "toGame") {
+            return hop(self, "toGame", .game, false);
+        }
+
+        pub fn toWorker(self: *Fake) sal.Plain(W.Threads, "toWorker") {
+            return hop(self, "toWorker", .worker, false);
+        }
+
+        pub fn nextTick(self: *Fake) sal.Plain(W.Threads, "nextTick") {
+            return hop(self, "nextTick", .game, true);
+        }
+
+        /// Like the runtime's: right here if it's there already unless `always`.
+        fn hop(self: *Fake, comptime name: []const u8, to: Thread, always: bool) sal.Plain(W.Threads, name) {
+            const P = sal.Plain(W.Threads, name);
+            const pair = P.make() catch return .{};
+            if (!always and self.here() == to) {
+                pair.resolver.settle({});
+                return pair.promise;
+            }
+            if (self.no_frames and to != .worker) {
+                pair.resolver.fail(error.NoFrames);
+                return pair.promise;
+            }
+            if (self.queueOf(to)) |q| pair.resolver.carryOn(q);
+            pair.resolver.settle({});
+            return pair.promise;
+        }
+
+        pub fn delay(self: *Fake, ms: u32) Delay {
+            const pair = Delay.make() catch return .{};
+            if (self.no_frames) {
+                pair.resolver.fail(error.NoFrames);
+                return pair.promise;
+            }
+            if (self.queueOf(self.here())) |q| pair.resolver.carryOn(q);
+            const at = @import("timing.zig").now() +| @as(u64, ms) * std.time.ns_per_ms;
+            self.lock.lockUncancelable(std.testing.io);
+            defer self.lock.unlock(std.testing.io);
+            self.delays.append(gpa, .{ .at = at, .resolver = pair.resolver }) catch pair.resolver.drop();
+            return pair.promise;
+        }
+    };
+
+    const Display = struct {
+        pub fn frameStats(self: *Fake) W.Display.Stats {
             return self.frame_stats;
         }
 

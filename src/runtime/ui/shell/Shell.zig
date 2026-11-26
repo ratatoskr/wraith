@@ -1557,7 +1557,7 @@ const tests = struct {
 
         const scripts = &shell.workbench.scripts;
         const session = try scripts.newSession("test");
-        scripts.run(session, "frame.onFrame(() => {}); 40 + 2");
+        scripts.run(session, "threads.onDraw(() => {}); 40 + 2");
         settle(&rig, scripts, session, 2);
         try testing.expectEqual(.code, scripts.console.items[0].kind);
         try testing.expectEqualStrings("42", scripts.console.items[1].text);

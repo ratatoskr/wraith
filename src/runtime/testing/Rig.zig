@@ -73,7 +73,7 @@ pub fn init(self: *Rig, options: Options) !void {
     try self.start(options);
 }
 
-/// Runs plugins' frame callbacks in the overlay's `update` and takes their captures, like the game does.
+/// Runs plugins' draw callbacks in the overlay's `update` and takes their captures, like the game does.
 /// Until `deinit` or `reload`.
 pub fn runPluginFrames(self: *Rig) !void {
     try self.overlay.update.subscribe(&self.scope, self, runFrame);

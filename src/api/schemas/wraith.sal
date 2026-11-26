@@ -11,12 +11,13 @@ namespace Wraith;
     Config config();
     // What Wraith's Timings and Signatures windows list, for native code
     Diagnostics diagnostics();
-    Frame frame();
+    // What the game shows: its camera's view, captures and frame times
+    Display display();
     // Which game this is, its files and what it's made with
     Game game();
     Schema schema();
     Hooks hooks();
-    // Dear ImGui, for drawing in a frame callback
+    // Dear ImGui, for drawing in a draw callback
     ImGui imgui();
     Images images();
     Input input();
@@ -33,6 +34,8 @@ namespace Wraith;
     Sound sound();
     // Locks to share between plugins, threads and tasks
     Sync sync();
+    // Drawing and ticking each frame, and moving between the render thread, game thread and workers
+    Threads threads();
     Tweaks tweaks();
     // The overlay: draw lists, toasts, the cursor and the game's input
     Ui ui();

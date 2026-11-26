@@ -26,7 +26,8 @@ pub const salamander = @import("salamander.zig");
 
 pub const hooks = @import("hooks.zig");
 pub const overlay = @import("overlay.zig");
-pub const frame = @import("frame.zig");
+pub const threads = @import("threads.zig");
+pub const display = @import("display.zig");
 pub const tasks = @import("tasks.zig");
 /// A lock that tasks wait for by parking. See `sync.Mutex`.
 pub const sync = @import("sync.zig");
@@ -56,7 +57,8 @@ test {
     _ = log;
     _ = hooks;
     _ = overlay;
-    _ = frame;
+    _ = threads;
+    _ = display;
     _ = tasks;
     _ = keybinds;
     _ = timing;

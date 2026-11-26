@@ -1,7 +1,10 @@
 //! Where plugin code runs: the render thread, the game thread or a worker. The same for every
-//! language: an async call carries on on the thread that made it, and the hops in `frame.sal` on
+//! language: an async call carries on on the thread that made it, and the hops in `threads.sal` on
 //! another. Promises say so themselves, through their resolver's `carryOn`, so it holds however
-//! the waiter waits, even when it comes after the promise settled.
+//! the waiter waits, even when it comes after the promise settled. See `Back`.
+//!
+//! On the render thread a plugin carries on inside its own frame, like its draw callbacks, so it
+//! can draw there.
 
 const std = @import("std");
 
@@ -9,6 +12,7 @@ const sal = @import("wraith_api").salamander;
 const sync = @import("tuft_sys").sync;
 
 const host = @import("root.zig");
+const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const gpa = std.heap.smp_allocator;
 
@@ -96,10 +100,16 @@ pub fn stop() void {
     stopped = false;
 }
 
-/// Has whoever waits on `r`'s promise carry on on `thread`. Not when nothing polls it, so then
-/// they carry on wherever it settles.
-pub fn carryOn(r: anytype, thread: Thread) void {
-    if (reachable(thread)) r.carryOn(queueOf(thread));
+/// What runs on `thread` for `loaded`. The render thread's runs inside its frame, so it can draw.
+pub fn queueFor(loaded: *Loaded, thread: Thread) sal.Queue {
+    if (thread == .render) if (host.wraith.tablesOf(loaded)) |t| return .{ .data = @intFromPtr(loaded), .table = t.render_queue };
+    return queueOf(thread);
+}
+
+/// Has whoever waits on `r`'s promise carry on on `thread`, `loaded`'s own way. Not when nothing
+/// polls it, so then they carry on wherever it settles.
+pub fn carryOn(r: anytype, loaded: *Loaded, thread: Thread) void {
+    if (reachable(thread)) r.carryOn(queueFor(loaded, thread));
 }
 
 /// What `delay` settles, soonest last.
@@ -146,8 +156,8 @@ pub fn Back(comptime R: type) type {
 
         r: R,
 
-        pub fn of(r: R) Self {
-            carryOn(r, here());
+        pub fn of(r: R, loaded: *Loaded) Self {
+            carryOn(r, loaded, here());
             return .{ .r = r };
         }
 

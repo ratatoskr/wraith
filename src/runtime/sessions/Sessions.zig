@@ -1,6 +1,6 @@
 //! The workbench's script sessions, in JS or Lua on Salamander. Requests come as runtime messages,
 //! and each session is a script of its own that keeps its state between runs, with Wraith's areas
-//! as globals like `frame` and `hooks`, and every loaded plugin's services under its namespace,
+//! as globals like `threads` and `hooks`, and every loaded plugin's services under its namespace,
 //! like `Unreal.engine()`. Tweaks run in them too, each in a session of its own. Each is for a
 //! project, and starts with its schemas and names, see `host.projects`.
 //!
@@ -838,7 +838,7 @@ const tests = struct {
         defer rig.deinit();
 
         try rig.send(protocol.topics.run, protocol.Run{ .session = 1, .name = "one", .code = "var x = 40; x + 2" });
-        try rig.send(protocol.topics.run, protocol.Run{ .session = 2, .code = "frame.onFrame(() => {}); typeof memory" });
+        try rig.send(protocol.topics.run, protocol.Run{ .session = 2, .code = "threads.onDraw(() => {}); typeof memory" });
         rig.step();
         try testing.expectEqualStrings("var x = 40; x + 2", rig.heard.line(0));
         try testing.expectEqualStrings("42", rig.heard.line(1));
@@ -1048,11 +1048,11 @@ const tests = struct {
             \\@js
             \\var mine = "one";
             \\function items() {{ return [[1, itemName(1)]]; }}
-            \\frame.onFrame(() => {{}});
+            \\threads.onDraw(() => {{}});
             \\@tweak "Two"
             \\@js
             \\var mine = "two";
-            \\frame.onFrame(() => {{}});
+            \\threads.onDraw(() => {{}});
             \\function off() {{ globalThis.twoOff = data.base; }}
             \\@tweak "Three"
             \\@data
@@ -1226,7 +1226,7 @@ const tests = struct {
             \\@js
             \\count += 1;
             \\globalThis.hp = combatHelper() + count + mine;
-            \\frame.onFrame(() => {});
+            \\threads.onDraw(() => {});
             \\function off() { order.push("Max HP"); }
             \\@end
             \\@end
@@ -1445,7 +1445,7 @@ const tests = struct {
             \\@tweak "One"
             \\@lua
             \\mine = "one"
-            \\frame:onFrame(function() end)
+            \\threads:onDraw(function() end)
         , .{@intFromPtr(&Seen.off)});
         try rig.send(protocol.topics.run, protocol.Run{ .session = 9, .name = "kai", .code = source, .tweak = true, .part = "One" });
         rig.step();

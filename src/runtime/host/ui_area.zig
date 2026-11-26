@@ -131,7 +131,7 @@ const Dialog = struct {
             const title = a.dupe(u8, options.title) catch break :copy false;
             const folder = a.dupe(u8, options.folder) catch break :copy false;
             if (kind == .file) {
-                d.what = .{ .file = .{ .resolver = .of(pair.resolver), .options = .{
+                d.what = .{ .file = .{ .resolver = .of(pair.resolver, loaded), .options = .{
                     .mode = if (options.save) .save else .open,
                     .over = over,
                     .title = title,
@@ -141,7 +141,7 @@ const Dialog = struct {
                     .extension = a.dupe(u8, options.extension) catch break :copy false,
                 } } };
             } else {
-                d.what = .{ .folder = .{ .resolver = .of(pair.resolver), .options = .{ .over = over, .title = title, .folder = folder } } };
+                d.what = .{ .folder = .{ .resolver = .of(pair.resolver, loaded), .options = .{ .over = over, .title = title, .folder = folder } } };
             }
             break :copy true;
         };

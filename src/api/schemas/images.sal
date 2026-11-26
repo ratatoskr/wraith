@@ -36,6 +36,6 @@ trait Images {
     // A file, read and decoded on a worker. A path that isn't full is in the plugin's own folder,
     // like `images/logo.png`. Fine from any thread.
     async Image!ImageError load(string path);
-    // Draws it in the current window, in a frame callback. A zero size draws it at its own size.
+    // Draws it in the current window, in a draw callback. A zero size draws it at its own size.
     void draw(Image image, ImVec2 size);
 }

@@ -37,9 +37,9 @@ pub fn write(a: std.mem.Allocator, root: Value, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\// Generated from dear_bindings' dcimgui.json by `zig build imgui-sal`. Don't edit it.
         \\//
-        \\// Dear ImGui, for drawing in a frame callback. Each function's dcimgui's without `ImGui_`, so
+        \\// Dear ImGui, for drawing in a draw callback. Each function's dcimgui's without `ImGui_`, so
         \\// `ImGui::Button` is `Button`, and its version taking every argument is `ButtonEx`. Calls outside
-        \\// a frame callback do nothing.
+        \\// a draw callback do nothing.
         \\
         \\namespace Wraith;
         \\

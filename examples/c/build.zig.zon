@@ -1,0 +1,10 @@
+.{
+    .name = .example_c,
+    .version = "0.0.0",
+    .dependencies = .{
+        // This checkout of Wraith. A plugin of your own takes it from git
+        .wraith = .{ .path = "../.." },
+    },
+    .paths = .{ "src", "schemas", "wraith.json" },
+    .fingerprint = 0x3945d1732123e060,
+}
