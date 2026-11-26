@@ -254,6 +254,19 @@ fn listClasses(rt: *const Runtime, a: Allocator, image_name: []const u8) E![]con
     return out[0..count];
 }
 
+/// A field of `c`'s or one it inherits, like `VolumeParameter<T>.m_Value` on a `ClampedFloatParameter`.
+/// Its own first, so one that hides a parent's wins.
+fn fieldIn(rt: *const Runtime, c: *Class, name: []const u8) ?*ManagedRuntime.Field {
+    var at: ?*Class = c;
+    var depth: usize = 0;
+    while (at) |class| : (at = rt.classParent(class)) {
+        depth += 1;
+        if (depth > 64) return null;
+        if (ManagedRuntime.findField(rt, class, name)) |f| return f;
+    }
+    return null;
+}
+
 fn classCalled(rt: *const Runtime, name: []const u8) E!*Class {
     return ManagedRuntime.findClass(rt, name) orelse error.NotFound;
 }
@@ -308,12 +321,12 @@ fn listMethods(rt: *const Runtime, a: Allocator, name: []const u8) E![]const W.M
 }
 
 fn offsetOf(rt: *const Runtime, class_name: []const u8, field: []const u8) E!usize {
-    const f = ManagedRuntime.findField(rt, try classCalled(rt, class_name), field) orelse return error.NotFound;
+    const f = fieldIn(rt, try classCalled(rt, class_name), field) orelse return error.NotFound;
     return rt.fieldOffset(f);
 }
 
 fn staticOf(rt: *const Runtime, class_name: []const u8, field: []const u8) sal.Plain(Managed, "staticAddress") {
-    const f = ManagedRuntime.findField(rt, try classCalled(rt, class_name), field) orelse return error.NotFound;
+    const f = fieldIn(rt, try classCalled(rt, class_name), field) orelse return error.NotFound;
     return rt.staticAddress(f) catch |err| switch (err) {
         error.NotStatic => error.NotFound,
         error.ThreadStatic, error.Unsupported => error.Unsupported,
@@ -430,7 +443,7 @@ fn classNameOf(rt: *const Runtime, a: Allocator, object: usize) E![]const u8 {
 
 /// An instance field by name, looking in parents too.
 fn instanceField(rt: *const Runtime, object: usize, name: []const u8) E!*ManagedRuntime.Field {
-    const f = ManagedRuntime.findField(rt, try objectClass(rt, object), name) orelse return error.NotFound;
+    const f = fieldIn(rt, try objectClass(rt, object), name) orelse return error.NotFound;
     if (rt.isStatic(f) or rt.isLiteral(f)) return error.NotFound;
     return f;
 }
@@ -517,6 +530,12 @@ test "a real game's C#, through the API" {
     try testing.expectEqualStrings("System.Environment/SpecialFolder", nested.full_name);
     try testing.expect(nested.value_type);
     try testing.expectError(error.NotFound, m.find("No.Such.Class"));
+
+    // A field's found through a class that inherits it, like a volume parameter's `m_Value`
+    const inherited = for (try m.fields("System.Exception")) |f| {
+        if (!f.is_static) break f;
+    } else return error.NoExceptionField;
+    try testing.expectEqual(try m.fieldOffset("System.Exception", inherited.name), try m.fieldOffset("System.ArgumentNullException", inherited.name));
 
     const empty = for (try m.fields("System.String")) |f| {
         if (std.mem.eql(u8, f.name, "Empty")) break f;

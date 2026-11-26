@@ -149,6 +149,9 @@ const Options = struct {
 
 /// How close and far orbiting goes, in metres.
 const min_distance = 0.2;
+/// Degrees the field of view goes between, by the zoom keys or the slider.
+const min_fov = 5;
+const max_fov = 150;
 const max_distance = 100;
 
 const MouseLook = enum { right, middle, left, always };
@@ -662,7 +665,7 @@ fn look(self: *Camera, options: Options, pad: ?tuft_input.Axes, dt: f32, typing:
     self.goal.roll += std.math.clamp(roll, -1, 1) * std.math.degreesToRadians(45) * dt;
     if (self.goal.fov > 0) {
         const change = std.math.clamp(zoom, -1, 1) * std.math.degreesToRadians(20) * dt;
-        self.goal.fov = std.math.clamp(self.goal.fov + change, std.math.degreesToRadians(5), std.math.degreesToRadians(150));
+        self.goal.fov = std.math.clamp(self.goal.fov + change, std.math.degreesToRadians(min_fov), std.math.degreesToRadians(max_fov));
     }
     self.goal.pitch = std.math.clamp(self.goal.pitch, -rig.Pose.max_pitch, rig.Pose.max_pitch);
 
@@ -738,6 +741,36 @@ pub fn drawKeyList(self: *Camera) void {
 /// Rolls back to level, like its key.
 pub fn level(self: *Camera) void {
     if (self.on) self.goal.roll = 0;
+}
+
+/// Its field of view in degrees, or null while it's off or the game doesn't say one.
+pub fn fovDegrees(self: *const Camera) ?f32 {
+    if (!self.on or self.goal.fov <= 0) return null;
+    return std.math.radiansToDegrees(self.goal.fov);
+}
+
+/// Like the zoom keys, eased to like everything else.
+pub fn setFov(self: *Camera, degrees: f32) void {
+    if (!self.on or self.goal.fov <= 0) return;
+    self.goal.fov = std.math.degreesToRadians(std.math.clamp(degrees, min_fov, max_fov));
+}
+
+/// Back to the game's, as it was when the free camera came on.
+pub fn resetFov(self: *Camera) void {
+    if (!self.on) return;
+    self.shared.acquire();
+    const game = self.shared.game.fov;
+    self.shared.release();
+    if (game > 0) self.goal.fov = game;
+}
+
+/// Both zoom keys as the player has them, like `= and -`.
+pub fn zoomKeyNames(self: *Camera, buf: []u8) []const u8 {
+    var in_buf: [96]u8 = undefined;
+    var out_buf: [96]u8 = undefined;
+    const in = self.keyNames(&in_buf, self.holds.getPtrConst(.zoom_in).setting);
+    const out = self.keyNames(&out_buf, self.holds.getPtrConst(.zoom_out).setting);
+    return std.fmt.bufPrint(buf, "{s} and {s}", .{ in, out }) catch in;
 }
 
 pub fn orbitKeyName(self: *Camera, buf: []u8) []const u8 {

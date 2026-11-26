@@ -229,6 +229,16 @@ fn drawFree(self: *Cameras, on_screen: bool) void {
         if (ui.button("Level")) cam.level();
         ui.sameLine();
         ui.textDisabled("{s}", .{cam.levelKeyName(&buf)});
+        if (cam.fovDegrees()) |degrees| {
+            var fov = degrees;
+            ui.setNextItemWidth(160);
+            if (ui.sliderWith("Field of view", &fov, 5, 150, .{ .format = "%.0f°" })) cam.setFov(fov);
+            var keys: [200]u8 = undefined;
+            ui.tooltip("Zoom in and out with {s}. Ctrl-click to type.", .{cam.zoomKeyNames(&keys)});
+            ui.sameLine();
+            if (ui.smallButton("Game's")) cam.resetFov();
+            ui.tooltip("Back to the field of view the game had.", .{});
+        }
     }
     if (ui.collapsingHeader("Keys", false)) cam.drawKeyList();
     ui.textDisabled("Its speed, smoothing and keys are in Settings, under Photo mode.", .{});
