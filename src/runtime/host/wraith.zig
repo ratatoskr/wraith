@@ -675,7 +675,7 @@ const ThreadsImpl = struct {
         return .init(l, t.lease);
     }
 
-    pub fn tick(loaded: *Loaded) void {
+    pub fn runTick(loaded: *Loaded) void {
         frame.tickFrom(loaded);
     }
 

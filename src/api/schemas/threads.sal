@@ -35,11 +35,12 @@ trait Threads {
     Subscription!ThreadsError onDraw(keep Draw draw);
     // Once a tick on the game thread, for game logic. Gone with the plugin.
     Subscription!ThreadsError onTick(keep Tick tick);
-    // A lease on ticks, see `Lease`. While held, ticks run on its `tick` and wait for the first, so
+    // A lease on ticks, see `Lease`. While held, ticks run on its `runTick` and wait for the first, so
     // claim in `start`. Unheld, they're back on the render thread.
     Lease!ThreadsError claimTicks(keep ?Lease.Changed changed);
     // Once a game frame on the game's thread, from the ticks holder. Runs every `onTick`. A no-op otherwise.
-    void tick();
+    // Not `tick`, which C# would make the same name as `Tick`.
+    void runTick();
     // Before unload, to undo game changes from the right thread. Call `wind_down.done` when finished;
     // Wraith waits up to a second. Not when the game's closing. Gone with the plugin.
     Subscription!ThreadsError onStopping(keep Stopping stopping);

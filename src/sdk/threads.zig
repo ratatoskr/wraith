@@ -104,7 +104,7 @@ pub fn claimTicks(changed: Lease.Changed) Error!Lease {
 /// Runs a tick; call once a game frame on the game's thread. Only for the tick holder.
 pub fn tick() void {
     const owner = Owner.current() orelse return;
-    owner.root.threads().tick();
+    owner.root.threads().runTick();
 }
 
 /// Runs once at the next draw, or with `.cancelled` if the plugin unloads first. Any thread.
