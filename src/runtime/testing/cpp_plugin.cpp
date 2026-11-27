@@ -34,6 +34,7 @@ struct Plugin {
         sal::Future<uint32_t> later() const {
             uint32_t n = wraith::service<Fixture::FixtureService>("fixture").next();
             auto p = sal::promise<uint32_t>();
+#if SAL_COROUTINES
             auto task = [](sal::Future<uint32_t> f) -> sal::Future<uint32_t> {
                 auto r = co_await f;
                 if (!r) co_return r.error();
@@ -42,6 +43,19 @@ struct Plugin {
             auto out = task(std::move(p.future));
             p.settle.resolve(n);
             return out;
+#else
+            // No coroutines on 32-bit Windows with MSVC's ABI, so the same with then
+            auto out = sal::promise<uint32_t>();
+            auto *in = new sal::Future<uint32_t>(std::move(p.future));
+            in->then([in, settle = std::move(out.settle)]() mutable {
+                auto r = in->take();
+                if (r) settle.resolve(r.value() * 3);
+                else settle.reject(r.error());
+                delete in;
+            });
+            p.settle.resolve(n);
+            return std::move(out.future);
+#endif
         }
     } service_impl{this};
 
