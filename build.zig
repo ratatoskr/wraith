@@ -543,6 +543,7 @@ pub fn build(b: *std.Build) void {
         }),
     }).getEmittedBin());
     addCsPlugin(b, main, test_options);
+    addRustPlugin(b, main, test_options);
     main.runtime.addOptions("test_options", test_options);
     {
         const tests = b.addTest(.{ .name = "wraith_crashhandler_tests", .root_module = crashHandlerModule(b, main) });
@@ -640,6 +641,39 @@ fn addCsPlugin(b: *std.Build, mods: Modules, options: *std.Build.Step.Options) v
     // dotnet writes its errors to stdout
     run.stdio = .inherit;
     options.addOptionPath("cs_plugin", out.path(b, "wraith_cs_fixture.dll"));
+}
+
+/// The Rust plugin the loader's tests load, built by cargo over what `sdk rust types` writes, like a Rust
+/// plugin is. Only for this machine, and only in a root build with cargo on PATH; else the tests skip.
+fn addRustPlugin(b: *std.Build, mods: Modules, options: *std.Build.Step.Options) void {
+    const host = b.graph.host.result;
+    const native = mods.target.result.cpu.arch == host.cpu.arch and mods.target.result.os.tag == host.os.tag;
+    const cargo = (if (b.isRoot() and native) b.findProgram(.{ .names = &.{"cargo"} }) else null) orelse {
+        options.addOption([]const u8, "rust_plugin", "");
+        return;
+    };
+    const folder = "src/runtime/testing/rust_plugin";
+    const cli = b.addExecutable(.{ .name = "wraith-rust-sdk", .root_module = mods.cli });
+    const gen = b.addRunArtifact(cli);
+    gen.setCwd(b.path(folder));
+    gen.addArgs(&.{ "sdk", "rust", "types", "--offline", "--out" });
+    const sdk_rust = gen.addOutputDirectoryArg("rust");
+    gen.addFileInput(b.path(folder ++ "/wraith.json"));
+    gen.addFileInput(b.path(folder ++ "/schemas/rust.sal"));
+    // It lists what it wrote
+    _ = gen.captureStdOut(.{});
+
+    // The crate as a plugin's folder has it, with what sdk rust types wrote in .wraith/rust
+    const files = b.addWriteFiles();
+    _ = files.addCopyFile(b.path(folder ++ "/Cargo.toml"), "Cargo.toml");
+    _ = files.addCopyFile(b.path(folder ++ "/src/lib.rs"), "src/lib.rs");
+    _ = files.addCopyDirectory(sdk_rust, ".wraith/rust", .{});
+    const run = b.addSystemCommand(&.{ cargo, "build", "--release", "--quiet", "--manifest-path" });
+    run.addFileArg(files.getDirectory().path(b, "Cargo.toml"));
+    run.addArg("--target-dir");
+    const out = run.addOutputDirectoryArg("target");
+    run.stdio = .inherit;
+    options.addOptionPath("rust_plugin", out.path(b, "release/rust_fixture.dll"));
 }
 
 fn addCrashHandler(b: *std.Build, mods: Modules) *std.Build.Step.Compile {
@@ -879,10 +913,20 @@ const Modules = struct {
             .{ .name = "salamander_schema", .module = salamander_dep.module("salamander_schema") },
             .{ .name = "salamander_types", .module = salamander_dep.module("salamander_types") },
             .{ .name = "salamander_cs", .module = salamander_dep.module("salamander_cs") },
+            .{ .name = "salamander_rust", .module = salamander_dep.module("salamander_rust") },
+            .{ .name = "salamander_c", .module = salamander_dep.module("salamander_c") },
+            .{ .name = "salamander_cpp", .module = salamander_dep.module("salamander_cpp") },
         }, true);
         cli.addOptions("build_info", build_info);
         // The C# SDK's own code, which `sdk cs types` writes next to the generated API
         cli.addAnonymousImport("WraithPlugin.cs", .{ .root_source_file = b.path("src/sdk/cs/WraithPlugin.cs") });
+        // And the Rust SDK's crate, which `sdk rust types` writes next to Wraith's API
+        cli.addAnonymousImport("wraith_sdk.rs", .{ .root_source_file = b.path("src/sdk/rust/src/lib.rs") });
+        cli.addAnonymousImport("wraith_sdk.toml", .{ .root_source_file = b.path("src/sdk/rust/Cargo.toml") });
+        // And the C and C++ SDKs' headers, and the CMake module for building them
+        cli.addAnonymousImport("wraith_plugin.h", .{ .root_source_file = b.path("src/sdk/c/wraith_plugin.h") });
+        cli.addAnonymousImport("wraith_plugin.hpp", .{ .root_source_file = b.path("src/sdk/cpp/wraith_plugin.hpp") });
+        cli.addAnonymousImport("wraith.cmake", .{ .root_source_file = b.path("src/sdk/cmake/wraith.cmake") });
 
         return .{ .b = b, .target = target, .optimize = optimize, .core = core, .platform = platform, .ui = ui, .api = api, .api_zig = api_zig, .sdk = sdk, .runtime = runtime, .bootstrap = bootstrap, .proxies = proxies, .game = game, .registry = registry, .importer = importer, .cli = cli, .tuft = tuft };
     }

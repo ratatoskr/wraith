@@ -1,0 +1,13 @@
+[package]
+name = "wraith"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.83"
+description = "What makes a Rust crate a Wraith plugin, with Wraith's API. Written by wraith sdk rust types."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+salamander = { path = "../salamander" }

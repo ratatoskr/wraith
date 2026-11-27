@@ -73,7 +73,7 @@ static uint32_t give_mira(uintptr_t self, Wraith_Tweaks_Event event) {
 static const Wraith_Tweaks_Handler_table give_mira_table = { SAL_TABLE(Wraith_Tweaks_Handler), .call = give_mira };
 
 static const Wraith_Tweaks_Field give_mira_fields[] = {
-    { .name = SAL_STR("amount"), .type = Wraith_Tweaks_FieldType_u32, .value = 10000, .has_min = true, .min = 1 },
+    { .name = SAL_STR_INIT("amount"), .type = Wraith_Tweaks_FieldType_u32, .value = 10000, .has_min = true, .min = 1 },
 };
 
 static bool add_give_mira(void) {
@@ -153,7 +153,7 @@ static uint32_t slow_tailing_gauge(uintptr_t self, Wraith_Tweaks_Event event) {
 static const Wraith_Tweaks_Handler_table slow_tailing_gauge_table = { SAL_TABLE(Wraith_Tweaks_Handler), .call = slow_tailing_gauge };
 
 static const Wraith_Tweaks_Field slow_tailing_gauge_fields[] = {
-    { .name = SAL_STR("speed"), .type = Wraith_Tweaks_FieldType_f32, .value = 0.25, .has_min = true, .min = 0, .has_max = true, .max = 1 },
+    { .name = SAL_STR_INIT("speed"), .type = Wraith_Tweaks_FieldType_f32, .value = 0.25, .has_min = true, .min = 0, .has_max = true, .max = 1 },
 };
 
 static bool add_slow_tailing_gauge(void) {

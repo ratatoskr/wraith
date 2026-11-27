@@ -1,0 +1,16 @@
+// Wraith's API is the wraith crate, and schemas/ is schema below, both from wraith sdk rust types
+#[allow(dead_code)]
+mod schema {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/.wraith/rust/schema.rs"));
+}
+
+struct Plugin;
+
+impl wraith::Plugin for Plugin {
+    fn start() -> Option<Self> {
+        wraith::api().log().info("Hello!");
+        Some(Plugin)
+    }
+}
+
+wraith::plugin!(Plugin);

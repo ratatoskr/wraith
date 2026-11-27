@@ -1,0 +1,13 @@
+[package]
+name = "{{id}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# Written by wraith sdk rust types, which build.rs and wraith sdk rust build run
+[dependencies]
+salamander = { path = ".wraith/rust/salamander" }
+wraith = { path = ".wraith/rust/wraith" }

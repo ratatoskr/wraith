@@ -1,4 +1,5 @@
-//! `wraith new`: scaffolds a plugin in any supported language, with a wraith.json for its game.
+//! `wraith new`: starts a plugin in any language, with a wraith.json for its game. This asks what it's for
+//! and writes its wraith.json. What each language gets, from what it needs to its files, is new/recipes.zig.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -9,60 +10,36 @@ const build_info = @import("build_info");
 
 const ops = @import("ops.zig");
 const sdk = @import("sdk.zig");
+const languages = @import("languages.zig");
+const recipes = @import("new/recipes.zig");
 
 const log = core.log.scoped(.wraith_cli);
+const Language = languages.Language;
 
 pub const usage =
-    \\  new [folder] [--language zig|cpp|ts|js|lua|cs] [--runtime aot|clr] [--game <game.exe | game id>]
-    \\      [--engine [<engine>[:<variant>]]] [--id <id>] [--title <title>] [--summary <text>]
-    \\      [--author <name>] [--library] [--dev | --no-dev] [--yes]
+    \\  new [folder] [--language zig|c|cpp|rust|cs|ts|js|lua] [--build cmake|zig] [--runtime aot|clr]
+    \\      [--game <game.exe | game id>] [--engine [<engine>[:<variant>]]] [--id <id>] [--title <title>]
+    \\      [--summary <text>] [--author <name>] [--library] [--dev | --no-dev] [--yes]
     \\                                       start a plugin in <folder>: its code, its build and a
-    \\                                       wraith.json, with what the language needs (Zig and C++:
-    \\                                       zig init and fetch, TS/JS: npm create, Lua and C#: its
-    \\                                       types). --runtime, for C#: aot compiles it with
-    \\                                       NativeAOT, so games need no .NET, clr has .NET run it,
-    \\                                       so it reloads. --game: the game's exe, identified so
-    \\                                       its ID and exe name both go in, or a game ID (see
-    \\                                       games). --engine: every game made with it instead,
-    \\                                       like unity or unity:IL2CPP, or the --game's own with
-    \\                                       no name. Neither is any game. --library: one other
-    \\                                       plugins use. --dev: load it from where it builds
-    \\                                       while you work on it (dev add). Asks for what isn't
-    \\                                       given, unless --yes
+    \\                                       wraith.json, with what the language needs. --build, for
+    \\                                       C and C++: cmake (default) builds it with CMake and the
+    \\                                       compiler it finds, zig with zig build. --runtime, for
+    \\                                       C#: aot compiles it with NativeAOT, so games need no
+    \\                                       .NET, clr has .NET run it, so it reloads. --game: the
+    \\                                       game's exe, identified so its ID and exe name both go
+    \\                                       in, or a game ID (see games). --engine: every game made
+    \\                                       with it instead, like unity or unity:IL2CPP, or the
+    \\                                       --game's own with no name. Neither is any game.
+    \\                                       --library: one other plugins use. --dev: load it from
+    \\                                       where it builds while you work on it (dev add). Asks for
+    \\                                       what isn't given, unless --yes
 ;
-
-pub const Language = enum {
-    zig,
-    cpp,
-    ts,
-    js,
-    lua,
-    cs,
-
-    fn title(self: Language) []const u8 {
-        return switch (self) {
-            .zig => "Zig",
-            .cpp => "C++",
-            .ts => "TypeScript",
-            .js => "JavaScript",
-            .lua => "Lua",
-            .cs => "C#",
-        };
-    }
-};
-
-/// How a C# plugin runs.
-pub const Runtime = enum {
-    /// Compiled with NativeAOT into a native DLL
-    aot,
-    /// Run by .NET, the game's or the installed one
-    clr,
-};
 
 const Options = struct {
     folder: ?[]const u8 = null,
     language: ?Language = null,
-    runtime: ?Runtime = null,
+    build: ?languages.Build = null,
+    runtime: ?languages.Runtime = null,
     game: ?[]const u8 = null,
     /// Empty for the game's own.
     engine: ?[]const u8 = null,
@@ -78,6 +55,7 @@ const Options = struct {
 const repo_url = "git+https://github.com/ratatoskr/wraith";
 
 const Manifest = core.manifest.Manifest;
+
 pub fn run(ctx: ops.Context, args: anytype) !u8 {
     var arena_state: std.heap.ArenaAllocator = .init(ctx.allocator);
     defer arena_state.deinit();
@@ -113,24 +91,38 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     const author = options.author orelse try ask.line("Author", "");
     const language = options.language orelse language: {
         if (!interactive) {
-            log.err("Which language? Say with --language zig, cpp, ts, js, lua or cs", .{});
+            log.err("Which language? Say with --language " ++ languages.names, .{});
             return 1;
         }
         while (true) {
-            const answer = try ask.line("Language: zig, cpp, ts, js, lua or cs", "zig");
+            const answer = try ask.line("Language: " ++ languages.names, "zig");
             if (std.meta.stringToEnum(Language, answer)) |l| break :language l;
         }
     };
-    const runtime: Runtime = if (language != .cs) .aot else options.runtime orelse runtime: {
+    const build: languages.Build = if (language != .c and language != .cpp) .zig else options.build orelse build: {
+        while (true) {
+            const answer = try ask.line("Built with cmake (and the compiler it finds, like MSVC) or zig", "cmake");
+            if (std.meta.stringToEnum(languages.Build, answer)) |b| break :build b;
+        }
+    };
+    const runtime: languages.Runtime = if (language != .cs) .aot else options.runtime orelse runtime: {
         while (true) {
             const answer = try ask.line("C# runs as aot (compiled, games need no .NET) or clr (.NET runs it, so it reloads)", "aot");
-            if (std.meta.stringToEnum(Runtime, answer)) |r| break :runtime r;
+            if (std.meta.stringToEnum(languages.Runtime, answer)) |r| break :runtime r;
         }
     };
     const game = options.game orelse try ask.line("Game it's for: its exe, or an id from `wraith games` (empty: any game)", "");
     const target = try forGame(ctx, arena, &ask, if (game.len == 0) null else game, options.engine) orelse return 1;
     const dev = options.dev orelse try ask.yes("Load it from where it builds while you work on it?", true);
 
+    // A Zig build builds each arch unless the game's one. Other native ones build one, x64 unless the game's x86
+    const zig_built = language == .zig or ((language == .c or language == .cpp) and build == .zig);
+    const arches: ?[]const core.arch.Arch = if (language.provider() != null and language != .cs)
+        null
+    else if (zig_built)
+        (if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null)
+    else
+        try arena.dupe(core.arch.Arch, &.{target.arch orelse .x64});
     var manifest: Manifest = .{
         .id = id,
         .version = "0.0.0",
@@ -141,30 +133,17 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
         .wraith = if (std.mem.eql(u8, build_info.version, core.manifest.dev_version)) null else build_info.version,
         .game = target.game,
         .gameEngine = target.engine,
-        .provider = switch (language) {
-            .zig, .cpp => null,
-            .ts, .js => "js",
-            .lua => "lua",
-            .cs => "cs",
-        },
+        .provider = language.provider(),
         .library = options.library,
-        // Scripts run in either. Native plugins build per arch, and C#'s types are for one pointer size
-        .arches = switch (language) {
-            .zig, .cpp => if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null,
-            .cs => try arena.dupe(core.arch.Arch, &.{target.arch orelse .x64}),
-            .ts, .js, .lua => null,
-        },
+        .arches = arches,
     };
-    if ((language == .zig or language == .cpp) and manifest.arches != null) log.printLn("It's {s}, so it builds for {t} only. Take arches out of wraith.json to build both", .{ if (target.arch.? == .x64) "64-bit" else "32-bit", target.arch.? });
+    if (zig_built and arches != null) log.printLn("It's {s}, so it builds for {t} only. Take arches out of wraith.json to build both", .{ if (target.arch.? == .x64) "64-bit" else "32-bit", target.arch.? });
 
     log.printLn("", .{});
-    const built = switch (language) {
-        .zig => try makeZig(ctx, arena, folder, manifest),
-        .cpp => try makeCpp(ctx, arena, folder, manifest),
-        .ts, .js => try makeJs(ctx, arena, cwd, folder, &manifest, language),
-        .lua => try makeLua(ctx, arena, folder, manifest),
-        .cs => try makeCs(ctx, arena, folder, manifest, runtime),
-    } orelse return 2;
+    const recipe = recipes.of(language, build);
+    const values = try valuesOf(arena, language, runtime, manifest);
+    if (!try make(ctx, arena, cwd, folder, recipe, &manifest, language, values)) return 2;
+    const built = if (recipe.built.len == 0) folder else try std.fs.path.join(arena, &.{ folder, recipe.built });
 
     log.printLn("\nMade {s}, a {s} plugin, in {s}", .{ title, language.title(), folder });
     if (dev) {
@@ -174,16 +153,78 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
             log.printLn("Wraith loads it from {s} while you work on it. Refresh in the overlay's Mods window", .{built});
         } else |err| log.warn("Couldn't add it as a dev plugin: {t}. wraith dev add {s} does", .{ err, built });
     }
-    const where = relative(arena, cwd, folder);
-    log.printLn("\nNext:\n  cd {s}", .{where});
-    switch (language) {
-        .zig, .cpp => log.printLn("  zig build", .{}),
-        .ts, .js => log.printLn("  npm install\n  npm run dev", .{}),
-        .lua => log.printLn("  (edit main.lua, then Reload it in the Mods window)", .{}),
-        .cs => log.printLn("  dotnet publish", .{}),
-    }
+    log.printLn("\nNext:\n  cd {s}\n  {s}", .{ relative(arena, cwd, folder), try recipes.fill(arena, recipe.next, values) });
     if (!dev) log.printLn("  wraith dev add {s}", .{relative(arena, cwd, built)});
     return 0;
+}
+
+/// What its templates' placeholders are.
+fn valuesOf(arena: std.mem.Allocator, language: Language, runtime: languages.Runtime, manifest: Manifest) ![]const [2][]const u8 {
+    const arch: core.arch.Arch = if (manifest.arches) |a| a[0] else .x64;
+    const x86 = arch == .x86;
+    var values: std.ArrayList([2][]const u8) = .empty;
+    try values.appendSlice(arena, &.{
+        .{ "id", manifest.id },
+        .{ "namespace", try sdk.pascal(arena, manifest.id) },
+        .{ "arch", @tagName(arch) },
+        .{ "pointer_size", if (x86) "4" else "8" },
+        .{ "rid", if (x86) "win-x86" else "win-x64" },
+        .{ "cmake_arch", if (x86) " -A Win32" else "" },
+        .{ "zig_version", builtin.zig_version_string },
+        .{ "language", if (language == .c) "C" else "CXX" },
+        .{ "source", if (language == .c) "src/plugin.c" else "src/plugin.cpp" },
+        .{ "init", if (language == .c) "initC" else "initCpp" },
+    });
+    // It has placeholders of its own
+    try values.append(arena, .{ "runtime", try recipes.fill(arena, recipes.csRuntime(runtime), values.items) });
+    return values.items;
+}
+
+/// Makes it in `folder` as `recipe` says. False once it's said why it couldn't.
+fn make(ctx: ops.Context, arena: std.mem.Allocator, cwd: []const u8, folder: []const u8, recipe: recipes.Recipe, manifest: *Manifest, language: Language, values: []const [2][]const u8) !bool {
+    if (recipe.needs) |tool| {
+        const have = toolVersion(ctx, arena, tool.argv) orelse {
+            log.err("{s}", .{try recipes.fill(arena, tool.missing, values)});
+            return false;
+        };
+        if (std.mem.eql(u8, tool.argv[0], "zig") and !std.mem.eql(u8, have, builtin.zig_version_string)) {
+            log.warn("This Wraith is built with Zig {s} and you have {s}. Zig changes fast, so match it exactly if the build fails", .{ builtin.zig_version_string, have });
+        }
+    }
+    if (recipe.npm) {
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.appendSlice(arena, &.{ "npm", "create", "@ratatoskr.io/plugin@latest", folder, "--", "--name", manifest.id, "--title", manifest.title.?, "--yes" });
+        if (manifest.summary) |s| try argv.appendSlice(arena, &.{ "--summary", s });
+        if (manifest.author) |a| try argv.appendSlice(arena, &.{ "--author", a });
+        if (language == .js) try argv.append(arena, "--js");
+        if (!runTool(ctx, argv.items, cwd)) return false;
+        // Its own, with the game and engine as found here, keeping the oldest Wraith it found
+        if (manifest.wraith == null) if (readManifest(ctx, arena, folder)) |made| {
+            manifest.wraith = made.wraith;
+        };
+    }
+    try std.Io.Dir.cwd().createDirPath(ctx.io, folder);
+    if (recipe.zig_package) {
+        if (!runTool(ctx, &.{ "zig", "init", "--minimal" }, folder)) return false;
+        log.printLn("Fetching Wraith's SDK...", .{});
+        if (!runTool(ctx, &.{ "zig", "fetch", "--save=wraith", try fetchUrl(arena, build_info.version) }, folder)) return false;
+    }
+    for (recipe.files) |f| try writeFile(ctx, folder, try recipes.fill(arena, f.path, values), try recipes.fill(arena, f.text, values));
+    try writeFile(ctx, folder, core.manifest.file_name, try manifest.toJson(arena));
+    if (recipe.gitignore.len > 0) try writeIgnore(ctx, folder, recipe.gitignore);
+    if (recipe.types) |types| {
+        const self = try std.process.executablePathAlloc(ctx.io, arena);
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.appendSlice(arena, &.{ self, "sdk", @tagName(types), "types" });
+        if (types == .cs) try argv.appendSlice(arena, &.{ "--pointer-size", valueOf(values, "pointer_size") });
+        if (!runTool(ctx, argv.items, folder)) log.warn("No types for Wraith's API yet. wraith sdk {t} types in its folder makes them", .{types});
+    }
+    return true;
+}
+
+fn valueOf(values: []const [2][]const u8, name: []const u8) []const u8 {
+    for (values) |v| if (std.mem.eql(u8, v[0], name)) return v[1];
+    unreachable;
 }
 
 /// From `cwd`, or all of it if that won't do.
@@ -218,8 +259,10 @@ fn parseArgs(args: anytype) !Options {
             }
         } else if (std.mem.eql(u8, arg, "--language") or std.mem.eql(u8, arg, "--lang")) {
             o.language = std.meta.stringToEnum(Language, args.next() orelse return error.Usage) orelse return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--build")) {
+            o.build = std.meta.stringToEnum(languages.Build, args.next() orelse return error.Usage) orelse return error.Usage;
         } else if (std.mem.eql(u8, arg, "--runtime")) {
-            o.runtime = std.meta.stringToEnum(Runtime, args.next() orelse return error.Usage) orelse return error.Usage;
+            o.runtime = std.meta.stringToEnum(languages.Runtime, args.next() orelse return error.Usage) orelse return error.Usage;
         } else if (std.mem.eql(u8, arg, "--game")) {
             o.game = args.next() orelse return error.Usage;
         } else if (std.mem.eql(u8, arg, "--id") or std.mem.eql(u8, arg, "--name")) {
@@ -425,96 +468,6 @@ fn readManifest(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8) 
     return core.manifest.parse(arena, text, null) catch null;
 }
 
-fn writeManifest(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manifest: Manifest) !void {
-    try writeFile(ctx, folder, core.manifest.file_name, try manifest.toJson(arena));
-}
-
-/// zig init and fetch, then its build, code and manifest. Where it builds to, or null.
-fn makeZig(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manifest: Manifest) !?[]const u8 {
-    const have = toolVersion(ctx, arena, &.{ "zig", "version" }) orelse {
-        log.err("Zig isn't on your PATH. Wraith plugins need Zig {s}: https://ziglang.org/download", .{builtin.zig_version_string});
-        return null;
-    };
-    if (!std.mem.eql(u8, have, builtin.zig_version_string)) {
-        log.warn("This Wraith is built with Zig {s} and you have {s}. Zig changes fast, so match it exactly if the build fails", .{ builtin.zig_version_string, have });
-    }
-    try std.Io.Dir.cwd().createDirPath(ctx.io, folder);
-    if (!runTool(ctx, &.{ "zig", "init", "--minimal" }, folder)) return null;
-    log.printLn("Fetching Wraith's SDK...", .{});
-    if (!runTool(ctx, &.{ "zig", "fetch", "--save=wraith", try fetchUrl(arena, build_info.version) }, folder)) return null;
-    try writeFile(ctx, folder, "build.zig", try std.fmt.allocPrint(arena, zig_build, .{manifest.id}));
-    try writeFile(ctx, folder, "src/root.zig", zig_root);
-    try writeManifest(ctx, arena, folder, manifest);
-    try writeIgnore(ctx, folder, "zig-out/\n.zig-cache/\n");
-    return try std.fs.path.join(arena, &.{ folder, "zig-out" });
-}
-
-/// Like a Zig one, with Zig compiling its C++. Where it builds to, or null.
-fn makeCpp(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manifest: Manifest) !?[]const u8 {
-    const built = try makeZig(ctx, arena, folder, manifest) orelse return null;
-    try writeFile(ctx, folder, "build.zig", try std.fmt.allocPrint(arena, cpp_build, .{manifest.id}));
-    try writeFile(ctx, folder, "src/plugin.cpp", cpp_plugin);
-    // Its build.zig.zon packages what's there, and the Zig one's root.zig isn't
-    std.Io.Dir.cwd().deleteFile(ctx.io, try std.fs.path.join(arena, &.{ folder, "src", "root.zig" })) catch {};
-    return built;
-}
-
-/// npm create, then its manifest. Where it builds to, or null.
-fn makeJs(ctx: ops.Context, arena: std.mem.Allocator, cwd: []const u8, folder: []const u8, manifest: *Manifest, language: Language) !?[]const u8 {
-    if (toolVersion(ctx, arena, &.{ "npm", "--version" }) == null) {
-        log.err("npm isn't on your PATH. Install Node from https://nodejs.org", .{});
-        return null;
-    }
-    var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{ "npm", "create", "@ratatoskr.io/plugin@latest", folder, "--", "--name", manifest.id, "--title", manifest.title.?, "--yes" });
-    if (manifest.summary) |s| try argv.appendSlice(arena, &.{ "--summary", s });
-    if (manifest.author) |a| try argv.appendSlice(arena, &.{ "--author", a });
-    if (language == .js) try argv.append(arena, "--js");
-    if (!runTool(ctx, argv.items, cwd)) return null;
-    // Its own, with the game and engine as found here, keeping the oldest Wraith it found
-    if (manifest.wraith == null) if (readManifest(ctx, arena, folder)) |made| {
-        manifest.wraith = made.wraith;
-    };
-    try writeManifest(ctx, arena, folder, manifest.*);
-    return try std.fs.path.join(arena, &.{ folder, "dist" });
-}
-
-/// Its manifest and main.lua, then its types. Where it loads from, or null.
-fn makeLua(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manifest: Manifest) !?[]const u8 {
-    try std.Io.Dir.cwd().createDirPath(ctx.io, folder);
-    try writeManifest(ctx, arena, folder, manifest);
-    try writeFile(ctx, folder, "main.lua", lua_main);
-    try writeIgnore(ctx, folder, ".wraith/\n");
-    // For LuaLS, from this wraith
-    const self = try std.process.executablePathAlloc(ctx.io, arena);
-    if (!runTool(ctx, &.{ self, "sdk", "lua", "types" }, folder)) log.warn("No Lua types yet. wraith sdk lua types in its folder makes them", .{});
-    return folder;
-}
-
-/// Its project, code and manifest, then its types. Where it publishes to, or null.
-fn makeCs(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manifest: Manifest, runtime: Runtime) !?[]const u8 {
-    if (toolVersion(ctx, arena, &.{ "dotnet", "--version" }) == null) {
-        log.err("dotnet isn't on your PATH. C# plugins need the .NET 10 SDK: https://dot.net", .{});
-        return null;
-    }
-    const arch = manifest.arches.?[0];
-    const ns = try sdk.pascal(arena, manifest.id);
-    const pointer_size: []const u8 = if (arch == .x86) "4" else "8";
-    const how = switch (runtime) {
-        .aot => try std.fmt.allocPrint(arena, cs_aot, .{ if (arch == .x86) "win-x86" else "win-x64", manifest.id, @tagName(arch) }),
-        .clr => try std.fmt.allocPrint(arena, cs_clr, .{manifest.id}),
-    };
-    try std.Io.Dir.cwd().createDirPath(ctx.io, folder);
-    try writeFile(ctx, folder, try std.fmt.allocPrint(arena, "{s}.csproj", .{ns}), try std.fmt.allocPrint(arena, cs_project, .{ how, pointer_size }));
-    try writeFile(ctx, folder, "Plugin.cs", try std.fmt.allocPrint(arena, cs_plugin, .{ ns, ns }));
-    try writeManifest(ctx, arena, folder, manifest);
-    try writeIgnore(ctx, folder, "bin/\nobj/\ndist/\n.wraith/\n");
-    // So an editor knows Wraith's API before the first build
-    const self = try std.process.executablePathAlloc(ctx.io, arena);
-    if (!runTool(ctx, &.{ self, "sdk", "cs", "types", "--pointer-size", pointer_size }, folder)) log.warn("No C# types yet. The first build makes them", .{});
-    return try std.fs.path.join(arena, &.{ folder, "dist" });
-}
-
 fn writeIgnore(ctx: ops.Context, folder: []const u8, text: []const u8) !void {
     var dir = try std.Io.Dir.cwd().openDir(ctx.io, folder, .{});
     defer dir.close(ctx.io);
@@ -522,162 +475,6 @@ fn writeIgnore(ctx: ops.Context, folder: []const u8, text: []const u8) !void {
     if (dir.access(ctx.io, ".gitignore", .{})) |_| return else |_| {}
     try dir.writeFile(ctx.io, .{ .sub_path = ".gitignore", .data = text });
 }
-
-const zig_build =
-    \\const std = @import("std");
-    \\const wraith = @import("wraith");
-    \\
-    \\pub fn build(b: *std.Build) void {{
-    \\    const plugin: wraith.Plugin = .init(b, .{{
-    \\        .name = "{s}",
-    \\        .root_source_file = b.path("src/root.zig"),
-    \\        .target = b.standardTargetOptions(.{{}}),
-    \\        .optimize = b.standardOptimizeOption(.{{}}),
-    \\    }});
-    \\    plugin.install(b);
-    \\}}
-    \\
-;
-
-const zig_root =
-    \\const std = @import("std");
-    \\const sdk = @import("wraith_sdk");
-    \\
-    \\pub const std_options: std.Options = .{ .logFn = sdk.logFn };
-    \\pub const panic = sdk.panic;
-    \\
-    \\const log = sdk.log.scoped(.plugin);
-    \\
-    \\pub const Plugin = struct {
-    \\    ctx: *sdk.Context = undefined,
-    \\
-    \\    pub fn start(self: *Plugin, ctx: *sdk.Context) !void {
-    \\        self.ctx = ctx;
-    \\        log.info("Hello!", .{});
-    \\    }
-    \\
-    \\    pub fn stop(self: *Plugin) void {
-    \\        _ = self;
-    \\    }
-    \\};
-    \\
-    \\comptime {
-    \\    sdk.exportPlugin(Plugin);
-    \\}
-    \\
-;
-
-const cpp_build =
-    \\const std = @import("std");
-    \\const wraith = @import("wraith");
-    \\
-    \\pub fn build(b: *std.Build) void {{
-    \\    const plugin: wraith.Plugin = .initCpp(b, .{{
-    \\        .name = "{s}",
-    \\        .sources = &.{{"src/plugin.cpp"}},
-    \\        .target = b.standardTargetOptions(.{{}}),
-    \\        .optimize = b.standardOptimizeOption(.{{}}),
-    \\    }});
-    \\    plugin.install(b);
-    \\}}
-    \\
-;
-
-const cpp_plugin =
-    \\// Wraith's API is in wraith.hpp, and schemas/ becomes schema.hpp as it builds
-    \\#include "wraith_plugin.hpp"
-    \\
-    \\struct Plugin {
-    \\    bool start() {
-    \\        wraith::api().log().info("Hello!");
-    \\        return true;
-    \\    }
-    \\
-    \\    void stop() {}
-    \\};
-    \\
-    \\WRAITH_PLUGIN(Plugin)
-    \\
-;
-
-const lua_main =
-    \\local Wraith = require("wraith").Wraith
-    \\
-    \\Wraith.log():info("Hello!")
-    \\
-;
-
-/// How it's built, then the pointer size its types are for.
-const cs_project =
-    \\<Project Sdk="Microsoft.NET.Sdk">
-    \\  <PropertyGroup>
-    \\    <TargetFramework>net10.0</TargetFramework>
-    \\    <Nullable>enable</Nullable>
-    \\    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    \\{s}
-    \\    <PublishDir>dist/</PublishDir>
-    \\    <DefaultItemExcludes>$(DefaultItemExcludes);dist/**</DefaultItemExcludes>
-    \\    <!-- The WRAITH environment variable can point at a wraith.exe -->
-    \\    <Wraith Condition="'$(Wraith)' == ''">wraith</Wraith>
-    \\  </PropertyGroup>
-    \\
-    \\  <ItemGroup>
-    \\    <None Update="wraith.json;schemas/*.sal" CopyToPublishDirectory="PreserveNewest" />
-    \\  </ItemGroup>
-    \\
-    \\  <!-- Wraith's API and the schemas as C#, in .wraith/cs, made again when they change -->
-    \\  <Target Name="WraithTypes" BeforeTargets="BeforeBuild" Inputs="wraith.json;@(None)" Outputs=".wraith/cs/Schema.cs">
-    \\    <Exec Command="&quot;$(Wraith)&quot; sdk cs types --pointer-size {s}" />
-    \\  </Target>
-    \\  <Target Name="WraithSources" AfterTargets="WraithTypes" BeforeTargets="BeforeBuild">
-    \\    <ItemGroup>
-    \\      <Compile Include=".wraith/cs/*.cs" />
-    \\    </ItemGroup>
-    \\  </Target>
-    \\</Project>
-    \\
-;
-
-/// Its runtime, id and arch.
-const cs_aot =
-    \\    <!-- Compiled with NativeAOT into a native DLL, so the game needs no .NET -->
-    \\    <RuntimeIdentifier>{s}</RuntimeIdentifier>
-    \\    <PublishAot>true</PublishAot>
-    \\    <NativeLib>Shared</NativeLib>
-    \\    <AssemblyName>wraith_{s}_{s}</AssemblyName>
-;
-
-const cs_clr =
-    \\    <!-- Run by .NET, the game's or the installed one. Wraith finds it by this name -->
-    \\    <AssemblyName>wraith_{s}</AssemblyName>
-    \\    <!-- Its dependencies go beside it, where Wraith looks for them -->
-    \\    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-;
-
-const cs_plugin =
-    \\using Wraith;
-    \\
-    \\namespace {s}
-    \\{{
-    \\    sealed class Main : WraithPlugin
-    \\    {{
-    \\        public override void Start(Context context)
-    \\        {{
-    \\            Log.Instance.Info("Hello!");
-    \\        }}
-    \\    }}
-    \\}}
-    \\
-    \\namespace Wraith
-    \\{{
-    \\    // The plugin Wraith starts
-    \\    static partial class Entry
-    \\    {{
-    \\        internal static partial WraithPlugin Create() => new global::{s}.Main();
-    \\    }}
-    \\}}
-    \\
-;
 
 const testing = std.testing;
 
@@ -689,6 +486,10 @@ test "ids and titles from a folder's name" {
     try testing.expectEqualStrings("kai_tools", try toId(a, "kai_tools"));
     try testing.expectEqualStrings("my-plugin", try toId(a, "!!"));
     try testing.expectEqualStrings("Kai Tools", try toTitle(a, "kai_tools"));
+}
+
+test {
+    _ = recipes;
 }
 
 test "a release fetches its own tag" {
@@ -733,8 +534,14 @@ test "flags, with --engine's name optional" {
     try testing.expectError(error.Usage, parseArgs(&bad));
     var cs: Args = .{ .items = &.{ "--language", "cs", "--runtime", "clr" } };
     try testing.expectEqual(.clr, (try parseArgs(&cs)).runtime.?);
-    var cpp: Args = .{ .items = &.{ "--lang", "cpp" } };
-    try testing.expectEqual(.cpp, (try parseArgs(&cpp)).language.?);
+    var rust: Args = .{ .items = &.{ "--lang", "rust" } };
+    try testing.expectEqual(.rust, (try parseArgs(&rust)).language.?);
+    var cpp: Args = .{ .items = &.{ "--lang", "cpp", "--build", "zig" } };
+    const c = try parseArgs(&cpp);
+    try testing.expectEqual(.cpp, c.language.?);
+    try testing.expectEqual(.zig, c.build.?);
+    var bad_build: Args = .{ .items = &.{ "--build", "make" } };
+    try testing.expectError(error.Usage, parseArgs(&bad_build));
     var bad_runtime: Args = .{ .items = &.{ "--runtime", "mono" } };
     try testing.expectError(error.Usage, parseArgs(&bad_runtime));
 }

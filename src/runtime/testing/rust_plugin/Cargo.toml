@@ -1,0 +1,13 @@
+[package]
+name = "rust_fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+salamander = { path = ".wraith/rust/salamander" }
+wraith = { path = ".wraith/rust/wraith" }

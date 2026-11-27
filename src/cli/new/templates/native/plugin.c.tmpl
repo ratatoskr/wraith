@@ -1,0 +1,13 @@
+/* Wraith's API is in wraith.h, and schemas/ becomes schema.h as it builds */
+#include "wraith_plugin.h"
+
+static bool start(sal_Host host, wraith_Guest guest) {
+    (void)host;
+    Wraith_Api w = wraith_root(guest);
+    Wraith_Log_info(Wraith_Api_log(w), SAL_STR("Hello!"));
+    return true;
+}
+
+static void stop(void) {}
+
+WRAITH_PLUGIN(start, stop)

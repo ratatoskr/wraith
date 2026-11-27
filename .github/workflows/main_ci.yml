@@ -132,6 +132,24 @@ jobs:
         working-directory: examples/cpp
         run: zig build --summary all
 
+      # And with CMake and MSVC, which don't need Zig
+      - name: C example, CMake
+        working-directory: examples/c
+        run: |
+          cmake -B build -DWRAITH="$env:WRAITH"
+          cmake --build build --config Release
+
+      - name: C++ example, CMake
+        working-directory: examples/cpp
+        run: |
+          cmake -B build -DWRAITH="$env:WRAITH"
+          cmake --build build --config Release
+
+      # Built with cargo, which the runner has, through the wraith just built
+      - name: Rust example
+        working-directory: examples/rust
+        run: '& $env:WRAITH sdk rust build'
+
       - name: typescript example
         working-directory: examples/typescript
         run: |

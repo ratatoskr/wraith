@@ -408,6 +408,75 @@ const tests = struct {
         try testing.expectEqual(1, loader.find("cpp_fixture").?.services.items.len);
     }
 
+    test "a Rust plugin starts, its kept tweak runs and fails like any, and goes when it unloads" {
+        const options = @import("test_options");
+        if (options.rust_plugin.len == 0) return error.SkipZigTest;
+        const api = @import("wraith_api");
+        const tweaks = @import("host/root.zig").tweaks;
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "rust_fixture", options.rust_plugin }} });
+        defer install.deinit();
+        const loader = &install.loader;
+        try (try loader.load("rust_fixture")).wait();
+        try testing.expectEqual(.loaded, install.info("rust_fixture").?.state);
+        const loaded = loader.find("rust_fixture").?;
+        const count_at = tuft_sys.module.findExport(loaded.library(), "wraith_rust_count") orelse return error.ExportNotFound;
+        const countNow: *const fn () callconv(.c) u32 = @ptrFromInt(count_at);
+
+        var problem: api.TweakProblem = .{};
+        try testing.expectEqual(.ok, tweaks.call("rust_fixture:count", .{ .kind = .changed, .field = "step", .value = 3 }, &problem));
+        try testing.expectEqual(.ok, tweaks.call("rust_fixture:count", .{ .kind = .on }, &problem));
+        try testing.expectEqual(3, countNow());
+        _ = tweaks.call("rust_fixture:count", .{ .kind = .changed, .field = "step", .value = 0 }, &problem);
+        try testing.expectEqual(.failed, tweaks.call("rust_fixture:count", .{ .kind = .on }, &problem));
+        try testing.expectEqual(3, countNow());
+
+        try (try loader.unload("rust_fixture")).wait();
+        try testing.expectEqual(.gone, tweaks.call("rust_fixture:count", .{ .kind = .on }, &problem));
+    }
+
+    test "a Rust plugin offers a service, with an async method settled by an async block" {
+        const options = @import("test_options");
+        if (options.rust_plugin.len == 0) return error.SkipZigTest;
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        const Out = extern struct { n: u32 = 0, later: u32 = 0 };
+        var out: Out = .{};
+
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "rust_fixture", options.rust_plugin }} });
+        defer install.deinit();
+        const io = testing.io;
+        try install.tmp.dir.createDirPath(io, "plugins/rust_fixture/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/rust_fixture/schemas/rust.sal", .data = @embedFile("testing/rust_plugin/schemas/rust.sal") });
+        // And a Lua one using the Rust one's
+        try install.tmp.dir.createDirPath(io, "plugins/user");
+        try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"rust_fixture\"]");
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local R = require("wraith").RustFixture
+            \\local out = R.Out.at({d})
+            \\out.n = R.rustService():total()
+            \\out.later = R.rustService():later():await()
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/main.lua", .data = lua });
+
+        const loader = &install.loader;
+        try loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("rust_fixture").?.state);
+        try testing.expectEqual(.loaded, install.info("user").?.state);
+        try testing.expectEqual(5, out.n);
+        // The script carries on a frame or a worker later
+        var waited: u32 = 0;
+        while (@atomicLoad(u32, &out.later, .acquire) == 0 and waited < 2000) : (waited += 1) {
+            host.salamander.pollRender();
+            @import("tuft_sys").thread.sleepMs(1);
+        }
+        try testing.expectEqual(21, out.later);
+        try testing.expectEqual(1, loader.find("rust_fixture").?.services.items.len);
+    }
+
     test "plugins share Salamander objects, which stop when the plugin unloads" {
         const options = @import("test_options");
         const sal = @import("salamander_runtime");

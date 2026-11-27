@@ -1,6 +1,6 @@
 # Examples
 
-The same plugin in every language Wraith runs: [Zig](zig), [C](c), [C++](cpp), [TypeScript](typescript), [Lua](lua) and C#, twice: [NativeAOT](csharp-aot) and [CoreCLR](csharp-clr). Each folder is a whole plugin, so compare them side by side or copy one to start your own.
+The same plugin in every language Wraith runs: [Zig](zig), [C](c), [C++](cpp), [Rust](rust), [TypeScript](typescript), [Lua](lua) and C#, twice: [NativeAOT](csharp-aot) and [CoreCLR](csharp-clr). Each folder is a whole plugin, so compare them side by side or copy one to start your own.
 
 It's for Trails beyond the Horizon (`kai.exe`), and adds four tweaks to the overlay's Tweaks window:
 
@@ -19,6 +19,7 @@ Every folder has the same [`schemas/horizon.sal`](zig/schemas/horizon.sal). It s
 | --- | --- |
 | Zig | `@import("schema")`, made as it builds |
 | C | `#include "schema.h"`, made as it builds: its types, and each function and static's name and pointer type |
+| Rust | `mod schema`, which includes `.wraith/rust/schema.rs`, made by `wraith sdk rust types`: its types, with the game's functions and statics to call, like `GameStateManager::instance()` |
 | C++ | `#include "schema.hpp"`, made as it builds: its types, with the game's functions and statics to call, like `GameStateManager::instance()` |
 | TypeScript | `import ... from "schema"`, typed by `npm run types` |
 | Lua | `require("schema")` |
@@ -31,14 +32,15 @@ Each builds into a folder for `wraith dev add`, and Wraith loads it from there n
 | Folder | Needs | Build | Then |
 | --- | --- | --- | --- |
 | [zig](zig) | Zig, the version Wraith's built with | `zig build` | `wraith dev add zig-out` |
-| [c](c) | Zig, the version Wraith's built with, which compiles the C | `zig build` | `wraith dev add zig-out` |
-| [cpp](cpp) | Zig, the version Wraith's built with, which compiles the C++ | `zig build` | `wraith dev add zig-out` |
+| [c](c) | CMake and a C compiler like MSVC, and the `wraith` launcher. Or Zig, the version Wraith's built with | `cmake -B build`, `cmake --build build --config Release`. Or `zig build` | `wraith dev add dist`, or `zig-out` |
+| [rust](rust) | Rust, and the `wraith` launcher | `wraith sdk rust build` | `wraith dev add dist` |
+| [cpp](cpp) | CMake and a C++20 compiler like MSVC, and the `wraith` launcher. Or Zig, the version Wraith's built with | `cmake -B build`, `cmake --build build --config Release`. Or `zig build` | `wraith dev add dist`, or `zig-out` |
 | [typescript](typescript) | Node | `npm install`, `npm run build` | `wraith dev add dist` |
 | [lua](lua) | nothing | nothing | `wraith dev add .` |
 | [csharp-aot](csharp-aot) | the .NET 10 SDK, and C++ build tools | `dotnet publish` | `wraith dev add dist` |
 | [csharp-clr](csharp-clr) | the .NET 10 SDK | `dotnet publish` | `wraith dev add dist` |
 
-The Zig, C and C++ ones build against this checkout of Wraith. Your own would take Wraith from git, which `wraith new` sets up.
+Built with Zig, the Zig, C and C++ ones build against this checkout of Wraith. Your own would take Wraith from git, which `wraith new` sets up. Built with CMake, the C and C++ ones use the `wraith` launcher on PATH, or the one `-DWRAITH=<path>` says.
 
 Load one at a time. They all hook the same function, and a function only takes one hook, so the second one fails with `AlreadyHooked`. The Trails Horizon plugin hooks it too.
 
@@ -64,3 +66,26 @@ Its schemas can use Wraith's types, like `Vec3`, which come from `wraith.h` as `
 `wraith_plugin.hpp` makes a class the plugin with `WRAITH_PLUGIN(Example)`. Wraith makes it as the plugin starts, calls `start()` and `stop()`, and destroys it after. `schema.hpp` gives the game's code to call straight, like `GameStateManager::instance()->giveMira(n)`, found by the schema's signatures through Wraith.
 
 What you hand Wraith is any class or lambda with the right method, like a tweak's handler, made into one with `Handler::of(x)`, which has to outlive it, or `sal::keep<Handler>(x)`, a heap copy Wraith lets go of. Wraith stops calling them, and takes away the plugin's hooks, patches and tweaks, once it's unloading. Async methods give a `sal::Future`, which you can `co_await`, and an async method can be a coroutine. To offer a `[Service]` trait, give the class `sal::Object service(std::string_view trait)`, see `wraith_plugin.hpp`.
+
+## The Rust one
+
+It doesn't need Zig. `wraith sdk rust types` writes `.wraith/rust`: the `salamander` crate, a `wraith` crate with Wraith's API and what makes it a plugin, and `schema.rs` for its schemas, for 32 and 64-bit both. Its `Cargo.toml` depends on the two crates by path, so `cargo build` and rust-analyzer work as usual once they're there. `wraith sdk rust build` writes them again, builds it for each arch in `wraith.json`, and puts `wraith_example_rust_x64.dll`, `wraith.json` and its schemas in `dist`.
+
+`wraith::plugin!(Example)` makes a type the plugin: Wraith calls its `start`, which gives it, and `stop`. Calls that can fail give a `Result`, strings and slices go in as `&str` and `&[T]`, and calling the game's code is `unsafe`. What you hand Wraith, like a tweak's handler, is a closure or any type implementing its `...Impl` trait, made into one with `from_static`, or `keep` for a heap copy Wraith lets go of. Async methods give a `salamander::Future` to `.await`, and `salamander::spawn` makes an async block one. To offer a `[Service]` trait, give it a `service` method, with `wraith::offer`.
+
+## Building C and C++ with CMake
+
+Their `CMakeLists.txt` has the `wraith` launcher write `wraith.cmake`, this Wraith's CMake module, and calls `wraith_plugin(<id> <C|CXX> <sources>...)`. That makes the headers with `wraith sdk c types` or `wraith sdk cpp types` in the build folder, for the arch it's configured for (`-A Win32` for 32-bit), builds `wraith_<id>_<arch>.dll`, and puts it in `dist` with `wraith.json` and the schemas.
+
+## When the types are made again
+
+Every language's types are made by `wraith sdk <language> types`, which writes only files that changed, and `inputs.txt` beside them listing what they're made from: the `wraith` launcher, whose API they are, `wraith.json`, the plugin's schemas, and those of the plugins it depends on. So they're made again whenever any of that changes:
+
+| Language | When |
+| --- | --- |
+| Zig, and C and C++ built with Zig | `zig build` tracks the schemas and Wraith's package itself |
+| C and C++ built with CMake | each build, when anything in `inputs.txt` changed |
+| Rust | `wraith sdk rust build`, and `cargo build` through `build.rs`, which reruns when anything in `inputs.txt` changes |
+| C# | each `dotnet build` |
+| TypeScript and JavaScript | each `npm run build`, and while `npm run dev` runs, when anything in `inputs.txt` changes |
+| Lua | `wraith sdk lua types`, run again by hand, since they're only for the editor |

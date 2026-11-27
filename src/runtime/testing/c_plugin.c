@@ -27,7 +27,7 @@ static uint32_t run(uintptr_t self, Wraith_Tweaks_Event event) {
 static const Wraith_Tweaks_Handler_table run_table = { SAL_TABLE(Wraith_Tweaks_Handler), .call = run };
 
 static const Wraith_Tweaks_Field fields[] = {
-    { .name = SAL_STR("step"), .type = Wraith_Tweaks_FieldType_u32, .value = 1 },
+    { .name = SAL_STR_INIT("step"), .type = Wraith_Tweaks_FieldType_u32, .value = 1 },
 };
 
 /* What the fixture's service gave */

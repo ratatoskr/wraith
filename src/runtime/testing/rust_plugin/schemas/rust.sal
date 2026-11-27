@@ -1,0 +1,13 @@
+// The Rust fixture's own: one of Wraith's types, and a service it offers
+struct Spot {
+    Vec3 at;
+    []Vec3 path;
+}
+
+struct Out { u32 n; u32 later; }
+
+[Service] trait RustService {
+    u32 total();
+    // Settled by an async block
+    async u32 later();
+}

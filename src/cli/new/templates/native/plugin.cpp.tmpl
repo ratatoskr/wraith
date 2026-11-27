@@ -1,0 +1,13 @@
+// Wraith's API is in wraith.hpp, and schemas/ becomes schema.hpp as it builds
+#include "wraith_plugin.hpp"
+
+struct Plugin {
+    bool start() {
+        wraith::api().log().info("Hello!");
+        return true;
+    }
+
+    void stop() {}
+};
+
+WRAITH_PLUGIN(Plugin)

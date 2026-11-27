@@ -1,0 +1,21 @@
+using Wraith;
+
+namespace {{namespace}}
+{
+    sealed class Main : WraithPlugin
+    {
+        public override void Start(Context context)
+        {
+            Log.Instance.Info("Hello!");
+        }
+    }
+}
+
+namespace Wraith
+{
+    // The plugin Wraith starts
+    static partial class Entry
+    {
+        internal static partial WraithPlugin Create() => new global::{{namespace}}.Main();
+    }
+}
