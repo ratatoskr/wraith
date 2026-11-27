@@ -647,8 +647,9 @@ fn addCsPlugin(b: *std.Build, mods: Modules, options: *std.Build.Step.Options) v
     const sdk_cs = gen.addOutputDirectoryArg("cs");
     gen.addFileInput(b.path(folder ++ "/wraith.json"));
     gen.addFileInput(b.path(folder ++ "/schemas/cs.sal"));
-    // It lists what it wrote
+    // It lists what it wrote on stderr, which zig would show as a failed command
     _ = gen.captureStdOut(.{});
+    _ = gen.captureStdErr(.{});
 
     const run = b.addSystemCommand(&.{ dotnet, "build" });
     run.addFileArg(b.path(folder ++ "/CsFixture.csproj"));
@@ -683,8 +684,9 @@ fn addRustPlugin(b: *std.Build, mods: Modules, options: *std.Build.Step.Options)
     const sdk_rust = gen.addOutputDirectoryArg("rust");
     gen.addFileInput(b.path(folder ++ "/wraith.json"));
     gen.addFileInput(b.path(folder ++ "/schemas/rust.sal"));
-    // It lists what it wrote
+    // It lists what it wrote on stderr, which zig would show as a failed command
     _ = gen.captureStdOut(.{});
+    _ = gen.captureStdErr(.{});
 
     // The crate as a plugin's folder has it, with what sdk rust types wrote in .wraith/rust
     const files = b.addWriteFiles();
