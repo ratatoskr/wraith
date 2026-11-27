@@ -4,9 +4,14 @@ use std::process::Command;
 
 fn main() {
     let wraith = std::env::var("WRAITH").unwrap_or_else(|_| "wraith".into());
-    match Command::new(&wraith).args(["sdk", "rust", "types"]).output() {
+    match Command::new(&wraith)
+        .args(["sdk", "rust", "types"])
+        .output()
+    {
         Ok(out) if out.status.success() => {}
-        _ => println!("cargo:warning=couldn't run {wraith} sdk rust types, so .wraith/rust is as it was"),
+        _ => println!(
+            "cargo:warning=couldn't run {wraith} sdk rust types, so .wraith/rust is as it was"
+        ),
     }
     if let Ok(inputs) = std::fs::read_to_string(".wraith/rust/inputs.txt") {
         for input in inputs.lines() {

@@ -4,11 +4,17 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use salamander::{Code, Object, Slice, Str};
-use wraith::{TweakError, TweaksDefinition, TweaksEvent, TweaksEventKind, TweaksField, TweaksFieldType, TweaksHandler, TweaksMode};
+use wraith::{
+    TweakError, TweaksDefinition, TweaksEvent, TweaksEventKind, TweaksField, TweaksFieldType,
+    TweaksHandler, TweaksMode,
+};
 
 #[allow(dead_code)]
 mod schema {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/.wraith/rust/schema.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.wraith/rust/schema.rs"
+    ));
 }
 
 static STEP: AtomicU32 = AtomicU32::new(1);
@@ -41,7 +47,12 @@ impl schema::RustServiceImpl for Service {
 
 static SERVICE: Service = Service;
 
-static FIELDS: [TweaksField; 1] = [TweaksField { name: Str::new("step"), r#type: TweaksFieldType::U32, value: 1.0, ..unsafe { std::mem::zeroed() } }];
+static FIELDS: [TweaksField; 1] = [TweaksField {
+    name: Str::new("step"),
+    r#type: TweaksFieldType::U32,
+    value: 1.0,
+    ..unsafe { std::mem::zeroed() }
+}];
 
 struct Fixture;
 
@@ -70,7 +81,10 @@ impl wraith::Plugin for Fixture {
             COUNT.fetch_add(step, Ordering::Relaxed);
             Ok(())
         });
-        wraith::api().tweaks().add_in("Test", definition, handler).ok()?;
+        wraith::api()
+            .tweaks()
+            .add_in("Test", definition, handler)
+            .ok()?;
         Some(Fixture)
     }
 

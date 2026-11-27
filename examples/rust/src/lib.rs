@@ -4,25 +4,36 @@
 // `GameStateManager::instance()` and `manager.give_mira(n)` find what they call by the schema's signatures.
 // Calls that can fail give a Result, and what Wraith calls back is a closure or any type with the right method.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use salamander::{Slice, Str};
 use wraith::{
-    Cpu, Hook, HookOptions, HooksMidHandler, HooksMidOptions, LogLevel, Patch, PatchOptions, TweakError, TweaksDefinition, TweaksEvent,
-    TweaksEventKind, TweaksField, TweaksFieldType, TweaksHandler, TweaksMode,
+    Cpu, Hook, HookOptions, HooksMidHandler, HooksMidOptions, LogLevel, Patch, PatchOptions,
+    TweakError, TweaksDefinition, TweaksEvent, TweaksEventKind, TweaksField, TweaksFieldType,
+    TweaksHandler, TweaksMode,
 };
 
 #[allow(dead_code)]
 mod schema {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/.wraith/rust/schema.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.wraith/rust/schema.rs"
+    ));
 }
 
 use schema::*;
 
 /// Says what didn't work in Wraith's log.
 fn check<T, E: std::fmt::Display>(r: Result<T, E>, what: &str) -> Option<T> {
-    r.map_err(|e| wraith::api().log().write(LogLevel::ERR, "example_rust", &format!("{what} failed: {e}"))).ok()
+    r.map_err(|e| {
+        wraith::api().log().write(
+            LogLevel::ERR,
+            "example_rust",
+            &format!("{what} failed: {e}"),
+        )
+    })
+    .ok()
 }
 
 /// Where the schema's code or static `name` is, found by its signature once.
@@ -31,7 +42,12 @@ fn find(name: &str) -> Option<usize> {
 }
 
 fn field(name: &'static str, kind: TweaksFieldType, value: f64) -> TweaksField {
-    TweaksField { name: Str::new(name), r#type: kind, value, ..unsafe { std::mem::zeroed() } }
+    TweaksField {
+        name: Str::new(name),
+        r#type: kind,
+        value,
+        ..unsafe { std::mem::zeroed() }
+    }
 }
 
 // Free shopping. Shops still take your Mira, just none of it
@@ -46,10 +62,28 @@ fn add_free_shopping() -> Option<()> {
     let at = find(GAME_STATE_MANAGER_SPEND_MIRA_NAME)?;
     // Off till the tweak's on, so it's never called before the original is known
     let detour: GameStateManagerSpendMiraFn = spend_mira;
-    let hook = check(wraith::api().hooks().detour_native(at, detour as usize, HookOptions { disabled: true, ..Default::default() }), "Hooking spendMira")?;
-    let _ = SPEND_MIRA_ORIGINAL.set(unsafe { std::mem::transmute::<usize, GameStateManagerSpendMiraFn>(hook.original()) });
-    let definition = TweaksDefinition { id: Str::new("free_shopping"), title: Str::new("Free shopping"), ..Default::default() };
-    check(wraith::api().tweaks().add_hook("Money", definition, hook), "Adding Free shopping")
+    let hook = check(
+        wraith::api().hooks().detour_native(
+            at,
+            detour as usize,
+            HookOptions {
+                disabled: true,
+                ..Default::default()
+            },
+        ),
+        "Hooking spendMira",
+    )?;
+    let _ = SPEND_MIRA_ORIGINAL
+        .set(unsafe { std::mem::transmute::<usize, GameStateManagerSpendMiraFn>(hook.original()) });
+    let definition = TweaksDefinition {
+        id: Str::new("free_shopping"),
+        title: Str::new("Free shopping"),
+        ..Default::default()
+    };
+    check(
+        wraith::api().tweaks().add_hook("Money", definition, hook),
+        "Adding Free shopping",
+    )
 }
 
 // Give Mira, with an amount you choose. Each field comes as a `changed` just before it runs
@@ -57,7 +91,13 @@ fn add_free_shopping() -> Option<()> {
 static GIVE_FIELDS: OnceLock<[TweaksField; 1]> = OnceLock::new();
 
 fn add_give_mira() -> Option<()> {
-    let fields = GIVE_FIELDS.get_or_init(|| [TweaksField { has_min: true, min: 1.0, ..field("amount", TweaksFieldType::U32, 10000.0) }]);
+    let fields = GIVE_FIELDS.get_or_init(|| {
+        [TweaksField {
+            has_min: true,
+            min: 1.0,
+            ..field("amount", TweaksFieldType::U32, 10000.0)
+        }]
+    });
     let definition = TweaksDefinition {
         id: Str::new("give_mira"),
         title: Str::new("Give Mira"),
@@ -82,7 +122,10 @@ fn add_give_mira() -> Option<()> {
         unsafe { (*manager).give_mira(amount.load(Ordering::Relaxed)) };
         Ok(())
     });
-    check(wraith::api().tweaks().add_in("Money", definition, handler), "Adding Give Mira")
+    check(
+        wraith::api().tweaks().add_in("Money", definition, handler),
+        "Adding Give Mira",
+    )
 }
 
 // Tailing without being seen. Being seen needs the gauge full, so skip both. `expect` stops it
@@ -90,12 +133,30 @@ fn add_give_mira() -> Option<()> {
 
 fn patch(name: &str, bytes: &'static [u8], expect: &'static str) -> Option<Patch> {
     let at = find(name)?;
-    check(wraith::api().code().patch_bytes(at, bytes, PatchOptions { expect: Str::new(expect), disabled: true, ..Default::default() }), name)
+    check(
+        wraith::api().code().patch_bytes(
+            at,
+            bytes,
+            PatchOptions {
+                expect: Str::new(expect),
+                disabled: true,
+                ..Default::default()
+            },
+        ),
+        name,
+    )
 }
 
 fn add_tailing_stealth() -> Option<()> {
-    let tailing = [patch(TAILING_SEEN_NAME, &[0xEB], "76")?, patch(TAILING_GAUGE_NAME, &[0xEB, 0x02], "F3 0F 5F FE")?];
-    let definition = TweaksDefinition { id: Str::new("tailing_stealth"), title: Str::new("Tailing without being seen"), ..Default::default() };
+    let tailing = [
+        patch(TAILING_SEEN_NAME, &[0xEB], "76")?,
+        patch(TAILING_GAUGE_NAME, &[0xEB, 0x02], "F3 0F 5F FE")?,
+    ];
+    let definition = TweaksDefinition {
+        id: Str::new("tailing_stealth"),
+        title: Str::new("Tailing without being seen"),
+        ..Default::default()
+    };
     let handler = TweaksHandler::keep(move |event: TweaksEvent| -> Result<(), TweakError> {
         for p in &tailing {
             if event.kind == TweaksEventKind::ON {
@@ -106,7 +167,10 @@ fn add_tailing_stealth() -> Option<()> {
         }
         Ok(())
     });
-    check(wraith::api().tweaks().add_in("Field", definition, handler), "Adding Tailing without being seen")
+    check(
+        wraith::api().tweaks().add_in("Field", definition, handler),
+        "Adding Tailing without being seen",
+    )
 }
 
 // Or let it fill, slower. A mid hook runs with the registers right there in the game's code
@@ -119,17 +183,33 @@ static GAUGE_STORE: fn(*mut Cpu) = |cpu| unsafe {
     let cpu = &mut *cpu;
     let state = &*(cpu.rdi as usize as *const TailingState);
     let next = cpu.xmm7.f32x4[0];
-    cpu.xmm7.f32x4[0] = state.gauge + (next - state.gauge) * f32::from_bits(GAUGE_SPEED.load(Ordering::Relaxed));
+    cpu.xmm7.f32x4[0] =
+        state.gauge + (next - state.gauge) * f32::from_bits(GAUGE_SPEED.load(Ordering::Relaxed));
 };
 
 static SLOW_FIELDS: OnceLock<[TweaksField; 1]> = OnceLock::new();
 
 fn add_slow_tailing_gauge() -> Option<()> {
     let at = find(TAILING_GAUGE_STORE_NAME)?;
-    let options = HooksMidOptions { expect: Str::new("F3 0F 11 BF D4 00 00 00"), disabled: true, ..Default::default() };
-    let hook: Hook = check(wraith::api().hooks().mid(at, options, HooksMidHandler::from_static(&GAUGE_STORE)), "Hooking the tailing gauge")?;
+    let options = HooksMidOptions {
+        expect: Str::new("F3 0F 11 BF D4 00 00 00"),
+        disabled: true,
+        ..Default::default()
+    };
+    let hook: Hook = check(
+        wraith::api()
+            .hooks()
+            .mid(at, options, HooksMidHandler::from_static(&GAUGE_STORE)),
+        "Hooking the tailing gauge",
+    )?;
     let fields = SLOW_FIELDS.get_or_init(|| {
-        [TweaksField { has_min: true, min: 0.0, has_max: true, max: 1.0, ..field("speed", TweaksFieldType::F32, 0.25) }]
+        [TweaksField {
+            has_min: true,
+            min: 0.0,
+            has_max: true,
+            max: 1.0,
+            ..field("speed", TweaksFieldType::F32, 0.25)
+        }]
     });
     let definition = TweaksDefinition {
         id: Str::new("slow_tailing_gauge"),
@@ -147,7 +227,10 @@ fn add_slow_tailing_gauge() -> Option<()> {
         }
         Ok(())
     });
-    check(wraith::api().tweaks().add_in("Field", definition, handler), "Adding Slower tailing gauge")
+    check(
+        wraith::api().tweaks().add_in("Field", definition, handler),
+        "Adding Slower tailing gauge",
+    )
 }
 
 // What Wraith starts and stops
@@ -157,9 +240,16 @@ struct Example;
 impl wraith::Plugin for Example {
     fn start() -> Option<Self> {
         // Each adds what it can, so one the game changed doesn't stop the rest
-        let added = [add_free_shopping(), add_give_mira(), add_tailing_stealth(), add_slow_tailing_gauge()];
+        let added = [
+            add_free_shopping(),
+            add_give_mira(),
+            add_tailing_stealth(),
+            add_slow_tailing_gauge(),
+        ];
         if added.iter().any(Option::is_none) {
-            wraith::api().log().warn("Some tweaks couldn't be added, see above");
+            wraith::api()
+                .log()
+                .warn("Some tweaks couldn't be added, see above");
         }
         Some(Example)
     }
