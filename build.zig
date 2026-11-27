@@ -214,8 +214,13 @@ pub const Plugin = struct {
 
     /// A C++ plugin's module, with `wraith.hpp`, `wraith_plugin.hpp` and its `schema.hpp` to include.
     fn cppModule(b: *std.Build, salamander: *std.Build.Dependency, paths: CPaths, options: CModule) *std.Build.Module {
-        const module = b.createModule(.{ .target = options.target, .optimize = options.optimize, .link_libc = true, .link_libcpp = true });
-        module.addCSourceFiles(.{ .root = options.root, .files = options.sources, .flags = options.flags });
+        // Zig's libc++ doesn't build for MSVC, whose own C++ library comes with its C one
+        const msvc = options.target.result.abi == .msvc;
+        const module = b.createModule(.{ .target = options.target, .optimize = options.optimize, .link_libc = true, .link_libcpp = !msvc });
+        if (msvc) module.linkSystemLibrary("msvcprt", .{});
+        // Zig says -nostdinc++ without its libc++, which MSVC's headers make unused
+        const flags = if (msvc) std.mem.concat(b.allocator, []const u8, &.{ options.flags, &.{"-Wno-unused-command-line-argument"} }) catch @panic("OOM") else options.flags;
+        module.addCSourceFiles(.{ .root = options.root, .files = options.sources, .flags = flags });
         const api = Salamander.bundle(salamander, paths.api);
         module.addIncludePath(Salamander.cppHeaders(salamander, .{ .source = api, .target = options.target, .name = "wraith.hpp" }));
         module.addIncludePath(paths.include);
