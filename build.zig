@@ -504,6 +504,24 @@ pub fn build(b: *std.Build) void {
         run_gen.addArg("src/api/schemas/imgui.sal");
         b.step("imgui-sal", "Write src/api/schemas/imgui.sal from dear_bindings' dcimgui.json").dependOn(&run_gen.step);
     }
+    // The API as one .sal, and as JSON with its docs, layouts and how each language writes it, for the docs
+    // site and tools. Spelled like the SDKs. Releases put them beside the zip
+    {
+        const salamander = b.dependency("salamander", .{ .target = target, .optimize = optimize });
+        const json = Salamander.jsonFile(salamander, .{
+            .folder = b.path("src/api/schemas"),
+            .name = "wraith.json",
+            .uses = &.{"wraith"},
+            .global_uses = &.{"Wraith"},
+            .instances = &.{"wraith.Instance=Sig"},
+            // C#'s, see cli/sdk/cs.zig. The rest have their own namespaces already
+            .lang_namespace = "Wraith",
+            .class = "Constants",
+        });
+        const step = b.step("api", "Write the API to zig-out/api, as wraith.sal and wraith.json");
+        step.dependOn(&b.addInstallFile(json, "api/wraith.json").step);
+        step.dependOn(&b.addInstallFile(Salamander.bundle(salamander, b.path("src/api/schemas")), "api/wraith.sal").step);
+    }
 
     const test_options = b.addOptions();
     for ([_][]const u8{ "fixture", "failing", "drawing" }) |name| {

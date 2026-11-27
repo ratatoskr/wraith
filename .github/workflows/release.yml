@@ -8,7 +8,11 @@ name: release
 #
 #   wraith/<version>/wraith-<version>-windows-x64.zip   bin/ from `zig build` with debug symbols.
 #                                                       wraith.exe plus x64 and x86 DLLs side by side
-#   wraith/latest.json                                  {version, url, sha256} of the newest zip.
+#   wraith/<version>/wraith-<version>.sal               the API as one schema, from `zig build api`.
+#   wraith/<version>/wraith-<version>.json              the API with its docs and each language's
+#                                                       names, for the docs site and tools.
+#   wraith/latest.json                                  {version, url, sha256, schema, api} of the
+#                                                       newest zip, .sal and .json.
 #   sdk/wraith-<version>.tar.gz                         the source as a Zig package.
 #   sdk/latest.json                                     {version, url, hash} of the newest one.
 #
@@ -102,6 +106,9 @@ jobs:
       - name: build
         run: zig build -Doptimize=ReleaseFast -Dtarget=x86_64-windows-msvc --summary all
 
+      - name: build the api's schema and json
+        run: zig build api --summary all
+
       # Launcher plus bootstrap and runtime for both arches must all be there
       - name: check both arches were built
         shell: pwsh
@@ -126,10 +133,14 @@ jobs:
           $zip = "wraith-$env:VERSION-windows-x64.zip"
           7z a -tzip $zip .\zig-out\bin\*
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          Copy-Item zig-out\api\wraith.sal "wraith-$env:VERSION.sal"
+          Copy-Item zig-out\api\wraith.json "wraith-$env:VERSION.json"
           @{
             version = $env:VERSION
             url = "$env:DIST_URL/wraith/$env:VERSION/$zip"
             sha256 = (Get-FileHash $zip -Algorithm SHA256).Hash
+            schema = "$env:DIST_URL/wraith/$env:VERSION/wraith-$env:VERSION.sal"
+            api = "$env:DIST_URL/wraith/$env:VERSION/wraith-$env:VERSION.json"
           } | ConvertTo-Json | Set-Content latest.json -Encoding utf8NoBOM
           Get-Content latest.json
 
@@ -157,6 +168,12 @@ jobs:
         run: |
           $zip = "wraith-$env:VERSION-windows-x64.zip"
           aws s3 cp $zip "s3://$env:BUCKET/wraith/$env:VERSION/$zip" --endpoint-url $env:R2_ENDPOINT
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          aws s3 cp "wraith-$env:VERSION.sal" "s3://$env:BUCKET/wraith/$env:VERSION/wraith-$env:VERSION.sal" `
+            --endpoint-url $env:R2_ENDPOINT --content-type "text/plain; charset=utf-8"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          aws s3 cp "wraith-$env:VERSION.json" "s3://$env:BUCKET/wraith/$env:VERSION/wraith-$env:VERSION.json" `
+            --endpoint-url $env:R2_ENDPOINT --content-type application/json
           if ($LASTEXITCODE -ne 0) { exit 1 }
           # zig fetch goes by Content-Type first, and the aws guess for .tar.gz is x-tar
           foreach ($file in Get-ChildItem sdk-out\*.tar.gz) {
