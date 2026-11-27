@@ -283,6 +283,10 @@ catching_crashes: bool = false,
 holding_game_input: bool = false,
 /// From whichever thread. Its tick starts waiting for focus from it.
 just_opened: Atomic(bool) = .init(false),
+/// From `open` till a whole frame's drawn, so pressing again doesn't close it before it shows. Any thread.
+opening: Atomic(bool) = .init(false),
+/// Frames of "Loading..." drawn since opening, before plugins can stall one. Its thread.
+loading_frames: u8 = 0,
 /// Keeps the game's input blocked till it's in front. Its thread.
 awaiting_focus: bool = false,
 /// So the game can't get stuck blocked. Its thread.
@@ -630,6 +634,7 @@ pub fn open(self: *Workbench) void {
             return;
         };
     }
+    if (!self.isOpen()) self.opening.store(true, .release);
     self.just_opened.store(true, .release);
     self.app.?.show();
 }
@@ -651,7 +656,8 @@ pub fn close(self: *Workbench) void {
 }
 
 pub fn toggle(self: *Workbench) void {
-    if (self.isOpen()) self.close() else self.open();
+    // Still coming up, so another press just raises it
+    if (self.isOpen() and !self.opening.load(.acquire)) self.close() else self.open();
 }
 
 pub fn isOpen(self: *const Workbench) bool {
@@ -718,6 +724,7 @@ pub fn tick(self: *Workbench) void {
     if (self.just_opened.swap(false, .acq_rel)) {
         self.awaiting_focus = true;
         self.opening_until_ns = now + opening_timeout_ns;
+        self.loading_frames = 0;
     }
     const app = self.app orelse return self.holdGameInput(false);
     // A closed Workbench draws nothing, so its plugins' panels would still say they're open
@@ -775,6 +782,7 @@ pub fn draw(self: *Workbench) void {
         c.ImGui_SetNextWindowFocus();
         self.raise_frames = raise_tries;
     };
+    if (self.opening.load(.acquire) and self.loading_frames < loading_frames_max) return self.drawLoading();
 
     var keep_open = true;
     var on_screen = false;
@@ -816,12 +824,38 @@ pub fn draw(self: *Workbench) void {
     self.pollPluginPanels();
     self.tabs.draw(.{ .ctx = self, .func = placeNode }, .{ .ctx = self, .func = withHost });
     self.dev_menus.drawWindows();
+    self.loading_frames = 0;
+    self.opening.store(false, .release);
     self.own_file_focused = false;
     Documents.dropClosed(self);
     const memory_front = if (self.active_memory) |m| tuft_imgui.dock.inFront(m.window().title) else false;
     self.memory_in_front.store(on_screen and memory_front, .release);
     const code = self.active_code orelse return self.code_in_front.store(false, .release);
     self.code_in_front.store(on_screen and tuft_imgui.dock.inFront(code.window().title), .release);
+}
+
+/// Its own OS window shows from the first, then the next frame stops early.
+const loading_frames_max = 2;
+
+/// Just the window with "Loading...", so it's up before plugins' tabs can stall a frame.
+fn drawLoading(self: *Workbench) void {
+    self.loading_frames += 1;
+    var keep_open = true;
+    const flags = c.ImGuiWindowFlags_NoCollapse | c.ImGuiWindowFlags_NoDocking | c.ImGuiWindowFlags_NoScrollbar | c.ImGuiWindowFlags_NoScrollWithMouse;
+    if (c.ImGui_Begin(@ptrCast(self.windowTitle()), &keep_open, flags)) {
+        const viewport = c.ImGui_GetWindowViewport();
+        // Shown, so the next frame can draw it all
+        if (viewport != c.ImGui_GetMainViewport() and viewport.*.PlatformHandle != null) self.loading_frames = loading_frames_max;
+        self.bringWindowToFront();
+        const text = "Loading...";
+        const size = c.ImGui_CalcTextSize(text);
+        const avail = c.ImGui_GetContentRegionAvail();
+        const at = c.ImGui_GetCursorPos();
+        c.ImGui_SetCursorPos(.{ .x = at.x + @max(0, (avail.x - size.x) / 2), .y = at.y + @max(0, (avail.y - size.y) / 2) });
+        c.ImGui_TextDisabled(text);
+    }
+    c.ImGui_End();
+    if (!keep_open) self.close();
 }
 
 /// What's going on, along the bottom.
