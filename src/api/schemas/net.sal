@@ -1,0 +1,63 @@
+// HTTP, off the caller's thread. Each host it talks to, redirects too, has to be in
+// "permissions": { "net": [...] } in its wraith.json.
+
+namespace Wraith;
+
+error NetError {
+    // Couldn't connect, or the connection broke
+    Failed = 1,
+    // Its host, or one it redirects to, isn't in "permissions": { "net": [...] }
+    NotDeclared,
+    // Not an http:// or https:// URL
+    InvalidUrl,
+    // Longer than `max_bytes`
+    TooBig,
+    // For `download`, when the server says no, like 404. `fetch` gives the status instead
+    Status,
+    // For `download`: couldn't write there, or it's outside its folders without "files"
+    WriteFailed,
+    // Nothing arrived for `timeout_ms`
+    Timeout,
+}
+
+namespace Net {
+    enum Method : u8 { get, head, post, put, patch, delete }
+
+    struct Header { string name; string value; }
+
+    struct Request {
+        string url;
+        Method method;
+        []Header headers;
+        // Sent with a content-length, for post, put and patch
+        []u8 body;
+        // 0 for the most `fetch` keeps, 64 MiB. Downloads have no limit unless they say
+        u64 max_bytes;
+        // How long it waits with nothing arriving, so a slow download still finishes. 0 for 30 s
+        u32 timeout_ms;
+    }
+
+    struct Response {
+        u16 status;
+        []Header headers;
+        blob body;
+    }
+
+    struct Progress {
+        u64 received;
+        // 0 if the server didn't say
+        u64 total;
+        // False before it starts and once it's done
+        bool active;
+    }
+}
+
+trait Net {
+    // Settles with any status, so check it. Follows up to 5 redirects.
+    async Net.Response!NetError fetch(Net.Request request);
+    // Streams the body to `path`, replacing what's there once it's all in, and settles with its size.
+    // Relative paths are in its folder for this game.
+    async u64!NetError download(Net.Request request, string path);
+    // How its download to `path` is going, for drawing progress. Any thread.
+    Net.Progress downloading(string path);
+}

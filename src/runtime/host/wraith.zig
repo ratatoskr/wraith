@@ -18,6 +18,7 @@ const Libraries = @import("../Libraries.zig");
 const memory_area = @import("memory_area.zig");
 const code_area = @import("code_area.zig");
 const files_area = @import("files_area.zig");
+const net_area = @import("net_area.zig");
 const game_area = @import("game_area.zig");
 const photo_area = @import("photo_area.zig");
 const lists = @import("lists.zig");
@@ -62,6 +63,7 @@ pub const Patch = code_area.Patch;
 pub const Vfs = files_area.Vfs;
 pub const VfsWatch = files_area.VfsWatch;
 pub const Images = files_area.Images;
+pub const Net = net_area.Net;
 pub const Image = files_area.Image;
 pub const Tweaks = W.Tweaks;
 pub const TweakSwitchSubscription = W.Tweaks.SwitchSubscription;
@@ -96,6 +98,7 @@ pub const Tables = struct {
     owner: *sal.Owner,
     root: *const sal.Table(Wraith),
     clipboard: *const sal.Table(Clipboard),
+    net: *const sal.Table(Net),
     settings: *const sal.Table(Settings),
     setting: *const sal.Table(Setting),
     config: *const sal.Table(Config),
@@ -182,6 +185,7 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .owner = o,
         .root = h.adopt(Wraith, sal.implement(Wraith, Root), o) catch return null,
         .clipboard = h.adopt(Clipboard, sal.implement(Clipboard, ClipboardImpl), o) catch return null,
+        .net = h.adopt(Net, sal.implement(Net, net_area.Impl), o) catch return null,
         .settings = h.adopt(Settings, sal.implement(Settings, SettingsImpl), o) catch return null,
         .setting = h.adopt(Setting, sal.implement(Setting, SettingImpl), o) catch return null,
         .config = h.adopt(Config, sal.implement(Config, ConfigImpl), o) catch return null,
@@ -273,6 +277,10 @@ const Root = struct {
 
     pub fn config(loaded: *Loaded) sal.Object(Config) {
         return area(loaded, Config, "config");
+    }
+
+    pub fn net(loaded: *Loaded) sal.Object(Net) {
+        return area(loaded, Net, "net");
     }
 
     pub fn threads(loaded: *Loaded) sal.Object(Threads) {

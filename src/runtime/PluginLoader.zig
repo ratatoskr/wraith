@@ -1191,6 +1191,70 @@ const tests = struct {
         return 4;
     }
 
+    test "script plugins fetch and download from hosts they declare" {
+        const host = @import("host/root.zig");
+        const sys = @import("tuft_sys");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        host.frame.setFrames(true);
+        defer host.frame.setFrames(false);
+        defer host.threads.stop();
+        host.frame.run();
+        var server: @import("testing/HttpServer.zig") = undefined;
+        try server.start();
+        defer server.end();
+
+        const Out = extern struct { js_status: u32 = 0, js_length: u32 = 0, js_refused: u32 = 0, lua_status: u32 = 0, lua_length: u32 = 0, lua_size: u32 = 0, done: u32 = 0 };
+        var out: Out = .{};
+        var install: Install = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const io = testing.io;
+        try install.tmp.dir.createDirPath(io, "plugins/fetcher/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/fetcher/schemas/out.sal", .data = "struct Out { u32 js_status; u32 js_length; u32 js_refused; u32 lua_status; u32 lua_length; u32 lua_size; u32 done; }" });
+        try install.pluginManifest("fetcher", "\"provider\": \"lua\", \"permissions\": { \"net\": [\"127.0.0.1\"] }");
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local wraith = require("wraith")
+            \\local net = wraith.Wraith.net()
+            \\local out = wraith.Fetcher.Out.at({d})
+            \\task.spawn(function()
+            \\    local got = net:fetch({{ url = "http://127.0.0.1:{d}/hello", method = "get" }}):await()
+            \\    out.lua_status = got.status
+            \\    out.lua_length = #got.body
+            \\    out.lua_size = net:download({{ url = "http://127.0.0.1:{d}/file", method = "get" }}, "file.txt"):await()
+            \\    out.done = out.done + 1
+            \\end)
+        , .{ @intFromPtr(&out), server.port, server.port });
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/fetcher/main.lua", .data = lua });
+
+        try install.tmp.dir.createDirPath(io, "plugins/fetcher_js");
+        try install.pluginManifest("fetcher_js", "\"provider\": \"js\", \"depends\": [\"fetcher\"], \"permissions\": { \"net\": [\"127.0.0.1\"] }");
+        const js = try std.fmt.allocPrint(testing.allocator,
+            \\import {{ Wraith, Fetcher }} from "wraith";
+            \\const net = Wraith.net(), out = Fetcher.Out.at({d});
+            \\(async () => {{
+            \\    const got = await net.fetch({{ url: "http://127.0.0.1:{d}/hello", method: "get" }});
+            \\    out.js_status = got.status;
+            \\    out.js_length = got.body.byteLength;
+            \\    try {{ await net.fetch({{ url: "http://localhost:{d}/hello", method: "get" }}); }} catch (e) {{ out.js_refused = 1; }}
+            \\    out.done += 1;
+            \\}})();
+        , .{ @intFromPtr(&out), server.port, server.port });
+        defer testing.allocator.free(js);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/fetcher_js/main.js", .data = js });
+
+        try install.loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("fetcher").?.state);
+        try testing.expectEqual(.loaded, install.info("fetcher_js").?.state);
+        var waited: u32 = 0;
+        while (@atomicLoad(u32, &out.done, .acquire) < 2 and waited < 5000) : (waited += 1) {
+            host.frame.run();
+            sys.thread.sleepMs(1);
+        }
+        try testing.expectEqual(Out{ .js_status = 200, .js_length = 2, .js_refused = 1, .lua_status = 200, .lua_length = 2, .lua_size = 1000, .done = 2 }, out);
+    }
+
     test "script plugins hop between threads, and carry on where they hopped to" {
         const host = @import("host/root.zig");
         const sys = @import("tuft_sys");

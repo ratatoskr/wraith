@@ -30,6 +30,8 @@ namespace Wraith;
     // The game's C# runtime
     Managed managed();
     Memory memory();
+    // HTTP to the hosts it declares
+    Net net();
     // Posing characters, fed skeletons by game and engine plugins
     Posing posing();
     Settings settings();

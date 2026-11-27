@@ -75,6 +75,7 @@ test {
     _ = @import("memory_area.zig");
     _ = @import("code_area.zig");
     _ = @import("files_area.zig");
+    _ = @import("net_area.zig");
     _ = @import("game_area.zig");
     _ = @import("photo_area.zig");
     _ = @import("ranked.zig");
