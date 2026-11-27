@@ -1,0 +1,14 @@
+// The C++ fixture's own: one of Wraith's types, which comes from wraith.hpp, and a service it offers
+struct Spot {
+    Vec3 at;
+    []Vec3 path;
+}
+
+struct Out { u32 n; u32 later; }
+
+// What the fixture's service gave it, for plugins that depend on it
+[Service] trait CppService {
+    u32 total();
+    // Settled by a coroutine, waiting on the fixture's next
+    async u32 later();
+}

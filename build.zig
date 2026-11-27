@@ -109,6 +109,54 @@ pub const Plugin = struct {
         };
     }
 
+    pub const CppOptions = struct {
+        name: []const u8,
+        /// Its C++ files, from the project root.
+        sources: []const []const u8,
+        target: std.Build.ResolvedTarget,
+        optimize: std.builtin.OptimizeMode,
+        /// Designated initializers leave out padding and unset fields, so that warning's off.
+        flags: []const []const u8 = &.{ "-std=c++20", "-Wall", "-Wextra", "-Wno-missing-field-initializers" },
+        /// Its `.sal` files, as `schema.hpp`. Null means schemas/ in the project root.
+        schemas: ?std.Build.LazyPath = null,
+        /// Null means wraith.json in the project root.
+        manifest: ?std.Build.LazyPath = null,
+    };
+
+    /// A C++20 plugin compiled by Zig, with `wraith.hpp`, `wraith_plugin.hpp` and its generated `schema.hpp`.
+    pub fn initCpp(b: *std.Build, options: CppOptions) Plugin {
+        const targets = targetsOf(b, options.target);
+        const depends = dependsOf(b);
+        const schemas = options.schemas orelse findSchemas(b.path("plugin.cpp"));
+        const arches = b.allocator.alloc(Arch, targets.len) catch @panic("OOM");
+        for (targets, arches) |target, *arch| {
+            const wraith = b.dependencyFromBuildZig(wraith_build, .{ .target = target, .optimize = options.optimize });
+            const salamander = wraith.builder.dependency("salamander", .{ .target = target, .optimize = options.optimize });
+            const module = cppModule(b, salamander, .{ .api = wraith.path("src/api/schemas"), .include = wraith.path("src/sdk/cpp") }, .{
+                .name = options.name,
+                .root = b.path("."),
+                .sources = options.sources,
+                .flags = options.flags,
+                .target = target,
+                .optimize = options.optimize,
+                .schemas = schemas,
+                .depends = depends,
+            });
+            arch.* = .{
+                .target = target,
+                .lib = b.addLibrary(.{ .name = b.fmt("wraith_{s}_{s}", .{ options.name, archName(target) }), .linkage = .dynamic, .root_module = module }),
+                .mod = module,
+                .sdk = Sdk.of(wraith).sdk,
+            };
+        }
+        return .{
+            .name = options.name,
+            .manifest = options.manifest orelse b.path("wraith.json"),
+            .schemas = schemas,
+            .arches = arches,
+        };
+    }
+
     fn archName(target: std.Build.ResolvedTarget) []const u8 {
         return if (target.result.cpu.arch == .x86) "x86" else "x64";
     }
@@ -159,6 +207,41 @@ pub const Plugin = struct {
                 .instances = &.{instance_tag},
                 .with = std.mem.concat(b.allocator, Salamander.ZigOptions.With, &.{ &.{own}, rest }) catch @panic("OOM"),
                 .aliases = &.{.{ .prefix = "wraith/", .include = "wraith.h" }},
+            }));
+        }
+        return module;
+    }
+
+    /// A C++ plugin's module, with `wraith.hpp`, `wraith_plugin.hpp` and its `schema.hpp` to include.
+    fn cppModule(b: *std.Build, salamander: *std.Build.Dependency, paths: CPaths, options: CModule) *std.Build.Module {
+        const module = b.createModule(.{ .target = options.target, .optimize = options.optimize, .link_libc = true, .link_libcpp = true });
+        module.addCSourceFiles(.{ .root = options.root, .files = options.sources, .flags = options.flags });
+        const api = Salamander.bundle(salamander, paths.api);
+        module.addIncludePath(Salamander.cppHeaders(salamander, .{ .source = api, .target = options.target, .name = "wraith.hpp" }));
+        module.addIncludePath(paths.include);
+        // Like cModule's: its own and its dependencies' schemas, with Wraith's types from wraith.hpp
+        const own: Salamander.ZigOptions.With = .{ .name = "wraith", .folder = paths.api };
+        const folder = options.schemas orelse if (options.depends.len > 0) options.depends[0].folder else null;
+        if (folder) |dir| {
+            const rest = if (options.schemas != null) options.depends else options.depends[1..];
+            const global_uses = b.allocator.alloc([]const u8, options.depends.len + 1) catch @panic("OOM");
+            const file_namespaces = b.allocator.alloc([]const u8, options.depends.len) catch @panic("OOM");
+            global_uses[0] = "Wraith";
+            for (options.depends, global_uses[1..], file_namespaces) |d, *u, *f| {
+                u.* = namespaceOf(b, d.name);
+                f.* = b.fmt("{s}/={s}", .{ d.name, u.* });
+            }
+            module.addIncludePath(Salamander.cppHeaders(salamander, .{
+                .folder = dir,
+                .target = options.target,
+                .name = "schema.hpp",
+                .uses = &.{"wraith"},
+                .global_uses = global_uses,
+                .namespace = namespaceOf(b, options.name),
+                .file_namespaces = file_namespaces,
+                .instances = &.{instance_tag},
+                .with = std.mem.concat(b.allocator, Salamander.ZigOptions.With, &.{ &.{own}, rest }) catch @panic("OOM"),
+                .aliases = &.{.{ .prefix = "wraith/", .include = "wraith.hpp" }},
             }));
         }
         return module;
@@ -441,6 +524,21 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .schemas = b.path("src/runtime/testing/c_schemas"),
+            .depends = &.{.{ .name = "fixture", .folder = b.path("src/runtime/testing/schemas") }},
+        }),
+    }).getEmittedBin());
+    // And a C++ one, made like `Plugin.initCpp` makes them
+    test_options.addOptionPath("cpp_plugin", b.addLibrary(.{
+        .name = b.fmt("wraith_cpp_fixture_{s}", .{Plugin.archName(target)}),
+        .linkage = .dynamic,
+        .root_module = Plugin.cppModule(b, b.dependency("salamander", .{ .target = target, .optimize = optimize }), .{ .api = b.path("src/api/schemas"), .include = b.path("src/sdk/cpp") }, .{
+            .name = "cpp_fixture",
+            .root = b.path("src/runtime/testing"),
+            .sources = &.{"cpp_plugin.cpp"},
+            .flags = &.{ "-std=c++20", "-Wall", "-Wextra", "-Wno-missing-field-initializers", "-Werror" },
+            .target = target,
+            .optimize = optimize,
+            .schemas = b.path("src/runtime/testing/cpp_schemas"),
             .depends = &.{.{ .name = "fixture", .folder = b.path("src/runtime/testing/schemas") }},
         }),
     }).getEmittedBin());

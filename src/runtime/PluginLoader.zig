@@ -337,6 +337,77 @@ const tests = struct {
         try testing.expectEqual(1, loader.find("c_fixture").?.services.items.len);
     }
 
+    test "a C++ plugin starts, its kept tweak runs and fails like any, and goes when it unloads" {
+        const options = @import("test_options");
+        const api = @import("wraith_api");
+        const tweaks = @import("host/root.zig").tweaks;
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{.{ "cpp_fixture", options.cpp_plugin }} });
+        defer install.deinit();
+        const loader = &install.loader;
+        try (try loader.load("cpp_fixture")).wait();
+        try testing.expectEqual(.loaded, install.info("cpp_fixture").?.state);
+        const loaded = loader.find("cpp_fixture").?;
+        const count_at = tuft_sys.module.findExport(loaded.library(), "wraith_cpp_count") orelse return error.ExportNotFound;
+        const countNow: *const fn () callconv(.c) u32 = @ptrFromInt(count_at);
+
+        var problem: api.TweakProblem = .{};
+        try testing.expectEqual(.ok, tweaks.call("cpp_fixture:count", .{ .kind = .changed, .field = "step", .value = 3 }, &problem));
+        try testing.expectEqual(.ok, tweaks.call("cpp_fixture:count", .{ .kind = .on }, &problem));
+        try testing.expectEqual(3, countNow());
+        _ = tweaks.call("cpp_fixture:count", .{ .kind = .changed, .field = "step", .value = 0 }, &problem);
+        try testing.expectEqual(.failed, tweaks.call("cpp_fixture:count", .{ .kind = .on }, &problem));
+        try testing.expectEqual(3, countNow());
+
+        try (try loader.unload("cpp_fixture")).wait();
+        try testing.expectEqual(.gone, tweaks.call("cpp_fixture:count", .{ .kind = .on }, &problem));
+    }
+
+    test "a C++ plugin uses what a plugin it depends on offers, and offers its own with a coroutine" {
+        const options = @import("test_options");
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        const Out = extern struct { n: u32 = 0, later: u32 = 0 };
+        var out: Out = .{};
+
+        var install: Install = undefined;
+        try install.init(.{ .plugins = &.{ .{ "fixture", options.fixture_plugin }, .{ "cpp_fixture", options.cpp_plugin } } });
+        defer install.deinit();
+        const io = testing.io;
+        try install.tmp.dir.createDirPath(io, "plugins/fixture/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/fixture/schemas/fixture.sal", .data = @embedFile("testing/schemas/fixture.sal") });
+        try install.tmp.dir.createDirPath(io, "plugins/cpp_fixture/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cpp_fixture/schemas/cpp.sal", .data = @embedFile("testing/cpp_schemas/cpp.sal") });
+        try install.pluginManifest("cpp_fixture", "\"depends\": [\"fixture\"]");
+        // And a Lua one using the C++ one's
+        try install.tmp.dir.createDirPath(io, "plugins/user");
+        try install.pluginManifest("user", "\"provider\": \"lua\", \"depends\": [\"cpp_fixture\"]");
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local C = require("wraith").CppFixture
+            \\local out = C.Out.at({d})
+            \\out.n = C.cppService():total()
+            \\out.later = C.cppService():later():await()
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/user/main.lua", .data = lua });
+
+        const loader = &install.loader;
+        try loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("cpp_fixture").?.state);
+        try testing.expectEqual(.loaded, install.info("user").?.state);
+        // The fixture's second next, through C++ to Lua, then its third tripled by a coroutine
+        try testing.expectEqual(2, out.n);
+        // The script carries on a frame or a worker later
+        var waited: u32 = 0;
+        while (@atomicLoad(u32, &out.later, .acquire) == 0 and waited < 2000) : (waited += 1) {
+            host.salamander.pollRender();
+            @import("tuft_sys").thread.sleepMs(1);
+        }
+        try testing.expectEqual(9, out.later);
+        try testing.expectEqual(1, loader.find("cpp_fixture").?.services.items.len);
+    }
+
     test "plugins share Salamander objects, which stop when the plugin unloads" {
         const options = @import("test_options");
         const sal = @import("salamander_runtime");

@@ -1,6 +1,6 @@
 # Examples
 
-The same plugin in every language Wraith runs: [Zig](zig), [C](c), [TypeScript](typescript), [Lua](lua) and C#, twice: [NativeAOT](csharp-aot) and [CoreCLR](csharp-clr). Each folder is a whole plugin, so compare them side by side or copy one to start your own.
+The same plugin in every language Wraith runs: [Zig](zig), [C](c), [C++](cpp), [TypeScript](typescript), [Lua](lua) and C#, twice: [NativeAOT](csharp-aot) and [CoreCLR](csharp-clr). Each folder is a whole plugin, so compare them side by side or copy one to start your own.
 
 It's for Trails beyond the Horizon (`kai.exe`), and adds four tweaks to the overlay's Tweaks window:
 
@@ -19,6 +19,7 @@ Every folder has the same [`schemas/horizon.sal`](zig/schemas/horizon.sal). It s
 | --- | --- |
 | Zig | `@import("schema")`, made as it builds |
 | C | `#include "schema.h"`, made as it builds: its types, and each function and static's name and pointer type |
+| C++ | `#include "schema.hpp"`, made as it builds: its types, with the game's functions and statics to call, like `GameStateManager::instance()` |
 | TypeScript | `import ... from "schema"`, typed by `npm run types` |
 | Lua | `require("schema")` |
 | C# | the `ExampleCsAot` or `ExampleCsClr` namespace, made into `.wraith/cs` as it builds |
@@ -31,12 +32,13 @@ Each builds into a folder for `wraith dev add`, and Wraith loads it from there n
 | --- | --- | --- | --- |
 | [zig](zig) | Zig, the version Wraith's built with | `zig build` | `wraith dev add zig-out` |
 | [c](c) | Zig, the version Wraith's built with, which compiles the C | `zig build` | `wraith dev add zig-out` |
+| [cpp](cpp) | Zig, the version Wraith's built with, which compiles the C++ | `zig build` | `wraith dev add zig-out` |
 | [typescript](typescript) | Node | `npm install`, `npm run build` | `wraith dev add dist` |
 | [lua](lua) | nothing | nothing | `wraith dev add .` |
 | [csharp-aot](csharp-aot) | the .NET 10 SDK, and C++ build tools | `dotnet publish` | `wraith dev add dist` |
 | [csharp-clr](csharp-clr) | the .NET 10 SDK | `dotnet publish` | `wraith dev add dist` |
 
-The Zig and C ones build against this checkout of Wraith. Your own would take Wraith from git, which `wraith new` sets up.
+The Zig, C and C++ ones build against this checkout of Wraith. Your own would take Wraith from git, which `wraith new` sets up.
 
 Load one at a time. They all hook the same function, and a function only takes one hook, so the second one fails with `AlreadyHooked`. The Trails Horizon plugin hooks it too.
 
@@ -54,3 +56,11 @@ It has no SDK on top. `wraith.h` is Wraith's API made from its schemas, so every
 The game's code is found by name through the Schema area, `Wraith_Schema_address`, with the names `schema.h` gives, like `ExampleC_GameStateManager_spendMira_name`. Each function has a pointer type to call it through, like `ExampleC_GameStateManager_spendMira_fn`. What you hand Wraith, like a tweak's handler, is a table of function pointers you fill in with `SAL_TABLE`. Wraith stops calling them, and takes away the plugin's hooks, patches and tweaks, once it's unloading.
 
 Its schemas can use Wraith's types, like `Vec3`, which come from `wraith.h` as `Wraith_Vec3`. A plugin it depends on has its schemas in `schema.h` too, under its namespace, and `wraith_service` in `start` gets what it offers. To offer a `[Service]` trait of its own, give `WRAITH_PLUGIN_WITH` a function for it, see `wraith_plugin.h`.
+
+## The C++ one
+
+`wraith.hpp` is Wraith's API as C++20, made from its schemas like `wraith.h`, but with namespaces and methods: `wraith::api().tweaks().addIn("Money", definition, handler)`. Calls that can fail give a `sal::Result`, which is true when it worked, with the code otherwise. Strings, spans and optionals go in as `std::string_view`, `std::span` and `std::optional`. It needs no exceptions or RTTI.
+
+`wraith_plugin.hpp` makes a class the plugin with `WRAITH_PLUGIN(Example)`. Wraith makes it as the plugin starts, calls `start()` and `stop()`, and destroys it after. `schema.hpp` gives the game's code to call straight, like `GameStateManager::instance()->giveMira(n)`, found by the schema's signatures through Wraith.
+
+What you hand Wraith is any class or lambda with the right method, like a tweak's handler, made into one with `Handler::of(x)`, which has to outlive it, or `sal::keep<Handler>(x)`, a heap copy Wraith lets go of. Wraith stops calling them, and takes away the plugin's hooks, patches and tweaks, once it's unloading. Async methods give a `sal::Future`, which you can `co_await`, and an async method can be a coroutine. To offer a `[Service]` trait, give the class `sal::Object service(std::string_view trait)`, see `wraith_plugin.hpp`.

@@ -25,7 +25,7 @@ Get the Wraith app from [wraith.io](https://wraith.io). It installs Wraith, find
 - Tweaks: small `.rwt` files with assembly, JS or Lua, turned on and off with keys.
 - Projects: a game's tweaks, scripts, schemas and addresses, saved as plain files in its `workbench/` folder and exported as one `.rwp`.
 - Imports Cheat Engine tables.
-- Plugins in Zig, JavaScript or Lua, all with the same API.
+- Plugins in Zig, C, C++, C#, JavaScript or Lua, all with the same API.
 - Installs plugins from the Wraith Hub, signed and checked.
 - Keybind clashes between plugins get flagged.
 - A command line for games, plugins and dev plugins.

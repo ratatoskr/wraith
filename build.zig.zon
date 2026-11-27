@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .salamander = .{
-            .url = "git+https://github.com/ratatoskr/salamander.git#cd589ec5b3846833722605ec9ad6e84392242830",
-            .hash = "salamander-0.0.1-6ZeDNkE2EgBKmGhgS-hKcdrF_I1uUIxwdHhU4W-eTbK2",
+            .url = "git+https://github.com/ratatoskr/salamander.git#2e07b619750e63b05fa89d485fd195e24db5513f",
+            .hash = "salamander-0.0.1-6ZeDNvTuFQBuoMCIqTzUygh1hJ_-F1O7J8QV00_mrSpL",
         },
         .tuft = .{
-            .url = "git+https://github.com/ratatoskr/tuft.git#fdf6ec848028bd70d1c17de3cdb88525cd29aa04",
-            .hash = "tuft-0.0.0-DNo4yvf4KgDOfor-9csjZe9QT4LamcNJBo4pU23vYy4t",
+            .url = "git+https://github.com/ratatoskr/tuft.git#a6eb45a816ee38cd7755af117f976a6e5023f2e6",
+            .hash = "tuft-0.0.0-DNo4yvf4KgC1iEg7nQFePPAKx1jQJTdtRusMsV3KFpFV",
         },
         .sqlite = .{
             .url = "https://sqlite.org/2026/sqlite-amalgamation-3540100.zip",

@@ -124,6 +124,14 @@ jobs:
         run: |
           zig build --summary all
 
+      - name: C example
+        working-directory: examples/c
+        run: zig build --summary all
+
+      - name: C++ example
+        working-directory: examples/cpp
+        run: zig build --summary all
+
       - name: typescript example
         working-directory: examples/typescript
         run: |

@@ -13,12 +13,12 @@ const sdk = @import("sdk.zig");
 const log = core.log.scoped(.wraith_cli);
 
 pub const usage =
-    \\  new [folder] [--language zig|ts|js|lua|cs] [--runtime aot|clr] [--game <game.exe | game id>]
+    \\  new [folder] [--language zig|cpp|ts|js|lua|cs] [--runtime aot|clr] [--game <game.exe | game id>]
     \\      [--engine [<engine>[:<variant>]]] [--id <id>] [--title <title>] [--summary <text>]
     \\      [--author <name>] [--library] [--dev | --no-dev] [--yes]
     \\                                       start a plugin in <folder>: its code, its build and a
-    \\                                       wraith.json, with what the language needs (Zig: zig
-    \\                                       init and fetch, TS/JS: npm create, Lua and C#: its
+    \\                                       wraith.json, with what the language needs (Zig and C++:
+    \\                                       zig init and fetch, TS/JS: npm create, Lua and C#: its
     \\                                       types). --runtime, for C#: aot compiles it with
     \\                                       NativeAOT, so games need no .NET, clr has .NET run it,
     \\                                       so it reloads. --game: the game's exe, identified so
@@ -33,6 +33,7 @@ pub const usage =
 
 pub const Language = enum {
     zig,
+    cpp,
     ts,
     js,
     lua,
@@ -41,6 +42,7 @@ pub const Language = enum {
     fn title(self: Language) []const u8 {
         return switch (self) {
             .zig => "Zig",
+            .cpp => "C++",
             .ts => "TypeScript",
             .js => "JavaScript",
             .lua => "Lua",
@@ -111,11 +113,11 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     const author = options.author orelse try ask.line("Author", "");
     const language = options.language orelse language: {
         if (!interactive) {
-            log.err("Which language? Say with --language zig, ts, js, lua or cs", .{});
+            log.err("Which language? Say with --language zig, cpp, ts, js, lua or cs", .{});
             return 1;
         }
         while (true) {
-            const answer = try ask.line("Language: zig, ts, js, lua or cs", "zig");
+            const answer = try ask.line("Language: zig, cpp, ts, js, lua or cs", "zig");
             if (std.meta.stringToEnum(Language, answer)) |l| break :language l;
         }
     };
@@ -140,7 +142,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
         .game = target.game,
         .gameEngine = target.engine,
         .provider = switch (language) {
-            .zig => null,
+            .zig, .cpp => null,
             .ts, .js => "js",
             .lua => "lua",
             .cs => "cs",
@@ -148,16 +150,17 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
         .library = options.library,
         // Scripts run in either. Native plugins build per arch, and C#'s types are for one pointer size
         .arches = switch (language) {
-            .zig => if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null,
+            .zig, .cpp => if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null,
             .cs => try arena.dupe(core.arch.Arch, &.{target.arch orelse .x64}),
             .ts, .js, .lua => null,
         },
     };
-    if (language == .zig and manifest.arches != null) log.printLn("It's {s}, so it builds for {t} only. Take arches out of wraith.json to build both", .{ if (target.arch.? == .x64) "64-bit" else "32-bit", target.arch.? });
+    if ((language == .zig or language == .cpp) and manifest.arches != null) log.printLn("It's {s}, so it builds for {t} only. Take arches out of wraith.json to build both", .{ if (target.arch.? == .x64) "64-bit" else "32-bit", target.arch.? });
 
     log.printLn("", .{});
     const built = switch (language) {
         .zig => try makeZig(ctx, arena, folder, manifest),
+        .cpp => try makeCpp(ctx, arena, folder, manifest),
         .ts, .js => try makeJs(ctx, arena, cwd, folder, &manifest, language),
         .lua => try makeLua(ctx, arena, folder, manifest),
         .cs => try makeCs(ctx, arena, folder, manifest, runtime),
@@ -174,7 +177,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     const where = relative(arena, cwd, folder);
     log.printLn("\nNext:\n  cd {s}", .{where});
     switch (language) {
-        .zig => log.printLn("  zig build", .{}),
+        .zig, .cpp => log.printLn("  zig build", .{}),
         .ts, .js => log.printLn("  npm install\n  npm run dev", .{}),
         .lua => log.printLn("  (edit main.lua, then Reload it in the Mods window)", .{}),
         .cs => log.printLn("  dotnet publish", .{}),
@@ -446,6 +449,16 @@ fn makeZig(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manif
     return try std.fs.path.join(arena, &.{ folder, "zig-out" });
 }
 
+/// Like a Zig one, with Zig compiling its C++. Where it builds to, or null.
+fn makeCpp(ctx: ops.Context, arena: std.mem.Allocator, folder: []const u8, manifest: Manifest) !?[]const u8 {
+    const built = try makeZig(ctx, arena, folder, manifest) orelse return null;
+    try writeFile(ctx, folder, "build.zig", try std.fmt.allocPrint(arena, cpp_build, .{manifest.id}));
+    try writeFile(ctx, folder, "src/plugin.cpp", cpp_plugin);
+    // Its build.zig.zon packages what's there, and the Zig one's root.zig isn't
+    std.Io.Dir.cwd().deleteFile(ctx.io, try std.fs.path.join(arena, &.{ folder, "src", "root.zig" })) catch {};
+    return built;
+}
+
 /// npm create, then its manifest. Where it builds to, or null.
 fn makeJs(ctx: ops.Context, arena: std.mem.Allocator, cwd: []const u8, folder: []const u8, manifest: *Manifest, language: Language) !?[]const u8 {
     if (toolVersion(ctx, arena, &.{ "npm", "--version" }) == null) {
@@ -551,6 +564,39 @@ const zig_root =
     \\comptime {
     \\    sdk.exportPlugin(Plugin);
     \\}
+    \\
+;
+
+const cpp_build =
+    \\const std = @import("std");
+    \\const wraith = @import("wraith");
+    \\
+    \\pub fn build(b: *std.Build) void {{
+    \\    const plugin: wraith.Plugin = .initCpp(b, .{{
+    \\        .name = "{s}",
+    \\        .sources = &.{{"src/plugin.cpp"}},
+    \\        .target = b.standardTargetOptions(.{{}}),
+    \\        .optimize = b.standardOptimizeOption(.{{}}),
+    \\    }});
+    \\    plugin.install(b);
+    \\}}
+    \\
+;
+
+const cpp_plugin =
+    \\// Wraith's API is in wraith.hpp, and schemas/ becomes schema.hpp as it builds
+    \\#include "wraith_plugin.hpp"
+    \\
+    \\struct Plugin {
+    \\    bool start() {
+    \\        wraith::api().log().info("Hello!");
+    \\        return true;
+    \\    }
+    \\
+    \\    void stop() {}
+    \\};
+    \\
+    \\WRAITH_PLUGIN(Plugin)
     \\
 ;
 
@@ -687,6 +733,8 @@ test "flags, with --engine's name optional" {
     try testing.expectError(error.Usage, parseArgs(&bad));
     var cs: Args = .{ .items = &.{ "--language", "cs", "--runtime", "clr" } };
     try testing.expectEqual(.clr, (try parseArgs(&cs)).runtime.?);
+    var cpp: Args = .{ .items = &.{ "--lang", "cpp" } };
+    try testing.expectEqual(.cpp, (try parseArgs(&cpp)).language.?);
     var bad_runtime: Args = .{ .items = &.{ "--runtime", "mono" } };
     try testing.expectError(error.Usage, parseArgs(&bad_runtime));
 }
