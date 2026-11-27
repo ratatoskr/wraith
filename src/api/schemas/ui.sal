@@ -26,8 +26,8 @@ namespace WorkbenchPanel {
     struct Options {
         // Its tab's label
         string title;
-        // In the engine's group with Classes rather than with plugin panels
-        bool engine;
+        // The top-level tab it's in, like `FFXIV`, shared by panels that name the same one. Empty is Plugins.
+        string group;
     }
 }
 
@@ -215,7 +215,7 @@ trait Ui {
     // The Workbench
 
     // Drawn by `draw` on the Workbench's thread while showing. Gone with the plugin. Any thread. The
-    // same as contributing a tab to the `workbench.plugins` or `workbench.engine` slot
+    // same as contributing a tab to the `workbench.plugins` slot, with `group` as its `parent`
     WorkbenchPanel addWorkbenchPanel(WorkbenchPanel.Options options, keep WorkbenchPanel.Draw draw);
     // Opens the Workbench's Classes on a C# class by full name. Any thread.
     void showClass(string class_name);

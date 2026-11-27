@@ -1,5 +1,5 @@
-//! A docked window of tabs: some of the Workbench's own panels, then what plugins add to its slot,
-//! `workbench.plugins` or `workbench.engine`. The engine's group is named after the game's engine.
+//! A docked window of tabs: some of the Workbench's own panels, then the `workbench.plugins` tabs
+//! whose `parent` is its name. Plugins name their own, like `FFXIV`; empty is Plugins.
 
 const PanelGroup = @This();
 
@@ -13,13 +13,14 @@ const Group = @import("Group.zig");
 const Panel = slots.Entry;
 
 window: ui.Window,
-/// Engine plugins' panels, or the rest.
-engine: bool,
+/// Which plugin tabs it shows, by their `parent`. Null for none.
+name: ?[]const u8,
 own: [2]Group.Part = undefined,
 own_len: u8 = 0,
 /// What it says when there's nothing in it.
 empty: [:0]const u8,
 title_buf: [96:0]u8 = @splat(0),
+name_buf: [64]u8 = undefined,
 /// Its own part to bring to the front next frame.
 pick_own: ?u8 = null,
 /// A plugin panel to bring to the front next frame, by its label.
@@ -29,42 +30,47 @@ opened_once: bool = false,
 /// Whether its own parts show, like Classes only once there's C#.
 own_shown: bool = true,
 
-pub fn init(engine: bool, own: []const Group.Part, empty: [:0]const u8) PanelGroup {
-    var self: PanelGroup = .{
-        .window = .{ .title = if (engine) "Engine###wraith.engine" else "Plugins###wraith.plugins" },
-        .engine = engine,
-        .empty = empty,
-        .own_len = @intCast(own.len),
-    };
+/// `title` includes its `###` id.
+pub fn init(title: [:0]const u8, name: ?[]const u8, own: []const Group.Part, empty: [:0]const u8) PanelGroup {
+    var self: PanelGroup = .{ .window = .{ .title = title }, .name = name, .empty = empty, .own_len = @intCast(own.len) };
     @memcpy(self.own[0..own.len], own);
     return self;
 }
 
-pub fn slot(self: *const PanelGroup) slots.Slot {
-    return if (self.engine) .workbench_engine else .workbench_plugins;
+/// One a plugin named, titled with it. Null if the name's too long.
+pub fn create(gpa: std.mem.Allocator, name: []const u8) !*PanelGroup {
+    if (name.len > 64) return error.NameTooLong;
+    const self = try gpa.create(PanelGroup);
+    self.* = .{ .window = undefined, .name = null, .empty = "Nothing's in it." };
+    @memcpy(self.name_buf[0..name.len], name);
+    self.name = self.name_buf[0..name.len];
+    const title = std.fmt.bufPrintSentinel(&self.title_buf, "{s}###wraith.group.{s}", .{ name, name }, 0) catch unreachable;
+    self.window = .{ .title = title };
+    return self;
 }
 
-/// `name` like `Unity`, keeping it the same window.
-pub fn setName(self: *PanelGroup, name: []const u8) void {
-    const id = if (self.engine) "###wraith.engine" else "###wraith.plugins";
-    const title = std.fmt.bufPrintSentinel(&self.title_buf, "{s}{s}", .{ name, id }, 0) catch return;
-    if (!std.mem.eql(u8, title, self.window.title)) self.window.title = title;
+/// Whether `p` is one of its tabs.
+pub fn has(self: *const PanelGroup, p: *const Panel) bool {
+    const name = self.name orelse return false;
+    return std.mem.eql(u8, p.parent, name);
 }
 
-/// Each frame before drawing, open or not: picks up plugins' `focus` and opens itself the first time
-/// there's something to show. Workbench thread.
+/// Each frame before drawing, open or not, after the slot's settled: picks up plugins' `focus` and
+/// opens itself the first time there's something to show. Workbench thread.
 pub fn poll(self: *PanelGroup, something_to_show: bool) void {
-    var held = slots.take(self.slot());
+    var held = slots.take(.workbench_plugins);
     defer held.end();
     const taken = held.items();
-    slots.settle(taken);
+    var any = false;
     for (taken) |p| {
+        if (!self.has(p)) continue;
+        any = true;
         if (p.focus_wanted.swap(false, .acq_rel)) {
             self.pick_label = std.hash.Wyhash.hash(0, p.label);
             self.window.focus();
         }
     }
-    if (!self.opened_once and (something_to_show or taken.len > 0)) {
+    if (!self.opened_once and (something_to_show or any)) {
         self.opened_once = true;
         self.window.show();
     }
@@ -79,16 +85,20 @@ pub fn focusOwn(self: *PanelGroup, owner: *const anyopaque) void {
 }
 
 pub fn draw(self: *PanelGroup) void {
-    var held = slots.take(self.slot());
+    var held = slots.take(.workbench_plugins);
     defer held.end();
     const taken = held.items();
     defer self.pick_own = null;
     defer self.pick_label = null;
     const own_len: u8 = if (self.own_shown) self.own_len else 0;
-    if (own_len == 0 and taken.len == 0) {
+    var tabs: usize = 0;
+    for (taken) |p| tabs += @intFromBool(self.has(p));
+    if (own_len == 0 and tabs == 0) {
         ui.textDisabled("{s}", .{self.empty});
         return;
     }
+    // One of its own needs no tab
+    if (own_len == 1 and tabs == 0) return self.own[0].draw(self.own[0].owner);
     const bar = ui.tabBar("parts") orelse return;
     defer bar.end();
     for (self.own[0..own_len], 0..) |p, i| {
@@ -99,6 +109,7 @@ pub fn draw(self: *PanelGroup) void {
         p.draw(p.owner);
     }
     for (taken) |p| {
+        if (!self.has(p)) continue;
         const picked = if (self.pick_label) |h| h == std.hash.Wyhash.hash(0, p.label) else false;
         const tab = ui.tabItem(p.label, .{ .select = picked }) orelse continue;
         defer tab.end();

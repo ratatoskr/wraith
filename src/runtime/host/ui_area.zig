@@ -385,7 +385,7 @@ pub const UiImpl = struct {
             draw.release();
             return .{};
         };
-        const e = host.slots.add(loaded, .{ .slot = if (options.engine) .workbench_engine else .workbench_plugins, .title = options.title }, .{ .panel = draw }) catch return .{};
+        const e = host.slots.add(loaded, .{ .slot = .workbench_plugins, .title = options.title, .parent = options.group }, .{ .panel = draw }) catch return .{};
         return .init(e, t.workbench_panel);
     }
 

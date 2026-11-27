@@ -126,15 +126,15 @@ test "default layout" {
     try testing.expectEqualStrings("Names", labels[2]);
     try testing.expectEqualStrings("Schemas", labels[3]);
     try testing.expectEqualStrings("Tweaks", labels[4]);
-    try testing.expectEqualStrings("Engine", labels[9]);
+    try testing.expectEqualStrings("Classes", labels[9]);
     try testing.expectEqualStrings("Plugins", labels[10]);
     // Open from the start, with the documents since it's as big as one
     try testing.expect(p.schemas.window.open);
     try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(p.schemas.window.title).?);
-    // Most games have no C# or engine plugins, so it waits closed with the documents
-    const engine = &wb.groups.engine;
-    try testing.expect(!engine.window.open);
-    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(engine.window.title).?);
+    // Most games have no C#, so it waits closed with the documents
+    const csharp = &wb.groups.csharp;
+    try testing.expect(!csharp.window.open);
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(csharp.window.title).?);
     try testing.expect(!wb.groups.plugins.window.open);
     try testing.expectEqual(names_spot, tuft_imgui.dock.of(wb.groups.plugins.window.title).?);
 
@@ -189,28 +189,37 @@ test "plugins' panels show in their groups, drawn in its frame" {
     defer sdk.Owner.detach();
     const area = sdk.wraith.root().?.ui();
     var mine: PanelDraws = .{};
-    var engines: PanelDraws = .{};
-    const panel = area.addWorkbenchPanel(.{ .title = "Party", .engine = false }, .init(&mine, PanelDraws.draw));
-    _ = area.addWorkbenchPanel(.{ .title = "Scene", .engine = true }, .init(&engines, PanelDraws.draw));
+    var named: PanelDraws = .{};
+    const panel = area.addWorkbenchPanel(.{ .title = "Party" }, .init(&mine, PanelDraws.draw));
+    const scene = area.addWorkbenchPanel(.{ .title = "Scene", .group = "Kai" }, .init(&named, PanelDraws.draw));
 
-    // Each group opens itself once there's something in it
+    // Each group opens itself once there's something in it, and a named one is made for it
     frames.run(wb, 4);
     try testing.expect(wb.groups.plugins.window.open);
-    try testing.expect(wb.groups.engine.window.open);
+    try testing.expectEqual(1, wb.named.items.len);
+    const kai = wb.named.items[0];
+    try testing.expectEqualStrings("Kai", kai.window.label());
+    try testing.expect(kai.window.open);
     try testing.expect(mine.draws > 0);
     try testing.expect(mine.in_frame and mine.in_workbench);
     try testing.expect(panel.isOpen());
-    // The engine's group is with the documents, behind the one you were looking at
-    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(wb.groups.engine.window.title).?);
+    // Named ones are with the documents, behind the one you were looking at
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(kai.window.title).?);
     try testing.expect(tuft_imgui.dock.inFront(wb.documents.items[1].window().title));
-    try testing.expect(!tuft_imgui.dock.inFront(wb.groups.engine.window.title));
+    try testing.expect(!tuft_imgui.dock.inFront(kai.window.title));
 
-    // Without C# there's no Classes tab, so a plugin's panel is what it shows once it's focused
-    const before = engines.draws;
-    sdk.wraith.root().?.ui().addWorkbenchPanel(.{ .title = "Scene 2", .engine = true }, .init(&engines, PanelDraws.draw)).focus();
+    // Focusing a panel brings its group to the front
+    const before = named.draws;
+    sdk.wraith.root().?.ui().addWorkbenchPanel(.{ .title = "Scene 2", .group = "Kai" }, .init(&named, PanelDraws.draw)).focus();
     frames.run(wb, 3);
-    try testing.expect(engines.draws > before);
-    try testing.expect(tuft_imgui.dock.inFront(wb.groups.engine.window.title));
+    try testing.expectEqual(1, wb.named.items.len);
+    try testing.expect(named.draws > before);
+    try testing.expect(tuft_imgui.dock.inFront(kai.window.title));
+
+    // Still there while anything's in it
+    scene.remove();
+    frames.run(wb, 2);
+    try testing.expectEqual(1, wb.named.items.len);
 
     // Gone with the plugin
     loaded.owner.close();
@@ -218,6 +227,8 @@ test "plugins' panels show in their groups, drawn in its frame" {
     frames.run(wb, 3);
     try testing.expectEqual(draws, mine.draws);
     try testing.expect(!panel.isOpen());
+    // And its group, with nothing left in it
+    try testing.expectEqual(0, wb.named.items.len);
     loaded.deinitForTest();
 }
 
@@ -1258,7 +1269,7 @@ test "classes panel on a real game's C#" {
     const wb = try Workbench.create(testing.allocator, .{});
     defer wb.destroy();
     const panel = &wb.panels.classes;
-    wb.groups.engine.focusOwn(panel);
+    wb.groups.csharp.focusOwn(panel);
     frames.run(wb, 3);
     try testing.expect(panel.all.len > 1000);
     try testing.expect(panel.images > 10);
@@ -1272,7 +1283,7 @@ test "classes panel on a real game's C#" {
     try testing.expect(panel.shown.items.len < panel.all.len);
     panel.picked.only(@intFromPtr(string.class));
     // Addresses comes to the front as the workbench starts
-    wb.groups.engine.focusOwn(panel);
+    wb.groups.csharp.focusOwn(panel);
     frames.run(wb, 3);
     try testing.expectEqual(string.class, panel.members_of.?);
     const empty = for (panel.fields) |f| {

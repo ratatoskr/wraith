@@ -64,7 +64,6 @@ const Registers = @import("panels/Registers.zig");
 pub const Group = @import("Group.zig");
 pub const PanelGroup = @import("PanelGroup.zig");
 const GameSpeed = @import("../GameSpeed.zig");
-const GameInfo = @import("../../GameInfo.zig");
 const Managed = @import("../../Managed.zig");
 const plugin_panels = @import("../../host/workbench_panels.zig");
 const slots = @import("../../host/slots.zig");
@@ -143,7 +142,7 @@ pub const Panels = struct {
 /// Docked on their own, not in a `Group`.
 const alone = .{ "search", "addresses", "names", "schemas", "tweaks", "log" };
 /// `alone` and `Groups` in View menu and dock order. Each needs a spot in `defaultLayout`.
-const docked = .{ "search", "addresses", "names", "schemas", "tweaks", "diagnostics", "debug", "scripts", "log", "engine", "plugins" };
+const docked = .{ "search", "addresses", "names", "schemas", "tweaks", "diagnostics", "debug", "scripts", "log", "csharp", "plugins" };
 
 /// So the dock's a few tabs and not a row of them.
 pub const Groups = struct {
@@ -152,13 +151,13 @@ pub const Groups = struct {
     /// Comes to the front when a script runs.
     scripts: Group,
     diagnostics: Group,
-    /// Classes and game engine plugins' panels, named after the engine. With the documents.
-    engine: PanelGroup,
-    /// Other plugins' panels.
+    /// Classes, once the game runs C#. With the documents.
+    csharp: PanelGroup,
+    /// Plugins' panels that don't name a group of their own.
     plugins: PanelGroup,
 };
 
-/// Not the engine's group, since most games have no C#. It opens itself once there's something in it.
+/// Not the C# group, since most games have no C#. It opens itself once there's something in it.
 const open_at_start = .{ "search", "addresses", "names", "schemas", "tweaks", "diagnostics", "debug", "scripts", "log" };
 
 pub const Options = struct {
@@ -205,6 +204,8 @@ fronts_pending: u8 = 0,
 /// More by then means something's been opened since, which stays in front.
 starting_documents: usize = 0,
 seen_open: [32]bool = @splat(false),
+/// The groups plugins' panels named, like `FFXIV`, each a window with the documents.
+named: std.ArrayList(*PanelGroup) = .empty,
 seen_started: bool = false,
 panels: Panels,
 groups: Groups,
@@ -318,11 +319,11 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
         .debug = .init("Debug", .tabs, &.{ .of("Threads", &p.stopped), .of("Registers", &p.registers), .of("Breakpoints", &p.breakpoints) }),
         .scripts = .init("Scripts", .{ .split = .{ .ratio = 0.75 } }, &.{ .of("Console", &p.console), .of("Sessions", &p.sessions) }),
         .diagnostics = .init("Diagnostics", .tabs, &.{ .of("Timings", &p.timings), .of("Frames", &p.frames), .of("Memory", &p.memory), .of("Environment", &p.environment), .of("Hooks", &p.hooks), .of("Claims", &p.claims), .of("IO", &p.file_io) }),
-        .engine = .init(true, &.{.of("Classes", &p.classes)}, "Nothing for this game's engine yet. Engine plugins, like Unity's, add their panels here, and Classes shows once the game runs C#."),
-        .plugins = .init(false, &.{}, "Plugins' Workbench panels show here."),
+        .csharp = .init("Classes###wraith.csharp", null, &.{.of("Classes", &p.classes)}, "Classes shows once the game runs C#."),
+        .plugins = .init("Plugins###wraith.plugins", "", &.{}, "Plugins' Workbench panels show here."),
     };
     // It opens itself behind what you're looking at
-    self.groups.engine.window.flags.no_focus_on_appearing = true;
+    self.groups.csharp.window.flags.no_focus_on_appearing = true;
     errdefer self.system.deinit();
     self.system.before_each = .{ .ctx = self, .func = withHost };
     comptime std.debug.assert(docked.len == alone.len + @typeInfo(Groups).@"struct".field_names.len);
@@ -375,6 +376,8 @@ pub fn destroy(self: *Workbench) void {
     self.plugin_schemas.deinit(self.allocator);
     self.scripts.deinit();
     self.documents.deinit(self.allocator);
+    for (self.named.items) |g| self.allocator.destroy(g);
+    self.named.deinit(self.allocator);
     self.system.deinit();
     if (self.ini_path) |p| self.allocator.free(p);
     self.allocator.destroy(self);
@@ -500,7 +503,6 @@ pub fn tick(self: *Workbench) void {
     // A closed Workbench draws nothing, so its plugins' panels would still say they're open
     if (!app.isOpen()) {
         slots.hide(.workbench_plugins);
-        slots.hide(.workbench_engine);
     }
     const active = app.isActive();
     // Held from opening till it's been in front and you've clicked back into the game
@@ -582,6 +584,7 @@ pub fn draw(self: *Workbench) void {
             tuft_imgui.dock.bringToFront(self.groups.debug.window.title);
         }
         DebugControl.applyPendingFocus(self);
+        self.syncNamedGroups();
         self.redockReopened();
         _ = c.ImGui_DockSpaceEx(id, .{ .x = 0, .y = -StatusBar.height() }, 0, null);
         self.drawStatusBar();
@@ -608,20 +611,62 @@ fn drawStatusBar(self: *Workbench) void {
     self.project_menu.ce.status(&bar);
 }
 
-/// Names the engine's group, and picks up what plugins asked for: panels to focus and classes to show.
+/// Picks up what plugins asked for: panels to focus and classes to show.
 fn pollPluginPanels(self: *Workbench) void {
-    const engine = &self.groups.engine;
-    // "C#" can't be a title, since ImGui takes its # as the start of an ID
-    engine.setName(if (GameInfo.global.game_engine) |e| e.label() else if (Managed.global.kind()) |k| Managed.label(k) else "Engine");
-    engine.poll(Managed.global.running());
+    slots.settleSlot(.workbench_plugins);
+    const csharp = &self.groups.csharp;
+    csharp.poll(Managed.global.running());
     // C# only, so not in an Unreal game, say
-    engine.own_shown = Managed.global.running();
+    csharp.own_shown = Managed.global.running();
     self.groups.plugins.poll(false);
+    for (self.named.items) |g| g.poll(false);
     var buf: [256]u8 = undefined;
     if (plugin_panels.takeClass(&buf)) |name| {
         self.panels.classes.show(name);
-        engine.focusOwn(&self.panels.classes);
+        csharp.focusOwn(&self.panels.classes);
     }
+}
+
+/// A window for each group plugins' panels name, with the documents, gone once nothing's in it.
+/// Before the dock space, so new ones dock this frame.
+fn syncNamedGroups(self: *Workbench) void {
+    var held = slots.take(.workbench_plugins);
+    defer held.end();
+    const taken = held.items();
+    for (taken) |p| {
+        if (p.parent.len == 0 or self.namedGroup(p.parent) != null) continue;
+        const g = PanelGroup.create(self.allocator, p.parent) catch continue;
+        self.named.append(self.allocator, g) catch {
+            self.allocator.destroy(g);
+            continue;
+        };
+        self.addDocked(g) catch {
+            _ = self.named.pop();
+            self.allocator.destroy(g);
+            continue;
+        };
+        const doc = self.document_dock;
+        const node = if (doc != 0 and tuft_imgui.dock.exists(doc)) doc else tuft_imgui.dock.central(self.dockspace) orelse continue;
+        tuft_imgui.dock.window(g.window.title, node);
+        tuft_imgui.dock.finish(self.dockspace);
+    }
+    var i = self.named.items.len;
+    while (i > 0) {
+        i -= 1;
+        const g = self.named.items[i];
+        for (taken) |p| {
+            if (g.has(p)) break;
+        } else {
+            self.system.remove(g);
+            _ = self.named.orderedRemove(i);
+            self.allocator.destroy(g);
+        }
+    }
+}
+
+fn namedGroup(self: *const Workbench, name: []const u8) ?*PanelGroup {
+    for (self.named.items) |g| if (std.mem.eql(u8, g.name.?, name)) return g;
+    return null;
 }
 
 /// The project's name, with a star if it's not saved. The part after ### keeps it the same window.
@@ -677,14 +722,15 @@ fn defaultLayout(self: *Workbench, id: c.ImGuiID) void {
     const bottom = tuft_imgui.dock.split(&center, .down, 0.35);
     tuft_imgui.dock.window(self.panels.search.window.title, left);
     inline for (docked) |name| {
-        if (comptime std.mem.eql(u8, name, "search") or std.mem.eql(u8, name, "engine") or std.mem.eql(u8, name, "schemas")) continue;
+        if (comptime std.mem.eql(u8, name, "search") or std.mem.eql(u8, name, "csharp") or std.mem.eql(u8, name, "schemas")) continue;
         const title = if (@hasField(Panels, name)) @field(self.panels, name).window.title else @field(self.groups, name).window.title;
         tuft_imgui.dock.window(title, bottom);
     }
     for (self.documents.items) |d| tuft_imgui.dock.window(d.window().title, center);
     // With the documents, since they're as big as one
     tuft_imgui.dock.window(self.panels.schemas.window.title, center);
-    tuft_imgui.dock.window(self.groups.engine.window.title, center);
+    tuft_imgui.dock.window(self.groups.csharp.window.title, center);
+    for (self.named.items) |g| tuft_imgui.dock.window(g.window.title, center);
     tuft_imgui.dock.finish(id);
     self.document_dock = center;
     self.fronts_pending = 1;
@@ -723,7 +769,8 @@ const Side = enum {
 
 fn sideOf(self: *const Workbench, window: *const ui.Window) Side {
     if (window == &self.panels.search.window) return .left;
-    if (window == &self.groups.engine.window) return .center;
+    if (window == &self.groups.csharp.window) return .center;
+    for (self.named.items) |g| if (window == &g.window) return .center;
     return .bottom;
 }
 

@@ -21,7 +21,6 @@ const gpa = std.heap.page_allocator;
 /// Every slot Wraith has.
 pub const Slot = enum(u8) {
     workbench_plugins,
-    workbench_engine,
     settings,
     photo_toolbar,
     photo_scene,
@@ -48,6 +47,8 @@ pub const Def = struct {
     thread: Thread = .render,
     presentations: []const Presentation,
     hierarchy: bool = false,
+    /// `parent` is any name, grouping what has the same one.
+    groups: bool = false,
     kinds: bool = false,
     parents: []const []const u8 = &.{},
     known_kinds: []const []const u8 = &.{},
@@ -62,8 +63,7 @@ const photo_parents = [_][]const u8{ "world", "world/cameras", "world/actors" };
 const photo_kinds = [_][]const u8{ "world", "cameras", "camera", "actors", "actor", "bone" };
 
 pub const defs: std.EnumArray(Slot, Def) = .init(.{
-    .workbench_plugins = .{ .id = "workbench.plugins", .title = "Workbench: Plugins", .help = "A tab in the Workbench's Plugins group.", .thread = .workbench, .presentations = &.{.tab} },
-    .workbench_engine = .{ .id = "workbench.engine", .title = "Workbench: Engine", .help = "A tab beside the engine's Classes, for engine plugins.", .thread = .workbench, .presentations = &.{.tab} },
+    .workbench_plugins = .{ .id = "workbench.plugins", .title = "Workbench: Plugins", .help = "A tab in the Workbench. `parent` names the top-level tab it's in, like `FFXIV`, shared by any that name the same one. Empty is Plugins.", .thread = .workbench, .presentations = &.{.tab}, .groups = true },
     .settings = .{ .id = "settings", .title = "Settings", .help = "On the plugin's own page in Settings, after its settings.", .presentations = &.{ .foldout, .@"inline" } },
     .photo_toolbar = .{ .id = "photo.toolbar", .title = "Photo mode: toolbar", .help = "Buttons on Photo mode's toolbar.", .presentations = &.{.@"inline"} },
     .photo_scene = .{ .id = "photo.scene", .title = "Photo mode: scene", .help = "Nodes in Photo mode's scene. A node's draw shows in the inspector while it's picked.", .presentations = &.{.node}, .hierarchy = true, .parents = &photo_parents, .known_kinds = &photo_kinds },
@@ -331,7 +331,7 @@ fn make(loaded: *Loaded, own: bool, p: Placement, d_: Draw) AddError!*Entry {
     const presentation = if (p.presentation == .default) d.presentations[0] else p.presentation;
     if (!d.takes(presentation)) return error.NotTaken;
     if (p.kind.len > 0 and !d.kinds and presentation != .node) return error.NotTaken;
-    if (p.parent.len > 0 and !d.hierarchy) return error.NotTaken;
+    if (p.parent.len > 0 and !d.hierarchy and !d.groups) return error.NotTaken;
     if (!validId(p.id)) return error.InvalidId;
 
     const e = gpa.create(Entry) catch return error.Failed;

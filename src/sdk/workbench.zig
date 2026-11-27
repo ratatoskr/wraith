@@ -31,8 +31,8 @@ pub const Error = error{ OwnerGone, Failed };
 pub const Options = struct {
     /// Its tab's label. Empty uses the plugin's name.
     title: []const u8 = "",
-    /// Groups it with the engine's Classes panel, for engine plugins.
-    engine: bool = false,
+    /// The top-level tab it's in, like `FFXIV`, shared by panels that name the same one. Empty is Plugins.
+    group: []const u8 = "",
 };
 
 /// A panel of yours in the Workbench, gone with the plugin.
@@ -60,7 +60,7 @@ pub fn addPanel(target: anytype, comptime func: fn (@TypeOf(target)) void, optio
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("addPanel expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
-    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .engine = options.engine }, W.WorkbenchPanel.Draw.init(target, func));
+    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .group = options.group }, W.WorkbenchPanel.Draw.init(target, func));
     if (object.table == null) return error.Failed;
     return .{ .object = object };
 }
