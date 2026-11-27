@@ -11,7 +11,6 @@ const Workbench = @import("../Workbench.zig");
 const Scripts = @import("../Scripts.zig");
 const Clip = @import("wraith_ui").Clip;
 
-window: ui.Window = .{ .title = "Sessions", .size = .{ 640, 260 }, .min_size = .{ 320, 120 } },
 wb: *Workbench,
 picked: ui.Selection = .{},
 

@@ -14,7 +14,6 @@ const Clip = @import("wraith_ui").Clip;
 
 const Claim = memory.Claims.Claim;
 
-window: ui.Window = .{ .title = "Claims", .size = .{ 640, 300 }, .min_size = .{ 380, 160 } },
 nav: Navigator,
 claims: [1024]Claim = undefined,
 /// `claims` holds as many as fit.

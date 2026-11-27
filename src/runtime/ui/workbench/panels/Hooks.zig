@@ -17,7 +17,6 @@ const Clip = @import("wraith_ui").Clip;
 
 const Info = hook.registry.Info;
 
-window: ui.Window = .{ .title = "Hooks", .size = .{ 820, 340 }, .min_size = .{ 420, 180 } },
 nav: Navigator,
 infos: [Rates.max]Info = undefined,
 rates: Rates = .{},

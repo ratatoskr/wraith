@@ -15,7 +15,6 @@ const Clip = @import("wraith_ui").Clip;
 
 const plot = ui.plot;
 
-window: ui.Window = .{ .title = "Frame stats", .size = .{ 640, 520 }, .min_size = .{ 420, 300 } },
 /// Null without a runtime around it, like in tests.
 shell: ?*Shell,
 /// The graph's frames, newest last.

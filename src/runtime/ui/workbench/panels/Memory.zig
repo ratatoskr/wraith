@@ -28,7 +28,6 @@ pub fn refreshPages() void {
     pages.mirror(s.live_bytes, s.allocs, s.frees);
 }
 
-window: ui.Window = .{ .title = "Memory use", .size = .{ 680, 400 }, .min_size = .{ 440, 200 } },
 stats: [max_heaps]Stats = undefined,
 len: usize = 0,
 process: ?wraith_platform.process.MemoryInfo = null,

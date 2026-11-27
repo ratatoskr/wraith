@@ -20,7 +20,6 @@ const Entry = TweakLayout.Entry;
 
 const red: ui.Color = .{ 1, 0.4, 0.4, 1 };
 
-window: ui.Window = .{ .title = "Tweaks", .size = .{ 640, 320 }, .min_size = .{ 320, 120 } },
 wb: *Workbench,
 picked: ui.Selection = .{},
 /// The one getting a key, or about to go.

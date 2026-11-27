@@ -18,7 +18,6 @@ const Op = Files.Op;
 /// How often the open file list is copied again.
 const refresh_ns = 250 * std.time.ns_per_ms;
 
-window: ui.Window = .{ .title = "IO", .size = .{ 900, 380 }, .min_size = .{ 480, 200 } },
 allocator: std.mem.Allocator,
 
 /// Render thread only, oldest at `head`.

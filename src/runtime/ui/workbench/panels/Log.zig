@@ -11,7 +11,6 @@ const LogHistory = @import("../../../LogHistory.zig");
 const Clip = @import("wraith_ui").Clip;
 const Entry = LogHistory.Entry;
 
-window: ui.Window = .{ .title = "Log", .size = .{ 760, 380 }, .min_size = .{ 480, 200 } },
 /// Render thread only, oldest at `head`.
 lines: [LogHistory.capacity]Entry = undefined,
 head: usize = 0,

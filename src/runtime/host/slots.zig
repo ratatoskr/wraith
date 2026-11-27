@@ -13,6 +13,8 @@ const Loaded = @import("../PluginLoader.zig").Loaded;
 
 const W = api.wraith;
 pub const Presentation = W.Slot.Presentation;
+/// Where a Workbench tab first goes.
+pub const Place = W.WorkbenchPanel.Place;
 pub const Thread = W.Slot.Thread;
 pub const PluginDraw = W.Contribution.Draw;
 
@@ -20,7 +22,7 @@ const gpa = std.heap.page_allocator;
 
 /// Every slot Wraith has.
 pub const Slot = enum(u8) {
-    workbench_plugins,
+    workbench,
     settings,
     photo_toolbar,
     photo_scene,
@@ -47,8 +49,6 @@ pub const Def = struct {
     thread: Thread = .render,
     presentations: []const Presentation,
     hierarchy: bool = false,
-    /// `parent` is any name, grouping what has the same one.
-    groups: bool = false,
     kinds: bool = false,
     parents: []const []const u8 = &.{},
     known_kinds: []const []const u8 = &.{},
@@ -63,7 +63,7 @@ const photo_parents = [_][]const u8{ "world", "world/cameras", "world/actors" };
 const photo_kinds = [_][]const u8{ "world", "cameras", "camera", "actors", "actor", "bone" };
 
 pub const defs: std.EnumArray(Slot, Def) = .init(.{
-    .workbench_plugins = .{ .id = "workbench.plugins", .title = "Workbench: Plugins", .help = "A tab in the Workbench. `parent` names the top-level tab it's in, like `FFXIV`, shared by any that name the same one. Empty is Plugins.", .thread = .workbench, .presentations = &.{.tab}, .groups = true },
+    .workbench = .{ .id = "workbench", .title = "Workbench", .help = "A tab of its own in the Workbench, at the top. Its `id` is how Wraith remembers where it was moved. `Ui.addWorkbenchPanel` can put it at the bottom or left.", .thread = .workbench, .presentations = &.{.tab} },
     .settings = .{ .id = "settings", .title = "Settings", .help = "On the plugin's own page in Settings, after its settings.", .presentations = &.{ .foldout, .@"inline" } },
     .photo_toolbar = .{ .id = "photo.toolbar", .title = "Photo mode: toolbar", .help = "Buttons on Photo mode's toolbar.", .presentations = &.{.@"inline"} },
     .photo_scene = .{ .id = "photo.scene", .title = "Photo mode: scene", .help = "Nodes in Photo mode's scene. A node's draw shows in the inspector while it's picked.", .presentations = &.{.node}, .hierarchy = true, .parents = &photo_parents, .known_kinds = &photo_kinds },
@@ -122,6 +122,8 @@ pub const Placement = struct {
     children: ?Native = null,
     /// Wraith's own only: shown till something else in the slot has its id for the same kind
     fallback: bool = false,
+    /// Workbench tabs: where it first goes
+    place: Place = .top,
 };
 
 pub const Entry = struct {
@@ -146,6 +148,7 @@ pub const Entry = struct {
     draw: Draw,
     children: ?Native,
     fallback: bool = false,
+    place: Place = .top,
 
     /// Draws under way in the low bits, plus `stopped_bit`. Whoever stops it with none under way lets go of `draw`.
     state: Atomic(u32) = .init(0),
@@ -331,7 +334,7 @@ fn make(loaded: *Loaded, own: bool, p: Placement, d_: Draw) AddError!*Entry {
     const presentation = if (p.presentation == .default) d.presentations[0] else p.presentation;
     if (!d.takes(presentation)) return error.NotTaken;
     if (p.kind.len > 0 and !d.kinds and presentation != .node) return error.NotTaken;
-    if (p.parent.len > 0 and !d.hierarchy and !d.groups) return error.NotTaken;
+    if (p.parent.len > 0 and !d.hierarchy) return error.NotTaken;
     if (!validId(p.id)) return error.InvalidId;
 
     const e = gpa.create(Entry) catch return error.Failed;
@@ -366,6 +369,7 @@ fn make(loaded: *Loaded, own: bool, p: Placement, d_: Draw) AddError!*Entry {
         .draw = d_,
         .children = if (own) p.children else null,
         .fallback = own and p.fallback,
+        .place = p.place,
     };
     return e;
 }
@@ -539,14 +543,14 @@ const tests = struct {
         var facet: Counts = .{};
         var tab: Counts = .{ .remove_inside = true };
         const got = try area.contribute(.{ .slot = "photo.inspector", .kind = "actor" }, .init(&facet, Counts.draw));
-        tab.contribution = try area.contribute(.{ .slot = "workbench.plugins", .title = "Other" }, .init(&tab, Counts.draw));
+        tab.contribution = try area.contribute(.{ .slot = "workbench", .title = "Other" }, .init(&tab, Counts.draw));
         try testing.expect(got.table != null);
 
         try testing.expectEqual(1, drawAll(.photo_inspector, .{ .kind = "actor", .id = 7 }));
         try testing.expectEqual(1, facet.draws);
         // Removing itself from inside its draw doesn't wait on itself
-        try testing.expectEqual(1, drawAll(.workbench_plugins, .{}));
-        try testing.expectEqual(0, drawAll(.workbench_plugins, .{}));
+        try testing.expectEqual(1, drawAll(.workbench, .{}));
+        try testing.expectEqual(0, drawAll(.workbench, .{}));
         try testing.expectEqual(1, tab.draws);
 
         // Gone with the plugin
@@ -564,7 +568,7 @@ const tests = struct {
         const area = sdk.wraith.root().?.ui();
         var c: Counts = .{};
         try testing.expectError(error.UnknownSlot, area.contribute(.{ .slot = "nowhere" }, .init(&c, Counts.draw)));
-        try testing.expectError(error.NotTaken, area.contribute(.{ .slot = "workbench.plugins", .presentation = .node }, .init(&c, Counts.draw)));
+        try testing.expectError(error.NotTaken, area.contribute(.{ .slot = "workbench", .presentation = .node }, .init(&c, Counts.draw)));
         try testing.expectError(error.NotTaken, area.contribute(.{ .slot = "settings", .parent = "x" }, .init(&c, Counts.draw)));
         try testing.expectError(error.InvalidId, area.contribute(.{ .slot = "settings", .id = "a b" }, .init(&c, Counts.draw)));
         _ = try area.contribute(.{ .slot = "photo.scene", .id = "lights", .parent = "world" }, .init(&c, Counts.draw));
@@ -648,10 +652,10 @@ const tests = struct {
         _ = area.addWorkbenchPanel(.{ .title = "First" }, .init(&first, Sibling.draw));
         first.other = area.addWorkbenchPanel(.{ .title = "Second" }, .init(&second, Sibling.draw));
         // The second's held for this frame too, so it's skipped rather than waited for
-        try testing.expectEqual(2, drawAll(.workbench_plugins, .{}));
+        try testing.expectEqual(2, drawAll(.workbench, .{}));
         try testing.expectEqual(1, first.draws);
         try testing.expectEqual(0, second.draws);
-        try testing.expectEqual(1, drawAll(.workbench_plugins, .{}));
+        try testing.expectEqual(1, drawAll(.workbench, .{}));
         a.owner.close();
         a.deinitForTest();
     }
@@ -683,7 +687,7 @@ const tests = struct {
         var slow: Slow = .{};
         const panel = area.addWorkbenchPanel(.{ .title = "Slow" }, .init(&slow, Slow.draw));
 
-        var got = take(.workbench_plugins);
+        var got = take(.workbench);
         var removed: Atomic(bool) = .init(false);
         const drawing = try std.Thread.spawn(.{}, struct {
             fn run(es: []*Entry) void {
@@ -701,7 +705,7 @@ const tests = struct {
         remover.join();
         try testing.expect(removed.load(.acquire));
         try testing.expect(slow.done.load(.acquire));
-        try testing.expectEqual(0, drawAll(.workbench_plugins, .{}));
+        try testing.expectEqual(0, drawAll(.workbench, .{}));
         a.owner.close();
         a.deinitForTest();
     }

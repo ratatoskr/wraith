@@ -117,7 +117,7 @@ pub fn start(self: *Accesses, address: usize, len: usize, mode: Mode, name: []co
         return;
     };
     self.pick_key = watching.key;
-    self.wb.panels.addresses.window.focus();
+    self.wb.focus(.addresses, null);
 }
 
 fn begin(self: *Accesses) !void {

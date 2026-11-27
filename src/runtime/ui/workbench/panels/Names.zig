@@ -31,7 +31,6 @@ const red: [4]f32 = .{ 1, 0.4, 0.4, 1 };
 const orange: [4]f32 = .{ 1, 0.7, 0.2, 1 };
 const green: [4]f32 = .{ 0.4, 0.9, 0.4, 1 };
 
-window: ui.Window = .{ .title = "Names", .size = .{ 900, 420 }, .min_size = .{ 520, 220 } },
 nav: Navigator,
 allocator: std.mem.Allocator,
 /// Where Add to addresses goes. Null in the overlay, which can't reach the workbench's list.

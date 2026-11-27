@@ -105,59 +105,64 @@ test "default layout" {
     try testing.expectEqual(5, wb.documents.items.len);
     inline for (.{ .code, .memory, .schema, .script, .tweak }, 0..) |kind, i| try testing.expectEqual(kind, std.meta.activeTag(wb.documents.items[i].body));
     try testing.expect(tuft_imgui.dock.inFront(wb.documents.items[1].window().title));
-    try testing.expect(tuft_imgui.dock.inFront(wb.panels.addresses.window.title));
+    try testing.expect(tuft_imgui.dock.inFront(wb.tabTitle(.addresses)));
     try testing.expect(wb.document_dock != 0);
-    inline for (.{ "search", "addresses", "names", "tweaks", "log" }) |name| try testing.expect(@field(wb.panels, name).window.open);
-    inline for (.{ "diagnostics", "debug", "scripts" }) |name| try testing.expect(@field(wb.groups, name).window.open);
-    const p = &wb.panels;
-    const search_spot = tuft_imgui.dock.of(p.search.window.title).?;
-    const names_spot = tuft_imgui.dock.of(p.names.window.title).?;
+    inline for (comptime std.enums.values(Workbench.Own)) |o| if (o != .classes) try testing.expect(wb.showing(@field(Workbench.Tag, @tagName(o)), null));
+    const search_spot = tuft_imgui.dock.of(wb.tabTitle(.search)).?;
+    const names_spot = tuft_imgui.dock.of(wb.tabTitle(.names)).?;
     try testing.expect(search_spot != names_spot);
-    try testing.expectEqual(tuft_imgui.dock.of(p.addresses.window.title).?, names_spot);
-    // Seven tabs along the bottom, Names right after Addresses
-    var labels: [16][]const u8 = undefined;
-    var n: usize = 0;
-    for (wb.system.windows()) |e| {
-        labels[n] = e.window.label();
-        n += 1;
-    }
-    try testing.expectEqual(11, n);
-    try testing.expectEqualStrings("Addresses", labels[1]);
-    try testing.expectEqualStrings("Names", labels[2]);
-    try testing.expectEqualStrings("Schemas", labels[3]);
-    try testing.expectEqualStrings("Tweaks", labels[4]);
-    try testing.expectEqualStrings("Classes", labels[9]);
-    try testing.expectEqualStrings("Plugins", labels[10]);
+    try testing.expectEqual(tuft_imgui.dock.of(wb.tabTitle(.addresses)).?, names_spot);
+    // Every one of Wraith's but Classes, in order, Names right after Addresses
+    const tabs = wb.tabs.list.items;
+    try testing.expectEqual(9, tabs.len);
+    try testing.expectEqualStrings("Addresses", tabs[1].window.label());
+    try testing.expectEqualStrings("Names", tabs[2].window.label());
+    try testing.expectEqualStrings("Schemas", tabs[3].window.label());
+    try testing.expectEqualStrings("Tweaks", tabs[4].window.label());
     // Open from the start, with the documents since it's as big as one
-    try testing.expect(p.schemas.window.open);
-    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(p.schemas.window.title).?);
-    // Most games have no C#, so it waits closed with the documents
-    const csharp = &wb.groups.csharp;
-    try testing.expect(!csharp.window.open);
-    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(csharp.window.title).?);
-    try testing.expect(!wb.groups.plugins.window.open);
-    try testing.expectEqual(names_spot, tuft_imgui.dock.of(wb.groups.plugins.window.title).?);
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(wb.tabTitle(.schemas)).?);
+    // Most games have no C#, so there's no Classes tab
+    try testing.expectEqual(null, wb.own.get(.classes));
 
     // ImGui keeps Search's empty spot and shows it again right there
     wb.toggleSearch();
     frames.run(wb, 3);
-    try testing.expect(!p.search.window.open);
+    try testing.expect(!wb.showing(.search, null));
     wb.toggleSearch();
     frames.run(wb, 3);
-    try testing.expect(p.search.window.open);
-    try testing.expectEqual(search_spot, tuft_imgui.dock.of(p.search.window.title).?);
+    try testing.expect(wb.showing(.search, null));
+    try testing.expectEqual(search_spot, tuft_imgui.dock.of(wb.tabTitle(.search)).?);
 
     // A bottom panel opened again joins the others there, not floating
-    wb.groups.debug.window.open = false;
+    wb.hide(.debug, null);
     frames.run(wb, 2);
-    wb.groups.debug.window.open = true;
+    wb.show(.debug, null);
     frames.run(wb, 3);
-    try testing.expectEqual(tuft_imgui.dock.of(p.log.window.title).?, tuft_imgui.dock.of(wb.groups.debug.window.title).?);
+    try testing.expectEqual(tuft_imgui.dock.of(wb.tabTitle(.log)).?, tuft_imgui.dock.of(wb.tabTitle(.debug)).?);
 
-    wb.groups.diagnostics.focus(&wb.panels.memory);
+    wb.focus(.memory_use, null);
     frames.run(wb, 3);
-    try testing.expect(wb.groups.diagnostics.window.open);
+    try testing.expect(wb.showing(.diagnostics, null));
     try testing.expectEqual(2, wb.groups.diagnostics.shown);
+
+    // From any thread, the newest wins, and a panel comes to the front of its group's tab
+    const Asker = struct {
+        fn ask(w: *Workbench) void {
+            w.focus(.log, null);
+            w.focus(.registers, null);
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Asker.ask, .{wb});
+    thread.join();
+    frames.run(wb, 3);
+    try testing.expect(wb.showing(.registers, null));
+    try testing.expect(tuft_imgui.dock.inFront(wb.tabTitle(.debug)));
+    try testing.expect(!tuft_imgui.dock.inFront(wb.tabTitle(.log)));
+    // A document by its id
+    const code = wb.documents.items[0];
+    wb.focus(.code, code.id);
+    frames.run(wb, 3);
+    try testing.expect(tuft_imgui.dock.inFront(code.window().title));
 }
 
 const PanelDraws = struct {
@@ -173,7 +178,7 @@ const PanelDraws = struct {
     }
 };
 
-test "plugins' panels show in their groups, drawn in its frame" {
+test "plugins' tabs are windows of their own, drawn in its frame" {
     const sdk = @import("wraith_sdk");
     const Loaded = @import("../../PluginLoader.zig").Loaded;
     var frames = try Frames.init();
@@ -181,7 +186,6 @@ test "plugins' panels show in their groups, drawn in its frame" {
     const wb = try Workbench.create(testing.allocator, .{});
     defer wb.destroy();
     frames.run(wb, 3);
-    try testing.expect(!wb.groups.plugins.window.open);
 
     var loaded: Loaded = undefined;
     loaded.initForTest(testing.allocator, "tools");
@@ -189,37 +193,53 @@ test "plugins' panels show in their groups, drawn in its frame" {
     defer sdk.Owner.detach();
     const area = sdk.wraith.root().?.ui();
     var mine: PanelDraws = .{};
-    var named: PanelDraws = .{};
-    const panel = area.addWorkbenchPanel(.{ .title = "Party" }, .init(&mine, PanelDraws.draw));
-    const scene = area.addWorkbenchPanel(.{ .title = "Scene", .group = "Kai" }, .init(&named, PanelDraws.draw));
+    var scenes: PanelDraws = .{};
+    const panel = area.addWorkbenchPanel(.{ .title = "Party", .kind = "party", .place = .bottom }, .init(&mine, PanelDraws.draw));
+    const scene = area.addWorkbenchPanel(.{ .title = "Scene", .kind = "scene" }, .init(&scenes, PanelDraws.draw));
+    // Between Addresses and Names
+    _ = area.addWorkbenchPanel(.{ .title = "Party 2", .kind = "party2", .place = .bottom, .order = 250 }, .init(&mine, PanelDraws.draw));
 
-    // Each group opens itself once there's something in it, and a named one is made for it
+    // A window each after Wraith's own, open from the start, behind what you were looking at
     frames.run(wb, 4);
-    try testing.expect(wb.groups.plugins.window.open);
-    try testing.expectEqual(1, wb.named.items.len);
-    const kai = wb.named.items[0];
-    try testing.expectEqualStrings("Kai", kai.window.label());
-    try testing.expect(kai.window.open);
+    try testing.expectEqual(12, wb.tabs.list.items.len);
+    try testing.expectEqualStrings("Party 2", wb.tabs.list.items[2].window.label());
+    try testing.expectEqualStrings("Names", wb.tabs.list.items[3].window.label());
+    // Order 0, so after Wraith's own
+    const party = wb.tabs.list.items[10];
+    const scene_tab = wb.tabs.list.items[11];
+    try testing.expectEqualStrings("Party", party.window.label());
+    try testing.expect(party.window.open and scene_tab.window.open);
+    // At the bottom with Addresses, and at the top with the documents
+    try testing.expectEqual(tuft_imgui.dock.of(wb.tabTitle(.addresses)).?, tuft_imgui.dock.of(party.window.title).?);
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(scene_tab.window.title).?);
+    try testing.expect(tuft_imgui.dock.inFront(wb.documents.items[1].window().title));
+    try testing.expect(!tuft_imgui.dock.inFront(scene_tab.window.title));
+    try testing.expect(!scene.isOpen());
+
+    // Focused, it's drawn in the Workbench's frame
+    panel.focus();
+    frames.run(wb, 3);
     try testing.expect(mine.draws > 0);
     try testing.expect(mine.in_frame and mine.in_workbench);
     try testing.expect(panel.isOpen());
-    // Named ones are with the documents, behind the one you were looking at
-    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(kai.window.title).?);
-    try testing.expect(tuft_imgui.dock.inFront(wb.documents.items[1].window().title));
-    try testing.expect(!tuft_imgui.dock.inFront(kai.window.title));
-
-    // Focusing a panel brings its group to the front
-    const before = named.draws;
-    sdk.wraith.root().?.ui().addWorkbenchPanel(.{ .title = "Scene 2", .group = "Kai" }, .init(&named, PanelDraws.draw)).focus();
+    scene.focus();
     frames.run(wb, 3);
-    try testing.expectEqual(1, wb.named.items.len);
-    try testing.expect(named.draws > before);
-    try testing.expect(tuft_imgui.dock.inFront(kai.window.title));
+    try testing.expect(scenes.draws > 0);
+    try testing.expect(tuft_imgui.dock.inFront(scene_tab.window.title));
+    try testing.expect(scene.isOpen());
 
-    // Still there while anything's in it
-    scene.remove();
+    // Closed, it stays till it's focused again, back where it was
+    scene_tab.window.close();
     frames.run(wb, 2);
-    try testing.expectEqual(1, wb.named.items.len);
+    try testing.expect(!scene.isOpen());
+    try testing.expectEqual(12, wb.tabs.list.items.len);
+    scene.focus();
+    frames.run(wb, 3);
+    try testing.expect(scene.isOpen());
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(scene_tab.window.title).?);
+
+    // The same kind twice is one too many
+    try testing.expect(area.addWorkbenchPanel(.{ .title = "Scene", .kind = "scene" }, .init(&scenes, PanelDraws.draw)).table == null);
 
     // Gone with the plugin
     loaded.owner.close();
@@ -227,8 +247,7 @@ test "plugins' panels show in their groups, drawn in its frame" {
     frames.run(wb, 3);
     try testing.expectEqual(draws, mine.draws);
     try testing.expect(!panel.isOpen());
-    // And its group, with nothing left in it
-    try testing.expectEqual(0, wb.named.items.len);
+    try testing.expectEqual(9, wb.tabs.list.items.len);
     loaded.deinitForTest();
 }
 
@@ -402,10 +421,10 @@ fn breakpointStopsAndResumes(kind: Workbench.Debugger.Kind) !void {
     }
     try testing.expectEqual(kind, wb.debugger.get(at).?.kind);
     try testing.expectEqual(true, Workbench.markAt(wb, at).breakpoint);
-    try testing.expect(wb.groups.debug.window.open);
+    try testing.expect(wb.showing(.debug, null));
 
     // Other tabs in front, both in the middle and along the bottom
-    wb.panels.log.window.focus();
+    wb.focus(.log, null);
     for (wb.documents.items) |d| if (d.body == .script) d.window().focus();
     frames.run(wb, 3);
     try testing.expectEqual(0, wb.panels.stopped.len);
@@ -455,9 +474,9 @@ fn breakpointStopsAndResumes(kind: Workbench.Debugger.Kind) !void {
         try testing.expectEqual(4, wb.focusedStop().?.cpu.rcx);
     }
     // Watching registers keeps them up for the next stop
-    wb.groups.debug.focus(&wb.panels.registers);
+    wb.focus(.registers, null);
     frames.run(wb, 2);
-    try testing.expect(wb.groups.debug.showing(&wb.panels.registers));
+    try testing.expect(wb.showing(.registers, null));
 
     wb.resumeFocused(.step);
     for (0..2000) |_| {
@@ -465,12 +484,12 @@ fn breakpointStopsAndResumes(kind: Workbench.Debugger.Kind) !void {
         if (wb.seen_stops == 2) break;
         tuft_sys.thread.sleepMs(1);
     }
-    try testing.expect(!wb.groups.debug.window.raise);
+    try testing.expect(!wb.windowOf(.{ .tag = .debug }).?.raise);
     try testing.expect(!wb.active_code.?.window().raise);
     try testing.expect(!wb.active_code.?.body.code.code.take_focus);
     frames.run(wb, 2);
     const stepped = wb.focusedStop().?;
-    try testing.expect(wb.groups.debug.showing(&wb.panels.registers));
+    try testing.expect(wb.showing(.registers, null));
     try testing.expectEqual(.step, stepped.reason);
     try testing.expect(stepped.cpu.ip() != at);
     try testing.expectEqual(stepped.cpu.ip(), wb.active_code.?.body.code.code.selection().?.start);
@@ -527,7 +546,7 @@ test "schema document" {
     defer tmp.cleanup();
     try tmp.dir.createDirPath(io, "schemas");
     try tmp.dir.writeFile(io, .{ .sub_path = "schemas/base.sal", .data = "struct Base {\n    u32 id;\n}\n" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "schemas/player.sal", .data = "// Ours\nstruct Player : Base {\n    [0x8] f32 health;\n}\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "schemas/player.sal", .data = "// Ours\nstruct Player : Base {\n    [0x8] f32 health;\n    [0x10] Vec3 position;\n}\n" });
     const root = try tmp.dir.realPathFileAlloc(io, ".", testing.allocator);
     defer testing.allocator.free(root);
     const path = try std.fs.path.join(testing.allocator, &.{ root, "schemas", "player.sal" });
@@ -543,11 +562,12 @@ test "schema document" {
     try testing.expectEqualStrings("player.sal###schema.6", doc.window().title);
     const editor = &doc.body.schema;
     try testing.expectEqual(null, editor.problem);
-    // Base comes from the file next to it
+    // Base comes from the file next to it, and Vec3 from Wraith's, which aren't listed
     try testing.expect(editor.view.show("Player"));
     try testing.expect(editor.view.show("Base"));
+    try testing.expect(!editor.view.show("Vec3"));
 
-    var player: [0xC]u8 align(4) = @splat(0);
+    var player: [0x20]u8 align(4) = @splat(0);
     std.mem.writeInt(u32, player[0..4], 7, .little);
     _ = editor.view.show("Player");
     editor.view.goTo(@intFromPtr(&player));
@@ -555,12 +575,12 @@ test "schema document" {
     try testing.expect(editor.view.rows.items.len >= 3);
 
     editor.apply(&.{.{ .define = .{ .owner = "Player", .offset = 0x4, .type = "u32", .name = "level" } }});
-    try testing.expectEqualStrings("// Ours\nstruct Player : Base {\n    [0x4] u32 level;\n    [0x8] f32 health;\n}\n", editor.source());
+    try testing.expectEqualStrings("// Ours\nstruct Player : Base {\n    [0x4] u32 level;\n    [0x8] f32 health;\n    [0x10] Vec3 position;\n}\n", editor.source());
     try testing.expect(!editor.saved);
     // Base isn't in this file
     editor.apply(&.{.{ .rename = .{ .owner = "Base", .field = "id", .name = "key" } }});
     try testing.expect(std.mem.indexOf(u8, editor.view.problem.?.message(), "another file") != null);
-    try testing.expectEqualStrings("// Ours\nstruct Player : Base {\n    [0x4] u32 level;\n    [0x8] f32 health;\n}\n", editor.source());
+    try testing.expectEqualStrings("// Ours\nstruct Player : Base {\n    [0x4] u32 level;\n    [0x8] f32 health;\n    [0x10] Vec3 position;\n}\n", editor.source());
 
     try editor.saveAs(path);
     try testing.expect(editor.saved);
@@ -763,7 +783,7 @@ test "tweaks panel and editor" {
     const wb = try Workbench.create(testing.allocator, .{ .io = io, .project = project });
     defer wb.destroy();
     wb.tweaks = tweaks;
-    wb.panels.tweaks.window.focus();
+    wb.focus(.tweaks, null);
     frames.run(wb, 3);
 
     // The one it starts with is new and empty, with no file till something's typed
@@ -1072,7 +1092,7 @@ test "names panel" {
 
     frames.run(wb, 2);
     const panel = &wb.panels.names;
-    panel.window.focus();
+    wb.focus(.names, null);
     frames.run(wb, 4);
     try testing.expectEqual(4, panel.shown.items.len);
     const scanned = &panel.infos.items[0];
@@ -1164,7 +1184,7 @@ test "schemas panel" {
     defer SharedSchemas.global.removeOwner(&kai);
     wb.tick();
     const panel = &wb.panels.schemas;
-    panel.window.focus();
+    wb.focus(.schemas, null);
     frames.run(wb, 3);
     // Wraith's own types, like Vec3, are read before it as they are for the plugin, under a folder of their own
     var kais: usize = 0;
@@ -1180,7 +1200,7 @@ test "schemas panel" {
     // Picking one opens its folders and shows what uses it
     try testing.expect(panel.show("Game.World.Actor"));
     // It shares a dock with the documents, which came to the front
-    panel.window.focus();
+    wb.focus(.schemas, null);
     frames.run(wb, 3);
     try testing.expectEqual(8, panel.rows.items.len);
     try testing.expectEqual(2, panel.used_by.items.len);
@@ -1202,7 +1222,7 @@ test "schemas panel" {
     // A filter lists matches flat
     @memcpy(panel.search[0..5], "party");
     panel.rows_stale = true;
-    panel.window.focus();
+    wb.focus(.schemas, null);
     frames.run(wb, 2);
     try testing.expectEqual(1, panel.rows.items.len);
     try testing.expectEqualStrings("Game.World.Party", panel.rows.items[0].label);
@@ -1269,7 +1289,7 @@ test "classes panel on a real game's C#" {
     const wb = try Workbench.create(testing.allocator, .{});
     defer wb.destroy();
     const panel = &wb.panels.classes;
-    wb.groups.csharp.focusOwn(panel);
+    wb.focus(.classes, null);
     frames.run(wb, 3);
     try testing.expect(panel.all.len > 1000);
     try testing.expect(panel.images > 10);
@@ -1283,7 +1303,7 @@ test "classes panel on a real game's C#" {
     try testing.expect(panel.shown.items.len < panel.all.len);
     panel.picked.only(@intFromPtr(string.class));
     // Addresses comes to the front as the workbench starts
-    wb.groups.csharp.focusOwn(panel);
+    wb.focus(.classes, null);
     frames.run(wb, 3);
     try testing.expectEqual(string.class, panel.members_of.?);
     const empty = for (panel.fields) |f| {
@@ -1346,7 +1366,7 @@ test "debug panels" {
     const panels = &wb.panels;
 
     // Only the tab showing draws
-    wb.groups.diagnostics.focus(&panels.memory);
+    wb.focus(.memory_use, null);
     frames.run(wb, 3);
     var found_pages = false;
     for (panels.memory.stats[0..panels.memory.len]) |s| {
@@ -1356,7 +1376,7 @@ test "debug panels" {
 
     try testing.expect(hook.registry.snapshot(&panels.hooks.infos) >= 2);
     for (panels.hooks.infos[0..2]) |info| try testing.expect(info.patch_len >= 5 or info.patch_len == @sizeOf(usize));
-    wb.groups.diagnostics.focus(&panels.claims);
+    wb.focus(.claims, null);
     frames.run(wb, 3);
     try testing.expect(panels.claims.total >= 4);
     try testing.expectEqual(.hook, panels.claims.claims[0].kind);
@@ -1365,6 +1385,9 @@ test "debug panels" {
         if (std.mem.eql(u8, s.name(), "overlay")) found_zone = s.calls >= 3;
     }
     try testing.expect(found_zone);
+    // It reads new lines as it draws
+    wb.focus(.log, null);
+    frames.run(wb, 2);
     var found_line = false;
     for (0..panels.log.len) |i| {
         if (std.mem.eql(u8, panels.log.at(i).message(), "debug panels test")) found_line = true;

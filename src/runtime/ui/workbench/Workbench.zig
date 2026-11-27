@@ -62,7 +62,7 @@ const Breakpoints = @import("panels/Breakpoints.zig");
 const Stopped = @import("panels/Stopped.zig");
 const Registers = @import("panels/Registers.zig");
 pub const Group = @import("Group.zig");
-pub const PanelGroup = @import("PanelGroup.zig");
+pub const Tabs = @import("Tabs.zig");
 const GameSpeed = @import("../GameSpeed.zig");
 const Managed = @import("../../Managed.zig");
 const plugin_panels = @import("../../host/workbench_panels.zig");
@@ -115,7 +115,7 @@ pub const exportText = Transfer.exportText;
 pub const importFile = Transfer.importFile;
 pub const importPath = Transfer.importPath;
 
-/// Some dock on their own in `alone`, the rest in a `Group`.
+/// What its tabs draw: each of `Own` that isn't a group, and what's in `Groups`.
 pub const Panels = struct {
     addresses: Addresses,
     accesses: Accesses,
@@ -139,26 +139,34 @@ pub const Panels = struct {
     tweaks: TweaksPanel,
 };
 
-/// Docked on their own, not in a `Group`.
-const alone = .{ "search", "addresses", "names", "schemas", "tweaks", "log" };
-/// `alone` and `Groups` in View menu and dock order. Each needs a spot in `defaultLayout`.
-const docked = .{ "search", "addresses", "names", "schemas", "tweaks", "diagnostics", "debug", "scripts", "log", "csharp", "plugins" };
+/// Wraith's own tabs, in their default order, 100 apart from 100. Each draws the panel or group of its name.
+pub const Own = enum { search, addresses, names, schemas, tweaks, diagnostics, debug, scripts, log, classes };
 
-/// So the dock's a few tabs and not a row of them.
+const OwnTab = struct { title: [:0]const u8, place: slots.Place };
+
+const own_tabs: std.EnumArray(Own, OwnTab) = .init(.{
+    .search = .{ .title = "Search", .place = .left },
+    .addresses = .{ .title = "Addresses", .place = .bottom },
+    .names = .{ .title = "Names", .place = .bottom },
+    // With the documents, since it's as big as one
+    .schemas = .{ .title = "Schemas", .place = .top },
+    .tweaks = .{ .title = "Tweaks", .place = .bottom },
+    .diagnostics = .{ .title = "Diagnostics", .place = .bottom },
+    .debug = .{ .title = "Debug", .place = .bottom },
+    .scripts = .{ .title = "Scripts", .place = .bottom },
+    .log = .{ .title = "Log", .place = .bottom },
+    // Only once the game runs C#
+    .classes = .{ .title = "Classes", .place = .top },
+});
+
+/// Tabs with a few panels in them, so the dock's a few tabs and not a row of them.
 pub const Groups = struct {
     /// Comes to the front when something stops or a breakpoint's added.
     debug: Group,
     /// Comes to the front when a script runs.
     scripts: Group,
     diagnostics: Group,
-    /// Classes, once the game runs C#. With the documents.
-    csharp: PanelGroup,
-    /// Plugins' panels that don't name a group of their own.
-    plugins: PanelGroup,
 };
-
-/// Not the C# group, since most games have no C#. It opens itself once there's something in it.
-const open_at_start = .{ "search", "addresses", "names", "schemas", "tweaks", "diagnostics", "debug", "scripts", "log" };
 
 pub const Options = struct {
     /// The address list is only kept with it.
@@ -179,7 +187,7 @@ const ui_scale = 1.0;
 const font_size = 15;
 const dockspace_name = "wraith.workbench";
 /// Bump when `defaultLayout` changes.
-const layout_version = "16";
+const layout_version = "19";
 
 allocator: std.mem.Allocator,
 io: ?std.Io,
@@ -203,13 +211,12 @@ styled: bool = false,
 fronts_pending: u8 = 0,
 /// More by then means something's been opened since, which stays in front.
 starting_documents: usize = 0,
-seen_open: [32]bool = @splat(false),
-/// The groups plugins' panels named, like `FFXIV`, each a window with the documents.
-named: std.ArrayList(*PanelGroup) = .empty,
-seen_started: bool = false,
+/// What's in the `workbench` slot, plugins' and Wraith's own, a window each.
+tabs: Tabs = .{},
+/// Wraith's own in the slot.
+own: std.EnumArray(Own, ?*slots.Entry) = .initFill(null),
 panels: Panels,
 groups: Groups,
-system: ui.WindowSystem,
 scripts: Scripts,
 /// The workbench's thread never stops.
 debugger: Debugger,
@@ -217,7 +224,9 @@ seen_stops: u32 = 0,
 /// Brings the Debug group's tab to the front next frame, without taking focus from the code.
 debug_to_front: bool = false,
 /// Focused again once the window has OS focus, since ImGui hands focus back to the old tab a frame later.
-focus_when_active: ?*Document = null,
+focus_when_active: ?Target = null,
+/// What `focus` asked for from any thread, packed, or 0.
+focus_request: Atomic(u64) = .init(0),
 /// `focus_when_active` was focused once already, after the raise.
 focus_applied: bool = false,
 /// `focus_when_active` is for a stop, so it's dropped once nothing's stopped.
@@ -290,7 +299,6 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
         .shell = options.shell,
         .theme = options.theme,
         .ini_path = ini_path,
-        .system = .init(allocator),
         .scripts = .init(allocator, options.shell),
         .debugger = .init(allocator, .{}),
         .panels = .{
@@ -316,23 +324,13 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
     };
     const p = &self.panels;
     self.groups = .{
-        .debug = .init("Debug", .tabs, &.{ .of("Threads", &p.stopped), .of("Registers", &p.registers), .of("Breakpoints", &p.breakpoints) }),
-        .scripts = .init("Scripts", .{ .split = .{ .ratio = 0.75 } }, &.{ .of("Console", &p.console), .of("Sessions", &p.sessions) }),
-        .diagnostics = .init("Diagnostics", .tabs, &.{ .of("Timings", &p.timings), .of("Frames", &p.frames), .of("Memory", &p.memory), .of("Environment", &p.environment), .of("Hooks", &p.hooks), .of("Claims", &p.claims), .of("IO", &p.file_io) }),
-        .csharp = .init("Classes###wraith.csharp", null, &.{.of("Classes", &p.classes)}, "Classes shows once the game runs C#."),
-        .plugins = .init("Plugins###wraith.plugins", "", &.{}, "Plugins' Workbench panels show here."),
+        .debug = .init(.tabs, &.{ .of("Threads", &p.stopped), .of("Registers", &p.registers), .of("Breakpoints", &p.breakpoints) }),
+        .scripts = .init(.{ .split = .{ .ratio = 0.75 } }, &.{ .of("Console", &p.console), .of("Sessions", &p.sessions) }),
+        .diagnostics = .init(.tabs, &.{ .of("Timings", &p.timings), .of("Frames", &p.frames), .of("Memory", &p.memory), .of("Environment", &p.environment), .of("Hooks", &p.hooks), .of("Claims", &p.claims), .of("IO", &p.file_io) }),
     };
-    // It opens itself behind what you're looking at
-    self.groups.csharp.window.flags.no_focus_on_appearing = true;
-    errdefer self.system.deinit();
-    self.system.before_each = .{ .ctx = self, .func = withHost };
-    comptime std.debug.assert(docked.len == alone.len + @typeInfo(Groups).@"struct".field_names.len);
-    inline for (docked) |name| {
-        if (@hasField(Panels, name)) try self.addDocked(&@field(self.panels, name)) else try self.addDocked(&@field(self.groups, name));
-    }
-    inline for (open_at_start) |name| {
-        if (@hasField(Panels, name)) @field(self.panels, name).window.open = true else @field(self.groups, name).window.open = true;
-    }
+    errdefer self.removeOwnTabs();
+    inline for (comptime std.enums.values(Own)) |o| if (o != .classes) try self.addOwnTab(o);
+    self.tabs.sync();
     if (options.project) |project| {
         self.project = project;
         self.panels.addresses.useProject(project);
@@ -350,16 +348,222 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
     return self;
 }
 
-/// Escape's for the views in docked windows, not the window.
-fn addDocked(self: *Workbench, owner: anytype) !void {
-    owner.window.close_on_escape = false;
-    try self.system.add(owner);
+fn addOwnTab(self: *Workbench, comptime o: Own) !void {
+    if (self.own.get(o) != null) return;
+    const Draw = struct {
+        fn draw(wb: *Workbench, _: slots.Target) void {
+            const name = @tagName(o);
+            if (@hasField(Panels, name)) @field(wb.panels, name).draw() else @field(wb.groups, name).draw();
+        }
+    };
+    const def = own_tabs.get(o);
+    const order: i32 = (@as(i32, @backingInt(o)) + 1) * 100;
+    self.own.set(o, try slots.addOwn(.{ .slot = .workbench, .id = @tagName(o), .title = def.title, .place = def.place, .order = order }, .{ .native = .of(self, Draw.draw) }));
+}
+
+fn removeOwnTabs(self: *Workbench) void {
+    for (std.enums.values(Own)) |o| if (self.own.get(o)) |e| e.remove();
+    self.own = .initFill(null);
+}
+
+/// Its window, once `tabs` has it.
+fn ownTab(self: *Workbench, o: Own) ?*Tabs.Tab {
+    const e = self.own.get(o) orelse return null;
+    return self.tabs.find(e.label) orelse {
+        self.tabs.sync();
+        return self.tabs.find(e.label);
+    };
+}
+
+/// Its window's title, which docking goes by.
+pub fn tabTitle(self: *const Workbench, o: Own) [:0]const u8 {
+    const e = self.own.get(o) orelse return "";
+    return e.label;
+}
+
+/// Something to bring to the front: one of its tabs, a panel in one of its groups, or a kind of
+/// document, with an id for which one.
+pub const Tag = enum {
+    // Its tabs, as `Own`
+    search,
+    addresses,
+    names,
+    schemas,
+    tweaks,
+    diagnostics,
+    debug,
+    scripts,
+    log,
+    classes,
+    // In Debug
+    threads,
+    registers,
+    breakpoints,
+    // In Scripts
+    console,
+    sessions,
+    // In Diagnostics
+    timings,
+    frames,
+    memory_use,
+    environment,
+    hooks,
+    claims,
+    io,
+    // Documents
+    code,
+    memory,
+    script,
+    schema,
+    tweak,
+};
+
+pub const Target = struct { tag: Tag, id: ?u32 = null };
+
+const Part = struct { tab: Own, panel: *anyopaque };
+
+fn partOf(self: *Workbench, tag: Tag) ?Part {
+    const p = &self.panels;
+    return switch (tag) {
+        .threads => .{ .tab = .debug, .panel = &p.stopped },
+        .registers => .{ .tab = .debug, .panel = &p.registers },
+        .breakpoints => .{ .tab = .debug, .panel = &p.breakpoints },
+        .console => .{ .tab = .scripts, .panel = &p.console },
+        .sessions => .{ .tab = .scripts, .panel = &p.sessions },
+        .timings => .{ .tab = .diagnostics, .panel = &p.timings },
+        .frames => .{ .tab = .diagnostics, .panel = &p.frames },
+        .memory_use => .{ .tab = .diagnostics, .panel = &p.memory },
+        .environment => .{ .tab = .diagnostics, .panel = &p.environment },
+        .hooks => .{ .tab = .diagnostics, .panel = &p.hooks },
+        .claims => .{ .tab = .diagnostics, .panel = &p.claims },
+        .io => .{ .tab = .diagnostics, .panel = &p.file_io },
+        else => null,
+    };
+}
+
+/// The tab it's in, for a tab or a panel in a group.
+fn tabOf(self: *Workbench, tag: Tag) ?Own {
+    if (self.partOf(tag)) |part| return part.tab;
+    return switch (tag) {
+        inline else => |t| if (@hasField(Own, @tagName(t))) @field(Own, @tagName(t)) else null,
+    };
+}
+
+fn kindOf(tag: Tag) ?Kind {
+    return switch (tag) {
+        inline else => |t| if (@hasField(Kind, @tagName(t))) @field(Kind, @tagName(t)) else null,
+    };
+}
+
+pub fn tagOf(kind: Kind) Tag {
+    return switch (kind) {
+        inline else => |k| @field(Tag, @tagName(k)),
+    };
+}
+
+/// That document, or without an id, the last one used of its kind.
+fn documentFor(self: *Workbench, kind: Kind, id: ?u32) ?*Document {
+    if (id) |want| {
+        for (self.documents.items) |d| if (d.id == want and std.meta.activeTag(d.body) == kind) return d;
+        return null;
+    }
+    if (kind == .code) if (self.active_code) |d| return d;
+    if (kind == .memory) if (self.active_memory) |d| return d;
+    var i = self.documents.items.len;
+    while (i > 0) {
+        i -= 1;
+        const d = self.documents.items[i];
+        if (std.meta.activeTag(d.body) == kind) return d;
+    }
+    return null;
+}
+
+/// Its window: a tab's, the tab a panel's in, or a document's. Its thread.
+pub fn windowOf(self: *Workbench, target: Target) ?*ui.Window {
+    if (kindOf(target.tag)) |kind| {
+        const d = self.documentFor(kind, target.id) orelse return null;
+        return d.window();
+    }
+    const o = self.tabOf(target.tag) orelse return null;
+    const t = self.ownTab(o) orelse return null;
+    return &t.window;
+}
+
+/// Brings it to the front, with the Workbench over everything else. A panel in a group comes to
+/// the front of its tab. Any thread; done next frame, and the newest one wins.
+pub fn focus(self: *Workbench, tag: Tag, id: ?u32) void {
+    // The tag plus one from bit 40, whether there's an id at bit 32, and the id
+    const with_id: u64 = if (id) |n| (@as(u64, 1) << 32) | n else 0;
+    const packed_target: u64 = ((@as(u64, @backingInt(tag)) + 1) << 40) | with_id;
+    self.focus_request.store(packed_target, .release);
+    if (self.app) |app| app.show();
+}
+
+/// What `focus` asked for. Its thread, before anything draws.
+fn takeFocusRequest(self: *Workbench) void {
+    const r = self.focus_request.swap(0, .acq_rel);
+    if (r == 0) return;
+    const target: Target = .{
+        .tag = @fromBackingInt(@as(std.meta.Tag(Tag), @intCast((r >> 40) - 1))),
+        .id = if (r & (@as(u64, 1) << 32) != 0) @truncate(r) else null,
+    };
+    if (target.tag == .classes) self.addOwnTab(.classes) catch {};
+    if (self.partOf(target.tag)) |part| self.groupOf(part.tab).select(part.panel);
+    const w = self.windowOf(target) orelse return;
+    w.focus();
+    // Again once the window really has focus, since raising it can hand focus back to the old tab
+    self.focus_when_active = target;
+    self.focus_applied = false;
+    self.focus_for_stop = false;
+}
+
+/// Opens it without changing what's in front, so it's there to look at. A panel in a group comes to
+/// the front of its tab only if the tab was closed. Its thread.
+pub fn show(self: *Workbench, tag: Tag, id: ?u32) void {
+    if (self.partOf(tag)) |part| if (!self.tabShown(part.tab)) self.groupOf(part.tab).select(part.panel);
+    const w = self.windowOf(.{ .tag = tag, .id = id }) orelse return;
+    w.show();
+}
+
+/// Puts a panel at the front of its group's tab, from the next draw. Its thread.
+pub fn select(self: *Workbench, tag: Tag) void {
+    const part = self.partOf(tag) orelse return;
+    self.groupOf(part.tab).select(part.panel);
+}
+
+/// Open, and for a panel in a group, at the front of its tab as of the last frame. Its thread.
+pub fn showing(self: *Workbench, tag: Tag, id: ?u32) bool {
+    const w = self.windowOf(.{ .tag = tag, .id = id }) orelse return false;
+    if (!w.open) return false;
+    const part = self.partOf(tag) orelse return true;
+    return self.groupOf(part.tab).showing(part.panel);
+}
+
+/// Closes its tab or document. Its thread.
+pub fn hide(self: *Workbench, tag: Tag, id: ?u32) void {
+    if (self.windowOf(.{ .tag = tag, .id = id })) |w| w.close();
+}
+
+fn tabShown(self: *Workbench, o: Own) bool {
+    const t = self.ownTab(o) orelse return false;
+    return t.window.open;
+}
+
+fn groupOf(self: *Workbench, o: Own) *Group {
+    return switch (o) {
+        .debug => &self.groups.debug,
+        .scripts => &self.groups.scripts,
+        .diagnostics => &self.groups.diagnostics,
+        else => unreachable,
+    };
 }
 
 /// Saves the layout and the address list. Waits for its thread.
 pub fn destroy(self: *Workbench) void {
     DebugControl.unhookCrashes();
     if (self.app) |app| app.destroy();
+    // Before what they draw goes
+    self.removeOwnTabs();
     self.holdGameInput(false);
     // After the app, so nothing's drawing with it
     DebugControl.deinit(self);
@@ -376,9 +580,7 @@ pub fn destroy(self: *Workbench) void {
     self.plugin_schemas.deinit(self.allocator);
     self.scripts.deinit();
     self.documents.deinit(self.allocator);
-    for (self.named.items) |g| self.allocator.destroy(g);
-    self.named.deinit(self.allocator);
-    self.system.deinit();
+    self.tabs.deinit();
     if (self.ini_path) |p| self.allocator.free(p);
     self.allocator.destroy(self);
 }
@@ -502,7 +704,7 @@ pub fn tick(self: *Workbench) void {
     const app = self.app orelse return self.holdGameInput(false);
     // A closed Workbench draws nothing, so its plugins' panels would still say they're open
     if (!app.isOpen()) {
-        slots.hide(.workbench_plugins);
+        slots.hide(.workbench);
     }
     const active = app.isActive();
     // Held from opening till it's been in front and you've clicked back into the game
@@ -536,6 +738,9 @@ pub fn draw(self: *Workbench) void {
         self.reset_windows = false;
         tuft_imgui.resetLayout();
     }
+    // So the layout has them
+    self.tabs.sync();
+    self.takeFocusRequest();
     Documents.goPending(self);
     Documents.followProject(self);
     self.scripts.pump();
@@ -581,11 +786,9 @@ pub fn draw(self: *Workbench) void {
         }
         if (self.debug_to_front) {
             self.debug_to_front = false;
-            tuft_imgui.dock.bringToFront(self.groups.debug.window.title);
+            tuft_imgui.dock.bringToFront(self.tabTitle(.debug));
         }
         DebugControl.applyPendingFocus(self);
-        self.syncNamedGroups();
-        self.redockReopened();
         _ = c.ImGui_DockSpaceEx(id, .{ .x = 0, .y = -StatusBar.height() }, 0, null);
         self.drawStatusBar();
     }
@@ -593,7 +796,7 @@ pub fn draw(self: *Workbench) void {
     if (!keep_open) self.close();
 
     self.pollPluginPanels();
-    self.system.draw();
+    self.tabs.draw(.{ .ctx = self, .func = placeNode }, .{ .ctx = self, .func = withHost });
     self.dev_menus.drawWindows();
     self.own_file_focused = false;
     for (self.documents.items) |d| Documents.draw(self, d);
@@ -611,62 +814,29 @@ fn drawStatusBar(self: *Workbench) void {
     self.project_menu.ce.status(&bar);
 }
 
-/// Picks up what plugins asked for: panels to focus and classes to show.
+/// Adds Classes once there's C#, and shows the classes plugins asked for.
 fn pollPluginPanels(self: *Workbench) void {
-    slots.settleSlot(.workbench_plugins);
-    const csharp = &self.groups.csharp;
-    csharp.poll(Managed.global.running());
-    // C# only, so not in an Unreal game, say
-    csharp.own_shown = Managed.global.running();
-    self.groups.plugins.poll(false);
-    for (self.named.items) |g| g.poll(false);
+    if (Managed.global.running()) self.addOwnTab(.classes) catch {};
     var buf: [256]u8 = undefined;
     if (plugin_panels.takeClass(&buf)) |name| {
         self.panels.classes.show(name);
-        csharp.focusOwn(&self.panels.classes);
+        self.focus(.classes, null);
     }
 }
 
-/// A window for each group plugins' panels name, with the documents, gone once nothing's in it.
-/// Before the dock space, so new ones dock this frame.
-fn syncNamedGroups(self: *Workbench) void {
-    var held = slots.take(.workbench_plugins);
-    defer held.end();
-    const taken = held.items();
-    for (taken) |p| {
-        if (p.parent.len == 0 or self.namedGroup(p.parent) != null) continue;
-        const g = PanelGroup.create(self.allocator, p.parent) catch continue;
-        self.named.append(self.allocator, g) catch {
-            self.allocator.destroy(g);
-            continue;
-        };
-        self.addDocked(g) catch {
-            _ = self.named.pop();
-            self.allocator.destroy(g);
-            continue;
-        };
-        const doc = self.document_dock;
-        const node = if (doc != 0 and tuft_imgui.dock.exists(doc)) doc else tuft_imgui.dock.central(self.dockspace) orelse continue;
-        tuft_imgui.dock.window(g.window.title, node);
-        tuft_imgui.dock.finish(self.dockspace);
+/// Where a tab goes that has nowhere: at the top with the documents, else with others of its place,
+/// else a new spot where the last one of them was.
+fn placeNode(ctx: *anyopaque, place: slots.Place) ?c.ImGuiID {
+    const self: *Workbench = @ptrCast(@alignCast(ctx));
+    if (place != .left and place != .bottom) {
+        if (self.document_dock != 0 and tuft_imgui.dock.exists(self.document_dock)) return self.document_dock;
+        return tuft_imgui.dock.central(self.dockspace);
     }
-    var i = self.named.items.len;
-    while (i > 0) {
-        i -= 1;
-        const g = self.named.items[i];
-        for (taken) |p| {
-            if (g.has(p)) break;
-        } else {
-            self.system.remove(g);
-            _ = self.named.orderedRemove(i);
-            self.allocator.destroy(g);
-        }
-    }
-}
-
-fn namedGroup(self: *const Workbench, name: []const u8) ?*PanelGroup {
-    for (self.named.items) |g| if (std.mem.eql(u8, g.name.?, name)) return g;
-    return null;
+    if (self.tabs.nodeOf(place)) |n| return n;
+    var rest = tuft_imgui.dock.central(self.dockspace) orelse return null;
+    const node = if (place == .left) tuft_imgui.dock.split(&rest, .left, 0.22) else tuft_imgui.dock.split(&rest, .down, 0.35);
+    tuft_imgui.dock.finish(self.dockspace);
+    return node;
 }
 
 /// The project's name, with a star if it's not saved. The part after ### keeps it the same window.
@@ -720,17 +890,11 @@ fn defaultLayout(self: *Workbench, id: c.ImGuiID) void {
     var center = id;
     const left = tuft_imgui.dock.split(&center, .left, 0.22);
     const bottom = tuft_imgui.dock.split(&center, .down, 0.35);
-    tuft_imgui.dock.window(self.panels.search.window.title, left);
-    inline for (docked) |name| {
-        if (comptime std.mem.eql(u8, name, "search") or std.mem.eql(u8, name, "csharp") or std.mem.eql(u8, name, "schemas")) continue;
-        const title = if (@hasField(Panels, name)) @field(self.panels, name).window.title else @field(self.groups, name).window.title;
-        tuft_imgui.dock.window(title, bottom);
-    }
-    for (self.documents.items) |d| tuft_imgui.dock.window(d.window().title, center);
-    // With the documents, since they're as big as one
-    tuft_imgui.dock.window(self.panels.schemas.window.title, center);
-    tuft_imgui.dock.window(self.groups.csharp.window.title, center);
-    for (self.named.items) |g| tuft_imgui.dock.window(g.window.title, center);
+    // Along the top: Memory and Disassembly, the tabs there, like Schemas and plugins', then the other documents
+    const first = [_]Kind{ .memory, .code };
+    for (first) |kind| for (self.documents.items) |d| if (std.meta.activeTag(d.body) == kind) tuft_imgui.dock.window(d.window().title, center);
+    for (self.tabs.list.items) |t| tuft_imgui.dock.window(t.window.title, if (t.place == .left) left else if (t.place == .bottom) bottom else center);
+    for (self.documents.items) |d| if (std.mem.indexOfScalar(Kind, &first, std.meta.activeTag(d.body)) == null) tuft_imgui.dock.window(d.window().title, center);
     tuft_imgui.dock.finish(id);
     self.document_dock = center;
     self.fronts_pending = 1;
@@ -740,75 +904,14 @@ fn defaultLayout(self: *Workbench, id: c.ImGuiID) void {
 fn bringStartingTabsToFront(self: *Workbench) void {
     if (self.fronts_pending == 0) return;
     self.fronts_pending -= 1;
-    tuft_imgui.dock.bringToFront(self.panels.addresses.window.title);
+    tuft_imgui.dock.bringToFront(self.tabTitle(.addresses));
     if (self.documents.items.len != self.starting_documents) return;
     // Focused too, since a dock keeps the focused window's tab in front
     if (self.active_memory) |m| m.window().focus();
 }
 
-const Side = enum {
-    left,
-    bottom,
-    /// With the documents
-    center,
-
-    fn dir(self: Side) tuft_imgui.dock.Dir {
-        return switch (self) {
-            .left => .left,
-            .bottom, .center => .down,
-        };
-    }
-
-    fn ratio(self: Side) f32 {
-        return switch (self) {
-            .left => 0.22,
-            .bottom, .center => 0.35,
-        };
-    }
-};
-
-fn sideOf(self: *const Workbench, window: *const ui.Window) Side {
-    if (window == &self.panels.search.window) return .left;
-    if (window == &self.groups.csharp.window) return .center;
-    for (self.named.items) |g| if (window == &g.window) return .center;
-    return .bottom;
-}
-
-/// Closing the last panel in a spot takes the spot away, so it'd float otherwise.
-fn redockReopened(self: *Workbench) void {
-    const entries = self.system.windows();
-    defer self.seen_started = true;
-    for (entries, 0..) |e, i| {
-        if (i == self.seen_open.len) break;
-        const is_open = e.window.open;
-        defer self.seen_open[i] = is_open;
-        if (!self.seen_started or self.seen_open[i] or !is_open) continue;
-        // Never docked, or its spot's still there. ImGui puts it back itself
-        const last = tuft_imgui.dock.of(e.window.title) orelse continue;
-        if (tuft_imgui.dock.exists(last)) continue;
-        const side = self.sideOf(e.window);
-        // The documents' spot is always there
-        const node = if (side == .center) tuft_imgui.dock.central(self.dockspace) orelse continue else self.nodeOn(side) orelse blk: {
-            var rest = tuft_imgui.dock.central(self.dockspace) orelse continue;
-            break :blk tuft_imgui.dock.split(&rest, side.dir(), side.ratio());
-        };
-        tuft_imgui.dock.window(e.window.title, node);
-        tuft_imgui.dock.finish(self.dockspace);
-    }
-}
-
-fn nodeOn(self: *const Workbench, side: Side) ?c.ImGuiID {
-    for (self.system.windows(), 0..) |e, i| {
-        if (i >= self.seen_open.len or !self.seen_open[i] or self.sideOf(e.window) != side) continue;
-        const node = tuft_imgui.dock.of(e.window.title) orelse continue;
-        if (tuft_imgui.dock.exists(node)) return node;
-    }
-    return null;
-}
-
 pub fn toggleSearch(self: *Workbench) void {
-    const w = &self.panels.search.window;
-    if (w.open) w.close() else w.focus();
+    if (self.showing(.search, null)) self.hide(.search, null) else self.focus(.search, null);
 }
 
 fn drawMenuBar(self: *Workbench) void {
@@ -829,10 +932,13 @@ fn drawMenuBar(self: *Workbench) void {
     var schemas_open = false;
     if (ui.menu("View")) |menu| {
         defer menu.end();
-        for (self.system.windows()) |entry| {
+        for (self.tabs.list.items) |t| {
             var buf: [64]u8 = undefined;
-            const label = std.fmt.bufPrintSentinel(&buf, "{s}", .{entry.window.label()}, 0) catch continue;
-            _ = ui.menuItem(label, .{ .checked = &entry.window.open });
+            const label = std.fmt.bufPrintSentinel(&buf, "{s}", .{t.window.label()}, 0) catch continue;
+            var ticked = t.window.open;
+            if (ui.menuItem(label, .{ .checked = &ticked })) {
+                if (ticked) t.window.focus() else t.window.close();
+            }
         }
         ui.separator();
         if (ui.menu("Plugin schemas")) |sub| {

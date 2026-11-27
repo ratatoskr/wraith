@@ -9,6 +9,13 @@ const core = @import("wraith_core");
 const devtools = @import("tuft_devtools");
 const salamander_schema = @import("salamander_schema");
 const sal_options = @import("wraith_api").sal_options;
+/// Before everything it reads, like a plugin's schemas are, so Wraith's types like `Vec3` are there.
+const wraith_prefix = @import("wraith_api").wraith_sal ++ "\n";
+/// Each file's read as its own, like in a plugin's bundle, so namespaces stay in their files.
+const file_marker = "file \"";
+/// Its own text's name in the bundle, which its problems are shown without.
+const own_name = "this";
+const own_marker = file_marker ++ own_name ++ "\";\n";
 const tuft_window = @import("tuft_window");
 const ui = @import("wraith_ui");
 const Text = @import("tuft_text").Text;
@@ -53,7 +60,6 @@ last_edit_ns: u64 = 0,
 /// Its name changed, so the workbench gives it a new title.
 renamed: bool = false,
 context: []u8 = &.{},
-context_lines: usize = 0,
 /// Shown while the text doesn't parse.
 parsed: ?salamander_schema.Parsed = null,
 problem: ?devtools.Problem = null,
@@ -157,22 +163,27 @@ pub fn openInProject(self: *SchemaEditor, project: *Project, path: []const u8) !
         if (std.mem.eql(u8, other, path)) continue;
         const t = (try project.read(gpa, other)) orelse continue;
         defer gpa.free(t);
-        try context.appendSlice(gpa, t);
-        if (t.len > 0 and t[t.len - 1] != '\n') try context.append(gpa, '\n');
+        try appendFile(gpa, &context, std.fs.path.basename(other), t);
     }
     if (self.text == null) try self.init("");
     if (path.len > self.project_path.buf.len) return error.NameTooLong;
     self.project_path.set(path);
     gpa.free(self.context);
     self.context = try context.toOwnedSlice(gpa);
-    self.context_lines = std.mem.count(u8, self.context, "\n");
     self.setText(text);
     self.reparse();
 }
 
-/// The caller frees it.
+/// Wraith's, then the others next to it, then its own, each a file of the bundle. The caller frees it.
 fn combined(self: *const SchemaEditor) ![:0]u8 {
-    return std.mem.concatWithSentinel(self.wb.allocator, u8, &.{ self.context, self.source() }, 0);
+    return std.mem.concatWithSentinel(self.wb.allocator, u8, &.{ wraith_prefix, self.context, own_marker, self.source() }, 0);
+}
+
+/// Another file before its own, with its marker.
+fn appendFile(gpa: std.mem.Allocator, context: *std.ArrayList(u8), file_name: []const u8, text: []const u8) !void {
+    try context.print(gpa, file_marker ++ "{s}\";\n", .{file_name});
+    try context.appendSlice(gpa, text);
+    if (text.len > 0 and text[text.len - 1] != '\n') try context.append(gpa, '\n');
 }
 
 /// While it doesn't parse, the last one that did stays up.
@@ -185,12 +196,13 @@ fn reparse(self: *SchemaEditor) void {
     defer gpa.free(text);
     var diag: Schema.Diagnostic = .{};
     const parsed = salamander_schema.parse(gpa, text, sal_options, &diag) catch |err| {
-        self.problem = if (err == error.InvalidSchema) self.located(diag.message()) else .init("Couldn't read it: {t}", .{err});
+        self.problem = if (err == error.InvalidSchema) located(diag.message()) else .init("Couldn't read it: {t}", .{err});
         return;
     };
     const old = self.parsed;
     self.parsed = parsed;
     self.view.setSchema(&self.parsed.?.schema);
+    self.hideWraiths();
     if (old) |o| {
         var gone = o;
         gone.deinit();
@@ -198,12 +210,33 @@ fn reparse(self: *SchemaEditor) void {
     self.problem = null;
 }
 
-/// As a line of the text, not the context before it.
-fn located(self: *const SchemaEditor, message: []const u8) devtools.Problem {
-    const colon = std.mem.indexOfScalar(u8, message, ':') orelse return .init("{s}", .{message});
-    const line = std.fmt.parseInt(usize, message[0..colon], 10) catch return .init("{s}", .{message});
-    if (line <= self.context_lines) return .init("In another file next to it, {s}", .{message});
-    return .init("{d}{s}", .{ line - self.context_lines, message[colon..] });
+/// Wraith's types are there to use, not to show, so only the ones after its schemas are listed.
+fn hideWraiths(self: *SchemaEditor) void {
+    const schema = &self.parsed.?.schema;
+    const view = &self.view;
+    const kept: ?[]const u8 = if (view.shownName()) |n| view.allocator.dupe(u8, n) catch null else null;
+    defer if (kept) |k| view.allocator.free(k);
+    var i: usize = 0;
+    while (i < view.type_names.items.len) {
+        const type_name = view.type_names.items[i];
+        const wraiths = for (schema.types) |t| {
+            if (!t.nested and std.mem.eql(u8, t.name, type_name)) break t.at < wraith_prefix.len;
+        } else false;
+        if (!wraiths) {
+            i += 1;
+            continue;
+        }
+        view.allocator.free(type_name);
+        _ = view.type_names.orderedRemove(i);
+    }
+    view.shown = 0;
+    if (kept) |k| _ = view.show(k);
+}
+
+/// Problems come as `file:line:column: what`. Its own are shown without the file.
+fn located(message: []const u8) devtools.Problem {
+    if (std.mem.startsWith(u8, message, own_name ++ ":")) return .init("{s}", .{message[own_name.len + 1 ..]});
+    return .init("In another file, {s}", .{message});
 }
 
 pub fn apply(self: *SchemaEditor, changes: []const salamander_schema.edit.Change) void {
@@ -213,7 +246,7 @@ pub fn apply(self: *SchemaEditor, changes: []const salamander_schema.edit.Change
     var diag: Schema.Diagnostic = .{};
     const out = salamander_schema.edit.apply(gpa, text, changes, .{ .parse = sal_options, .diagnostic = &diag }) catch |err| {
         const problem: devtools.Problem = switch (err) {
-            error.InvalidSchema => self.located(diag.message()),
+            error.InvalidSchema => located(diag.message()),
             error.NotInSource => .init("That isn't written where it can be changed, like a field's own bits", .{}),
             else => .init("Couldn't change it: {t}", .{err}),
         };
@@ -221,11 +254,16 @@ pub fn apply(self: *SchemaEditor, changes: []const salamander_schema.edit.Change
         return;
     };
     defer gpa.free(out);
-    if (!std.mem.startsWith(u8, out, self.context)) {
+    if (!std.mem.startsWith(u8, out, wraith_prefix)) {
+        self.view.fail("That's one of Wraith's, which can't be changed here", .{});
+        return;
+    }
+    const rest = out[wraith_prefix.len..];
+    if (!std.mem.startsWith(u8, rest, self.context) or !std.mem.startsWith(u8, rest[self.context.len..], own_marker)) {
         self.view.fail("That's in another file next to this one. Open that to change it", .{});
         return;
     }
-    const mine = out[self.context.len..];
+    const mine = rest[self.context.len + own_marker.len ..];
     if (mine.len >= max_text) {
         self.view.fail("That makes it too long", .{});
         return;
@@ -435,7 +473,6 @@ pub fn open(self: *SchemaEditor, path: []const u8) !void {
     self.path = copy;
     gpa.free(self.context);
     self.context = loaded.context;
-    self.context_lines = std.mem.count(u8, loaded.context, "\n");
     self.setText(loaded.text);
     self.saved = true;
     self.reparse();
@@ -477,8 +514,7 @@ fn load(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !Loaded {
         for (names.items) |file_name| {
             const other = dir.readFileAlloc(io, file_name, gpa, .limited(max_text)) catch continue;
             defer gpa.free(other);
-            try context.appendSlice(gpa, other);
-            if (other.len > 0 and other[other.len - 1] != '\n') try context.append(gpa, '\n');
+            try appendFile(gpa, &context, file_name, other);
         }
     }
     return .{ .text = text, .context = try context.toOwnedSlice(gpa) };

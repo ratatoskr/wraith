@@ -67,7 +67,7 @@ pub fn go(self: *Workbench, request: Navigator.Request) void {
 
 /// Refocuses once the window really has focus, since raising it can hand focus back to the old tab.
 fn focusOnceActive(self: *Workbench, doc: *Document) void {
-    self.focus_when_active = doc;
+    self.focus_when_active = .{ .tag = Workbench.tagOf(std.meta.activeTag(doc.body)), .id = doc.id };
     self.focus_applied = false;
     self.focus_for_stop = false;
 }
@@ -415,7 +415,6 @@ pub fn dropClosed(self: *Workbench) void {
         }
         if (self.active_code == d) self.active_code = null;
         if (self.active_memory == d) self.active_memory = null;
-        if (self.focus_when_active == d) self.focus_when_active = null;
         _ = self.documents.orderedRemove(i);
         freeDocument(self, d);
     }

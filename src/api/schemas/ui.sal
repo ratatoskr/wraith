@@ -23,11 +23,20 @@ namespace WorkbenchPanel {
     // and queue changes for it, rather than calling into the game.
     fn void Draw();
 
+    // `top` is with the documents, `bottom` with Addresses, `left` with Search
+    enum Place : u8 { top, bottom, left }
+
     struct Options {
         // Its tab's label
         string title;
-        // The top-level tab it's in, like `FFXIV`, shared by panels that name the same one. Empty is Plugins.
-        string group;
+        // What it is, like `sheets`. With `id`, how Wraith remembers where it was moved. Empty uses the title
+        string kind;
+        // Which one of its kind, for several at once, like an address. Can be empty
+        string id;
+        // Where it goes the first time it shows. Closed, it comes back from View, or with `focus`
+        Place place;
+        // Lower comes first among tabs in the same place. Wraith's own are 100 apart, from 100, and 0 is after them
+        i32 order;
     }
 }
 
@@ -214,8 +223,9 @@ trait Ui {
 
     // The Workbench
 
-    // Drawn by `draw` on the Workbench's thread while showing. Gone with the plugin. Any thread. The
-    // same as contributing a tab to the `workbench.plugins` slot, with `group` as its `parent`
+    // A tab of its own in the Workbench, drawn by `draw` on the Workbench's thread while showing. For
+    // tabs inside it, draw them with ImGui's tab bars. Gone with the plugin. Any thread. The same as
+    // contributing to the `workbench` slot, with `kind/id` as its id
     WorkbenchPanel addWorkbenchPanel(WorkbenchPanel.Options options, keep WorkbenchPanel.Draw draw);
     // Opens the Workbench's Classes on a C# class by full name. Any thread.
     void showClass(string class_name);

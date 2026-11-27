@@ -15,7 +15,6 @@ const Clip = @import("wraith_ui").Clip;
 const Runtime = Managed.Runtime;
 const Allocator = std.mem.Allocator;
 
-window: ui.Window = .{ .title = "Classes", .size = .{ 900, 520 }, .min_size = .{ 520, 260 } },
 nav: Navigator,
 allocator: Allocator,
 /// Holds `all`, as of the last look.

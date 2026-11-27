@@ -236,7 +236,7 @@ pub fn draw(self: *TweakEditor) void {
         }
     }
     menu.separator();
-    if (menu.item(.{ .label = "Show tweaks" })) self.wb.panels.tweaks.window.focus();
+    if (menu.item(.{ .label = "Show tweaks" })) self.wb.focus(.tweaks, null);
 }
 
 fn pressed(chord: ?ui.Chord) bool {

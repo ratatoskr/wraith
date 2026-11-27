@@ -13,7 +13,6 @@ const Clip = @import("wraith_ui").Clip;
 
 const Stats = core.timing.Stats;
 
-window: ui.Window = .{ .title = "Timings", .size = .{ 620, 320 }, .min_size = .{ 400, 160 } },
 stats: [Rates.max]Stats = undefined,
 rates: Rates = .{},
 picked: ui.Selection = .{},

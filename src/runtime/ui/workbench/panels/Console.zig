@@ -12,7 +12,6 @@ const Workbench = @import("../Workbench.zig");
 const Scripts = @import("../Scripts.zig");
 const Clip = @import("wraith_ui").Clip;
 
-window: ui.Window = .{ .title = "Console", .size = .{ 700, 300 }, .min_size = .{ 300, 120 } },
 wb: *Workbench,
 only: ?u32 = null,
 follow: bool = true,

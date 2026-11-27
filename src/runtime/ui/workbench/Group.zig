@@ -1,4 +1,4 @@
-//! A docked window with a few panels in it, as tabs or split in two.
+//! A few panels inside one of the Workbench's tabs, as tabs of their own or split in two.
 
 const Group = @This();
 
@@ -29,17 +29,16 @@ pub const How = union(enum) {
     split: ui.Split,
 };
 
-window: ui.Window,
 how: How,
 parts: [max_parts]Part,
 len: u8,
 pick: ?u8 = null,
 shown: u8 = 0,
 
-pub fn init(title: [:0]const u8, how: How, parts: []const Part) Group {
+pub fn init(how: How, parts: []const Part) Group {
     std.debug.assert(parts.len <= max_parts and parts.len > 0);
     std.debug.assert(how != .split or parts.len == 2);
-    var self: Group = .{ .window = .{ .title = title }, .how = how, .parts = undefined, .len = @intCast(parts.len) };
+    var self: Group = .{ .how = how, .parts = undefined, .len = @intCast(parts.len) };
     @memcpy(self.parts[0..parts.len], parts);
     return self;
 }
@@ -74,30 +73,15 @@ fn drawTabs(self: *Group) void {
     }
 }
 
-/// Brings it to the front.
-pub fn focus(self: *Group, panel: *const anyopaque) void {
-    if (self.indexOf(panel)) |i| self.pick = i;
-    self.window.focus();
-}
-
-/// Without taking focus.
-pub fn show(self: *Group, panel: *const anyopaque) void {
-    if (!self.window.open) if (self.indexOf(panel)) |i| {
-        self.pick = i;
-    };
-    self.window.show();
-}
-
-/// Opens it on `panel`'s tab, even if it was on another, without taking focus.
+/// Puts `panel` in front from the next draw. Its tab's the Workbench's to show.
 pub fn select(self: *Group, panel: *const anyopaque) void {
     if (self.indexOf(panel)) |i| self.pick = i;
-    self.window.show();
 }
 
-/// Open with `panel`'s tab in front, as of the last frame.
+/// In front at the last draw.
 pub fn showing(self: *const Group, panel: *const anyopaque) bool {
     const i = self.indexOf(panel) orelse return false;
-    return self.window.open and self.shown == i;
+    return self.shown == i;
 }
 
 fn indexOf(self: *const Group, panel: *const anyopaque) ?u8 {

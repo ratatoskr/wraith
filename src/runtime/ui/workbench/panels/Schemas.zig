@@ -20,7 +20,6 @@ const highlight: [4]f32 = .{ 1, 0.85, 0.4, 1 };
 /// So `seen` never matches before the first look.
 const never = std.math.maxInt(u32);
 
-window: ui.Window = .{ .title = "Schemas", .size = .{ 900, 560 }, .min_size = .{ 520, 260 } },
 wb: *Workbench,
 allocator: std.mem.Allocator,
 /// The Addresses panel's generation of parses that `types` points into.
@@ -111,7 +110,7 @@ pub fn deinit(self: *SchemasPanel) void {
 pub fn viewAt(self: *SchemasPanel, address: usize) void {
     self.pending_address = address;
     self.pick_tab = .memory;
-    self.window.focus();
+    self.wb.focus(.schemas, null);
 }
 
 /// Picks the type named `name`, from any plugin, opening its folders.

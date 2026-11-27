@@ -64,19 +64,19 @@ pub fn tick(self: *Workbench) void {
     self.panels.stopped.picked.only(latest.thread_id);
     // A step goes on quietly where it is, so the keys keep working wherever you are
     if (latest.reason == .step) if (self.active_code) |doc| {
-        self.groups.debug.show(&self.panels.stopped);
+        self.show(.threads, null);
         doc.body.code.follow(latest.cpu.ip());
         return;
     };
     // A breakpoint or crash takes over, even if you were busy in here
     if (self.app) |app| app.show();
     self.go(.{ .code = latest.cpu.ip() });
-    self.focus_when_active = self.active_code;
+    self.focus_when_active = if (self.active_code) |code| .{ .tag = .code, .id = code.id } else null;
     self.focus_applied = false;
     self.focus_for_stop = true;
     // Registers stay up if you were watching them
-    const debug = &self.groups.debug;
-    if (!debug.showing(&self.panels.registers) and !debug.showing(&self.panels.stopped)) debug.select(&self.panels.stopped) else debug.window.show();
+    if (!self.showing(.registers, null) and !self.showing(.threads, null)) self.select(.threads);
+    self.show(.debug, null);
     self.debug_to_front = true;
 }
 
@@ -146,7 +146,7 @@ pub fn toggleHardwareBreakpoint(self: *Workbench, address: usize) !void {
 fn toggleBreakpointOf(self: *Workbench, address: usize, kind: Debugger.Kind) !void {
     if (self.debugger.get(address) != null) return self.debugger.remove(address);
     try self.debugger.add(address, kind, .thread);
-    self.groups.debug.show(&self.panels.breakpoints);
+    self.show(.breakpoints, null);
 }
 
 /// Keeps how it stops and whether it's on.
@@ -200,18 +200,24 @@ pub fn drawMenu(self: *Workbench) void {
     if (ui.menuItem("Stop all watches", .{ .enabled = accesses.running() > 0 })) accesses.stopAll();
     ui.tooltip("Stop finding what writes or reads addresses. Frees the CPU's four debug registers", .{});
     ui.separator();
-    if (ui.menuItem("Breakpoints", .{})) self.groups.debug.focus(&self.panels.breakpoints);
-    if (ui.menuItem("Stopped threads", .{})) self.groups.debug.focus(&self.panels.stopped);
-    if (ui.menuItem("Registers", .{})) self.groups.debug.focus(&self.panels.registers);
+    if (ui.menuItem("Breakpoints", .{})) self.focus(.breakpoints, null);
+    if (ui.menuItem("Stopped threads", .{})) self.focus(.threads, null);
+    if (ui.menuItem("Registers", .{})) self.focus(.registers, null);
 }
 
 fn shortcut(chord: ?ui.Chord) ?[:0]const u8 {
     return ui.format("{f}", .{chord orelse return null});
 }
 
-/// Focuses a stop's code after `show`'s raise, and again once Windows gives the window focus. Inside that window.
+/// Focuses what's waiting, like a stop's code, after `show`'s raise, and again once Windows gives the
+/// window focus. Inside that window.
 pub fn applyPendingFocus(self: *Workbench) void {
-    const doc = self.focus_when_active orelse return;
+    const target = self.focus_when_active orelse return;
+    // Gone meanwhile, like a closed document
+    const w = self.windowOf(target) orelse {
+        self.focus_when_active = null;
+        return;
+    };
     // Let go meanwhile, so it's not about this stop anymore
     if (self.focus_for_stop and self.stopped_len == 0) {
         self.focus_when_active = null;
@@ -219,17 +225,17 @@ pub fn applyPendingFocus(self: *Workbench) void {
     }
     const app = self.app orelse {
         self.focus_when_active = null;
-        return doc.window().focus();
+        return w.focus();
     };
     if (app.raising()) return;
     if (!self.focus_applied) {
         self.focus_applied = true;
-        doc.window().focus();
+        w.focus();
     }
     if (!hasOsFocus()) return;
     self.focus_when_active = null;
     // ImGui leaves focus alone when it came with a click, so a click wins here too
-    if (!c.ImGui_IsAnyMouseDown()) doc.window().focus();
+    if (!c.ImGui_IsAnyMouseDown()) w.focus();
 }
 
 /// As ImGui saw it this frame. Inside the window.

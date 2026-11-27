@@ -20,7 +20,6 @@ const Themes = @import("../../Themes.zig");
 const Overlay = @import("../../Overlay.zig");
 const Graphics = @import("../../../graphics/Graphics.zig");
 
-window: ui.Window = .{ .title = "Wraith Environment", .size = .{ 620, 520 }, .min_size = .{ 420, 260 } },
 /// Null without a runtime around it, like in tests.
 shell: ?*Shell,
 

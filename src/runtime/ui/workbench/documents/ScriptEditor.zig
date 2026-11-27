@@ -212,8 +212,8 @@ pub fn draw(self: *ScriptEditor) void {
         }
     }
     menu.separator();
-    if (menu.item(.{ .label = "Show console" })) self.wb.groups.scripts.focus(&self.wb.panels.console);
-    if (menu.item(.{ .label = "Show sessions" })) self.wb.groups.scripts.focus(&self.wb.panels.sessions);
+    if (menu.item(.{ .label = "Show console" })) self.wb.focus(.console, null);
+    if (menu.item(.{ .label = "Show sessions" })) self.wb.focus(.sessions, null);
 }
 
 fn run(self: *ScriptEditor) void {
@@ -221,7 +221,7 @@ fn run(self: *ScriptEditor) void {
     const text = std.mem.sliceTo(code, 0);
     if (std.mem.trim(u8, text, " \t\r\n").len == 0) return;
     // Where what it prints goes
-    self.wb.groups.scripts.show(&self.wb.panels.console);
+    self.wb.show(.console, null);
     self.wb.scripts.run(self.session, text);
 }
 

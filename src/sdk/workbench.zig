@@ -1,4 +1,4 @@
-//! Workbench panels. They draw on the Workbench's own thread, so never call into the game there:
+//! Workbench tabs, each a docked window of its own. They draw on the Workbench's own thread, so never call into the game there:
 //! game-thread code `publish`es to a `Latest`, and drains edits from a `Queue`.
 //!
 //!     self.panel = try sdk.workbench.addPanel(self, drawPanel, .{ .title = "Party" });
@@ -21,6 +21,7 @@ const std = @import("std");
 
 const api = @import("wraith_api");
 const sys = @import("tuft_sys");
+const ui = @import("wraith_ui");
 
 const Owner = @import("Owner.zig");
 
@@ -31,8 +32,14 @@ pub const Error = error{ OwnerGone, Failed };
 pub const Options = struct {
     /// Its tab's label. Empty uses the plugin's name.
     title: []const u8 = "",
-    /// The top-level tab it's in, like `FFXIV`, shared by panels that name the same one. Empty is Plugins.
-    group: []const u8 = "",
+    /// What it is, like `sheets`. With `id`, how Wraith remembers where it was moved. Empty uses the title.
+    kind: []const u8 = "",
+    /// Which one of its kind, for several at once, like an address.
+    id: []const u8 = "",
+    /// Where it goes the first time it shows. Closed, it comes back from View, or with `focus`.
+    place: W.WorkbenchPanel.Place = .top,
+    /// Lower comes first among tabs in the same place. Wraith's own are 100 apart, from 100, and 0 is after them.
+    order: i32 = 0,
 };
 
 /// A panel of yours in the Workbench, gone with the plugin.
@@ -60,9 +67,64 @@ pub fn addPanel(target: anytype, comptime func: fn (@TypeOf(target)) void, optio
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("addPanel expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
-    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .group = options.group }, W.WorkbenchPanel.Draw.init(target, func));
+    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .kind = options.kind, .id = options.id, .place = options.place, .order = options.order }, W.WorkbenchPanel.Draw.init(target, func));
     if (object.table == null) return error.Failed;
     return .{ .object = object };
+}
+
+/// Tabs inside one of yours, one per value of the enum `Part`, like Scene and Classes. Draw it from
+/// the tab's draw; `showing` and `focus` work from any thread.
+///
+///     parts: sdk.workbench.Parts(Part) = .init(.{ .scene = "Scene", .classes = "Classes" }),
+///
+///     fn draw(self: *Explorer) void {
+///         self.parts.draw(self, drawPart);
+///     }
+pub fn Parts(comptime Part: type) type {
+    return struct {
+        const Self = @This();
+
+        labels: std.EnumArray(Part, [:0]const u8),
+        /// In front at the last draw.
+        front: std.atomic.Value(u8) = .init(0),
+        /// To bring to the front at the next, plus one, or 0.
+        pick: std.atomic.Value(u8) = .init(0),
+
+        pub fn init(labels: std.enums.EnumFieldStruct(Part, [:0]const u8, null)) Self {
+            return .{ .labels = .init(labels) };
+        }
+
+        /// Whether `part`'s in front while `panel`'s open.
+        pub fn showing(self: *const Self, panel: ?Panel, part: Part) bool {
+            const p = panel orelse return false;
+            return p.isOpen() and self.front.load(.acquire) == index(part);
+        }
+
+        /// Brings `part` to the front, and `panel` with it.
+        pub fn focus(self: *Self, panel: ?Panel, part: Part) void {
+            self.pick.store(index(part) + 1, .release);
+            if (panel) |p| p.focus();
+        }
+
+        /// A tab bar, with `func(target, part)` drawing the one in front.
+        pub fn draw(self: *Self, target: anytype, comptime func: fn (@TypeOf(target), Part) void) void {
+            const pick = self.pick.swap(0, .acq_rel);
+            const bar = ui.tabBar("parts") orelse return;
+            defer bar.end();
+            for (std.enums.values(Part)) |part| {
+                const tab = ui.tabItem(self.labels.get(part), .{ .select = pick == index(part) + 1 }) orelse continue;
+                defer tab.end();
+                self.front.store(index(part), .release);
+                const child = ui.child(self.labels.get(part), .{ 0, 0 }, .{}) orelse continue;
+                defer child.end();
+                func(target, part);
+            }
+        }
+
+        fn index(part: Part) u8 {
+            return @intCast(@backingInt(part));
+        }
+    };
 }
 
 /// Opens the Workbench's Classes on a C# class by full name, like `UnityEngine.Transform`.

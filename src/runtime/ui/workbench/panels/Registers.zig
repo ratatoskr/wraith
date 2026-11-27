@@ -14,7 +14,6 @@ const Clip = @import("wraith_ui").Clip;
 
 const Paused = Debugger.Paused;
 
-window: ui.Window = .{ .title = "Registers", .size = .{ 400, 400 }, .min_size = .{ 240, 160 } },
 wb: *Workbench,
 /// By their index in `names`.
 picked: ui.Selection = .{},

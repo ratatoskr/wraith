@@ -7,7 +7,6 @@ const ui = @import("wraith_ui");
 
 const Workbench = @import("../Workbench.zig");
 
-window: ui.Window = .{ .title = "Search", .size = .{ 640, 480 }, .min_size = .{ 440, 240 } },
 wb: *Workbench,
 view: devtools.SearchView,
 

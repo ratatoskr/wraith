@@ -18,7 +18,6 @@ const Clip = @import("wraith_ui").Clip;
 
 const Paused = Debugger.Paused;
 
-window: ui.Window = .{ .title = "Stopped", .size = .{ 700, 400 }, .min_size = .{ 320, 160 } },
 wb: *Workbench,
 threads: [Debugger.max_paused]Paused = undefined,
 len: usize = 0,

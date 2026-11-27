@@ -15,7 +15,6 @@ const Clip = @import("wraith_ui").Clip;
 
 const Breakpoint = Debugger.Breakpoint;
 
-window: ui.Window = .{ .title = "Breakpoints", .size = .{ 640, 260 }, .min_size = .{ 320, 120 } },
 wb: *Workbench,
 infos: [Debugger.max_breakpoints]Breakpoint = undefined,
 len: usize = 0,

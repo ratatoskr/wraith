@@ -25,7 +25,6 @@ const Kind = @import("tuft_mem").values.Kind;
 const RwLock = @import("tuft_sys").sync.RwLock;
 const log = core.log.scoped(.wraith_ui);
 
-window: ui.Window = .{ .title = "Addresses", .size = .{ 720, 560 }, .min_size = .{ 500, 360 } },
 wb: *Workbench,
 list: AddressList,
 /// Its hotkeys, in the game's keybinds.
@@ -226,7 +225,7 @@ pub fn add(self: *Addresses, address: usize, kind: Kind, len: usize) void {
         log.warn("Couldn't add to the address list: {t}", .{err});
         return;
     };
-    self.window.focus();
+    self.wb.focus(.addresses, null);
 }
 
 /// Like a name from the Names panel, as the user's own.
@@ -235,7 +234,7 @@ pub fn addItem(self: *Addresses, item: AddressList.Item) void {
         log.warn("Couldn't add to the address list: {t}", .{err});
         return;
     };
-    self.window.focus();
+    self.wb.focus(.addresses, null);
 }
 
 pub fn watch(self: *Addresses, address: usize, kind: Kind, len: usize, mode: Accesses.Mode) void {

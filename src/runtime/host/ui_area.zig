@@ -379,13 +379,15 @@ pub const UiImpl = struct {
         };
     }
 
-    /// A tab in a Workbench slot.
+    /// A tab of its own in the Workbench.
     pub fn addWorkbenchPanel(loaded: *Loaded, options: W.WorkbenchPanel.Options, draw: W.WorkbenchPanel.Draw) sal.Object(WorkbenchPanel) {
         const t = wraith.tablesOf(loaded) orelse {
             draw.release();
             return .{};
         };
-        const e = host.slots.add(loaded, .{ .slot = .workbench_plugins, .title = options.title, .parent = options.group }, .{ .panel = draw }) catch return .{};
+        var id_buf: [128]u8 = undefined;
+        const id = tabId(&id_buf, options);
+        const e = host.slots.add(loaded, .{ .slot = .workbench, .id = id, .title = options.title, .place = options.place, .order = if (options.order == 0) after_own_tabs else options.order }, .{ .panel = draw }) catch return .{};
         return .init(e, t.workbench_panel);
     }
 
@@ -551,6 +553,30 @@ pub const GizmoImpl = struct {
         g.remove();
     }
 };
+
+/// Where a tab's order of 0 puts it: after Wraith's own, which are 100 apart from 100.
+const after_own_tabs = 10_000;
+
+/// `kind/id`, or the title for an empty kind, as a slot id: what it can't have becomes `_`.
+fn tabId(buf: []u8, options: W.WorkbenchPanel.Options) []const u8 {
+    const kind = if (options.kind.len > 0) options.kind else options.title;
+    // Cut short if it's too long
+    var w: std.Io.Writer = .fixed(buf);
+    w.writeAll(kind) catch {};
+    if (options.id.len > 0) w.print("/{s}", .{options.id}) catch {};
+    const raw = w.buffered();
+    for (raw) |*ch| if (!std.ascii.isAlphanumeric(ch.*) and std.mem.indexOfScalar(u8, "_-./", ch.*) == null) {
+        ch.* = '_';
+    };
+    return raw;
+}
+
+test tabId {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("sheets", tabId(&buf, .{ .title = "Sheets", .kind = "sheets" }));
+    try std.testing.expectEqualStrings("memory/0x1400", tabId(&buf, .{ .title = "Memory", .kind = "memory", .id = "0x1400" }));
+    try std.testing.expectEqualStrings("Party_list", tabId(&buf, .{ .title = "Party list" }));
+}
 
 fn cs(p: [*]const u8) [*c]const u8 {
     return @ptrCast(p);
