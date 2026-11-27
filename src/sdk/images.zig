@@ -45,7 +45,11 @@ pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) LoadErro
     };
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_file));
     defer allocator.free(bytes);
-    return owner.root.images().decode(bytes);
+    return owner.root.images().decode(bytes) catch |err| switch (err) {
+        // Only `Images.load` checks permissions
+        error.NotDeclared => error.Failed,
+        else => |e| e,
+    };
 }
 
 /// Like `ImGui_Image`, at its own size by default, see `DrawOptions`. Render thread.

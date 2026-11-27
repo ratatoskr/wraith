@@ -24,10 +24,16 @@ pub const Language = enum {
     }
 
     /// Its wraith.json `provider`. Native DLLs have none.
-    pub fn provider(self: Language) ?[]const u8 {
+    /// Run from source, so not built per arch.
+    pub fn script(self: Language) bool {
+        return self == .ts or self == .js or self == .lua;
+    }
+
+    /// C# compiled with NativeAOT is a native DLL, else .NET runs it.
+    pub fn provider(self: Language, runtime: Runtime) []const u8 {
         return switch (self) {
-            .zig, .c, .cpp, .rust => null,
-            .cs => "cs",
+            .zig, .c, .cpp, .rust => "native",
+            .cs => if (runtime == .aot) "native" else "clr",
             .ts, .js => "js",
             .lua => "lua",
         };

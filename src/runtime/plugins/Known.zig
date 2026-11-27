@@ -58,6 +58,8 @@ pub const About = struct {
     games: Text(128) = .{},
     /// Empty means any.
     wraith: Text(32) = .{},
+    /// What its "permissions" let it do, like "the internet (a.com), the clipboard". Empty for none.
+    permissions: Text(160) = .{},
 
     pub fn of(manifest: Manifest) About {
         var about: About = .{};
@@ -68,7 +70,29 @@ pub const About = struct {
         about.wraith.set(m.wraith orelse "");
         var games: [about.games.buf.len]u8 = undefined;
         about.games.set(manifest.gamesText(&games));
+        var perms: [about.permissions.buf.len]u8 = undefined;
+        about.permissions.set(permissionsText(m.permissions, &perms));
         return about;
+    }
+
+    fn permissionsText(p: core_manifest.Permissions, buf: []u8) []const u8 {
+        var w: std.Io.Writer = .fixed(buf);
+        var first = true;
+        if (p.net.len > 0) {
+            first = false;
+            if (p.allowsHost("*")) w.writeAll("the internet") catch {} else {
+                w.writeAll("the internet (") catch {};
+                for (p.net, 0..) |h, i| w.print("{s}{s}", .{ if (i > 0) ", " else "", h }) catch {};
+                w.writeAll(")") catch {};
+            }
+        }
+        inline for (.{ .{ "files", "files anywhere" }, .{ "clipboard", "the clipboard" }, .{ "capture", "copying the screen" } }) |f| {
+            if (@field(p, f[0])) {
+                w.print("{s}{s}", .{ if (first) "" else ", ", f[1] }) catch {};
+                first = false;
+            }
+        }
+        return w.buffered();
     }
 };
 

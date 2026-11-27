@@ -2,7 +2,11 @@
 
 namespace Wraith;
 
-error ClipboardError { Failed = 1 }
+error ClipboardError {
+    Failed = 1,
+    // Its wraith.json doesn't list "clipboard" in "permissions"
+    NotDeclared,
+}
 
 trait Clipboard {
     // UTF-8, empty if there's no text. Good till the taking thread takes another.

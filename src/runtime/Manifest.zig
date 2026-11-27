@@ -78,9 +78,9 @@ pub fn gamesText(self: Manifest, buf: []u8) []const u8 {
     return w.buffered();
 }
 
-test "provider defaults to native" {
+test "provider names what runs it" {
     const a = std.testing.allocator;
-    const native = try parse(a, "{ \"id\": \"ab\", \"arches\": [\"x64\"] }", "test");
+    const native = try parse(a, "{ \"id\": \"ab\", \"provider\": \"native\", \"arches\": [\"x64\"] }", "test");
     defer native.deinit();
     try std.testing.expectEqualStrings("native", native.providerName());
 
@@ -90,7 +90,7 @@ test "provider defaults to native" {
 }
 
 test "lists games" {
-    const m = try parse(std.testing.allocator, "{ \"id\": \"ab\", \"game\": { \"exes\": [\"kai.exe\"], \"ids\": [\"steam-1\", \"gog-1\"] } }", "test");
+    const m = try parse(std.testing.allocator, "{ \"id\": \"ab\", \"provider\": \"native\", \"game\": { \"exes\": [\"kai.exe\"], \"ids\": [\"steam-1\", \"gog-1\"] } }", "test");
     defer m.deinit();
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("steam-1, gog-1, kai.exe", m.gamesText(&buf));
@@ -99,5 +99,5 @@ test "lists games" {
 test "a broken one is an error" {
     const saved = core.log.mute(&.{.runtime});
     defer core.log.setFilter(saved);
-    try std.testing.expectError(error.BadManifest, parse(std.testing.allocator, "{ \"id\": \"ab\", \"game\": 3 }", "test"));
+    try std.testing.expectError(error.BadManifest, parse(std.testing.allocator, "{ \"id\": \"ab\", \"provider\": \"native\", \"game\": 3 }", "test"));
 }

@@ -1343,16 +1343,16 @@ const tests = struct {
         try testing.expectEqual(Out{ .js_length = 12, .js_parsed = 42, .lua_length = 13, .lua_parsed = -7 }, out);
     }
 
-    test "C# plugins built with NativeAOT load as native ones, and stay loaded" {
+    test "NativeAOT builds, like of C#, stay loaded" {
         const options = @import("test_options");
         const host = @import("host/root.zig");
         host.wraith.setIo(testing.io);
         defer host.wraith.setIo(null);
         var install: Install = undefined;
-        try install.init(.{ .plugins = &.{.{ "fixture", options.fixture_plugin }} });
+        try install.init(.{ .plugins = &.{.{ "fixture", options.aot_plugin }} });
         defer install.deinit();
         try install.addScript("base", "lua");
-        try install.pluginManifest("fixture", "\"provider\": \"cs\", \"depends\": [\"base\"]");
+        try install.pluginManifest("fixture", "\"provider\": \"native\", \"depends\": [\"base\"]");
         const loader = &install.loader;
         try loader.start(&.{});
         try testing.expectEqual(.loaded, install.info("fixture").?.state);
@@ -1391,7 +1391,7 @@ const tests = struct {
         const io = testing.io;
         try install.tmp.dir.createDirPath(io, "plugins/cs_fixture/schemas");
         try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/cs_fixture/schemas/cs.sal", .data = "[Service] trait CsService { u32 next(); }\n[Sig(\"B8 07 F0 57 7E\")] i32 seven(i32 x);" });
-        try install.pluginManifest("cs_fixture", "\"provider\": \"cs\"");
+        try install.pluginManifest("cs_fixture", "\"provider\": \"clr\"");
         var built = try std.Io.Dir.cwd().openDir(io, std.fs.path.dirname(options.cs_plugin).?, .{ .iterate = true });
         defer built.close(io);
         var files = built.iterate();

@@ -421,9 +421,18 @@ const Job = struct {
     }
 };
 
+/// `err`, saying what to add to wraith.json.
+pub fn undeclared(err: anytype, comptime what: []const u8) @TypeOf(err) {
+    return sal.host().explain(err, "add \"" ++ what ++ "\": true to \"permissions\" in its wraith.json", .{});
+}
+
 const ClipboardImpl = struct {
     pub fn text(loaded: *Loaded) TextPromise {
         const pair = TextPromise.make() catch return .{};
+        if (!loaded.allows(.clipboard)) {
+            pair.resolver.fail(undeclared(error.NotDeclared, "clipboard"));
+            return pair.promise;
+        }
         const t = tablesOf(loaded) orelse {
             pair.resolver.drop();
             return pair.promise;
@@ -442,6 +451,10 @@ const ClipboardImpl = struct {
 
     pub fn setText(loaded: *Loaded, value: []const u8) SetPromise {
         const pair = SetPromise.make() catch return .{};
+        if (!loaded.allows(.clipboard)) {
+            pair.resolver.fail(undeclared(error.NotDeclared, "clipboard"));
+            return pair.promise;
+        }
         const t = tablesOf(loaded) orelse {
             pair.resolver.drop();
             return pair.promise;

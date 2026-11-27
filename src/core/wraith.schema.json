@@ -36,6 +36,23 @@
       "pattern": "^[^/\\\\:*?\"<>|][^:*?\"<>|]*\\.[mM][dD]$",
       "maxLength": 260
     },
+    "permissions": {
+      "description": "What it does beyond the game, shown to whoever installs it. Wraith's own APIs refuse what isn't here.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "net": {
+          "description": "Hosts it talks to, like example.com, or * for any.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(\\*|[A-Za-z0-9.-]+)$", "maxLength": 253 },
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "files": { "description": "Reads or writes files outside its own folders.", "type": "boolean" },
+        "clipboard": { "description": "Reads or writes the clipboard.", "type": "boolean" },
+        "capture": { "description": "Takes screenshots or records the screen.", "type": "boolean" }
+      }
+    },
     "license": { "description": "An SPDX id, like MIT.", "type": "string", "maxLength": 64 },
     "author": { "description": "Who made it, as shown in Wraith and on the hub. The hub also shows the account that uploaded it.", "type": "string", "maxLength": 64 },
     "homepage": { "type": "string", "pattern": "^https://[^\\s]+$", "maxLength": 256 },
@@ -135,12 +152,11 @@
       "items": { "enum": ["x64", "x86"] }
     },
     "provider": {
-      "description": "Plugins only. What runs it, like js or lua. Left out means zig.",
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      "description": "Plugins need one: native for a DLL, like Zig, C, C++, Rust or C# compiled with NativeAOT. clr has .NET run it, and js and lua are scripts.",
+      "enum": ["native", "clr", "js", "lua"]
     },
     "clrMode": {
-      "description": "C# plugins run by the cs provider only. What to do when no .NET is running yet: load joins the game's, else starts the installed .NET 10. wait starts the plugin once one's running, like a mod loader's. provided only loads it where one's running already.",
+      "description": "Plugins run by the clr provider only. What to do when no .NET is running yet: load joins the game's, else starts the installed .NET 10. wait starts the plugin once one's running, like a mod loader's. provided only loads it where one's running already.",
       "enum": ["load", "wait", "provided"],
       "default": "load"
     },
@@ -193,5 +209,6 @@
       "library": { "description": "Projects can't set this.", "not": {} },
       "supersedes": { "description": "Projects can't set this.", "not": {} }
     }
-  }
+  },
+  "else": { "required": ["provider"] }
 }

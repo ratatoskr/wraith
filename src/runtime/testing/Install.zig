@@ -75,7 +75,9 @@ pub fn writeManifest(self: *Install, dir: []const u8, id: []const u8, fields: []
         std.fmt.comptimePrint(", \"apiVersion\": {d}", .{core.manifest.api_version})
     else
         "";
-    const text = try std.fmt.allocPrint(a, "{{ \"id\": \"{s}\"{s}{s}{s} }}", .{ id, api, if (fields.len > 0) ", " else "", fields });
+    // Plugins need one, so native unless it says
+    const native = std.mem.indexOf(u8, fields, "\"provider\"") == null and std.mem.indexOf(u8, fields, "\"project\"") == null;
+    const text = try std.fmt.allocPrint(a, "{{ \"id\": \"{s}\"{s}{s}{s}{s} }}", .{ id, api, if (native) ", \"provider\": \"native\"" else "", if (fields.len > 0) ", " else "", fields });
     defer a.free(text);
     try self.tmp.dir.writeFile(testing.io, .{ .sub_path = path, .data = text });
 }

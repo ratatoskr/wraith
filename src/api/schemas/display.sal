@@ -57,6 +57,8 @@ error CaptureError {
     NoFrames = 1,
     // This game's graphics can't be copied, or the overlay can't draw
     Failed,
+    // Its wraith.json doesn't list "capture" in "permissions"
+    NotDeclared,
 }
 
 namespace Display {

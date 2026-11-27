@@ -81,7 +81,7 @@ public partial class Hooks
     }
 }
 
-/// <summary>Where Wraith starts the plugin, the same for the cs kind and NativeAOT.</summary>
+/// <summary>Where Wraith starts the plugin, the same for the clr kind and NativeAOT.</summary>
 public static unsafe partial class Entry
 {
     /// <summary>The plugin, which its own code gives with a partial of Entry.</summary>
@@ -114,7 +114,7 @@ public static unsafe partial class Entry
     static WraithPlugin? plugin;
     static Api? wraith;
 
-    /// <summary>What Wraith calls first. Exported by NativeAOT, and called by the cs kind.</summary>
+    /// <summary>What Wraith calls first. Exported by NativeAOT, and called by the clr kind.</summary>
     [UnmanagedCallersOnly(EntryPoint = "wraith_plugin", CallConvs = [typeof(CallConvCdecl)])]
     public static NativeEntry* Get()
     {

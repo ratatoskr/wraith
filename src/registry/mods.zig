@@ -37,6 +37,8 @@ pub const Listed = struct {
     revoked: bool,
     /// Only installed as a dependency, so not offered on its own. Still listed when installed.
     library: bool = false,
+    /// A DLL, run by the native provider.
+    native: bool = false,
     /// Wraith keeps it installed for games made with its engine, so it's not one to uninstall.
     essential: bool = false,
 
@@ -144,6 +146,7 @@ fn listedOf(arena: std.mem.Allocator, p: registry.Package, wraith: []const u8, g
         .installed = null,
         .revoked = false,
         .library = p.library,
+        .native = isNative(v.provider),
         .essential = p.essential,
     };
 }
@@ -169,7 +172,12 @@ fn installedOnly(arena: std.mem.Allocator, io: std.Io, mods_dir: []const u8, hav
         .installed = have.version,
         .revoked = false,
         .library = m.library,
+        .native = isNative(m.provider),
     };
+}
+
+fn isNative(provider: ?[]const u8) bool {
+    return std.mem.eql(u8, provider orelse "", "native");
 }
 
 pub const Where = struct {

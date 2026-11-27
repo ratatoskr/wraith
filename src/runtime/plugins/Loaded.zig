@@ -32,6 +32,8 @@ schemas: ?*host_api.schemas.Schemas = null,
 echo: ?Echo = null,
 /// A script session's, not a plugin's.
 session: bool = false,
+/// Its DLL has .NET's NativeAOT runtime in it, see `pinned`.
+native_aot: bool = false,
 /// Its project, by where its tweaks list: "" for the open one, else a mod's id. Null for plugins.
 project: ?[]const u8 = null,
 /// Tags what's made now so `host.stopTagged` can stop it apart. Nonzero while a session's tweak runs.
@@ -84,14 +86,42 @@ pub fn library(self: *const Loaded) usize {
     return self.runner.plugin.module();
 }
 
-/// A NativeAOT C# plugin. Can't unload, since .NET's threads in its DLL never leave.
+/// A NativeAOT build, like of C#. Can't unload, since .NET's threads in its DLL never leave.
 pub fn pinned(self: *const Loaded) bool {
-    return std.ascii.eqlIgnoreCase(self.manifest.providerName(), "cs") and self.library() != 0;
+    return self.native_aot;
 }
 
 /// Its `Wraith`, like for running the SDK as it in tests.
 pub fn root(self: *Loaded) sal.AnyObject {
     return host_api.wraith.root(self);
+}
+
+pub const Permission = enum { files, clipboard, capture };
+
+/// Whether its wraith.json declares `p`. Sessions, projects and what has no wraith.json are the user's own, so may.
+pub fn allows(self: *const Loaded, p: Permission) bool {
+    if (self.own()) return true;
+    return switch (p) {
+        inline else => |tag| @field(self.manifest.value.permissions, @tagName(tag)),
+    };
+}
+
+/// Whether its wraith.json lists `host`, or "*", in "net".
+pub fn allowsHost(self: *const Loaded, host: []const u8) bool {
+    return self.own() or self.manifest.value.permissions.allowsHost(host);
+}
+
+fn own(self: *const Loaded) bool {
+    return self.session or self.project != null or self.manifest.arena == null;
+}
+
+/// Whether `path` is in its copy or config folders, where it needs no permission.
+pub fn ownsPath(self: *const Loaded, path: []const u8) bool {
+    for ([_][]const u8{ self.copy_dir, self.config_dir, self.game_config_dir }) |dir| {
+        if (dir.len == 0 or !std.mem.startsWith(u8, path, dir)) continue;
+        if (path.len == dir.len or std.fs.path.isSep(path[dir.len])) return true;
+    }
+    return false;
 }
 
 pub fn initForTest(self: *Loaded, allocator: std.mem.Allocator, name: []const u8) void {

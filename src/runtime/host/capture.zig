@@ -240,6 +240,10 @@ var creating: sync.RwLock = .{};
 /// Through `display.sal`. Settles on the render thread once the frame's copied.
 pub fn capture(loaded: *Loaded, point: Point) Promise {
     const pair = Promise.make() catch return .{};
+    if (!loaded.allows(.capture)) {
+        pair.resolver.fail(host.wraith.undeclared(error.NotDeclared, "capture"));
+        return pair.promise;
+    }
     if (!frame.framesOn()) {
         pair.resolver.fail(error.NoFrames);
         return pair.promise;
@@ -358,6 +362,20 @@ const tests = struct {
         var a: Loaded = undefined;
         const f = start(&a);
         defer stop(&a);
+        try testing.expectError(error.NoFrames, f.capture(.before_overlay).take().?);
+    }
+
+    test "a plugin that doesn't declare capture can't, one that does can" {
+        const Manifest = @import("../Manifest.zig");
+        var a: Loaded = undefined;
+        const f = start(&a);
+        defer stop(&a);
+        a.manifest = try Manifest.parse(testing.allocator, "{ \"id\": \"kai\", \"provider\": \"native\" }", "wraith.json");
+        defer a.manifest.deinit();
+        try testing.expectError(error.NotDeclared, f.capture(.before_overlay).take().?);
+        a.manifest.deinit();
+        a.manifest = try Manifest.parse(testing.allocator, "{ \"id\": \"kai\", \"provider\": \"native\", \"permissions\": { \"capture\": true } }", "wraith.json");
+        // Past the check, there are no frames
         try testing.expectError(error.NoFrames, f.capture(.before_overlay).take().?);
     }
 };

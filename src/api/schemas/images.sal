@@ -10,6 +10,8 @@ error ImageError {
     Failed,
     // No file there, for `load`
     NotFound,
+    // Outside its own folders, and its wraith.json doesn't list "files" in "permissions"
+    NotDeclared,
 }
 
 // ImGui's `ImTextureRef`. A 0 `data` can't be drawn.

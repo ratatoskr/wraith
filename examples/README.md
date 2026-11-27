@@ -46,10 +46,10 @@ Load one at a time. They all hook the same function, and a function only takes o
 
 ## The two C# ones
 
-Their code is the same. Only how they're built differs, and both say `"provider": "cs"` in `wraith.json`:
+Their code is the same. Only how they're built differs, and what their `wraith.json` says runs them:
 
-- **NativeAOT** compiles it into a native DLL, so the game doesn't need .NET. The DLL has .NET's runtime in it, which can't be unloaded, so once it's loaded it stays on till the game closes. Wraith won't turn it off or reload it, or the plugins it depends on. Restart the game to try a change.
-- **CoreCLR** has .NET run it: the game's own .NET if it has one, otherwise the installed .NET 10, which Wraith starts. Players need .NET 10 installed for games without one. It unloads and reloads like a script plugin. `"clrMode"` in `wraith.json` can say to wait for the game's .NET instead, or to only run in it.
+- **NativeAOT** compiles it into a native DLL, so the game doesn't need .NET, and its provider is `"native"`. The DLL has .NET's runtime in it, which can't be unloaded, so once it's loaded it stays on till the game closes. Wraith won't turn it off or reload it, or the plugins it depends on. Restart the game to try a change.
+- **CoreCLR** has .NET run it, with `"provider": "clr"`: the game's own .NET if it has one, otherwise the installed .NET 10, which Wraith starts. Players need .NET 10 installed for games without one. It unloads and reloads like a script plugin. `"clrMode"` in `wraith.json` can say to wait for the game's .NET instead, or to only run in it.
 
 ## The C one
 

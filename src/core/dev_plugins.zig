@@ -251,28 +251,28 @@ const tests = struct {
             // The game plugin's source, and its build without devDepends, which is what's added
             .{
                 "games/kai/wraith.json",
-                \\{ "id": "kai", "depends": ["posing"], "devDepends": { "posing": "../../libs/posing/wraith.json" } }
+                \\{ "id": "kai", "provider": "native", "depends": ["posing"], "devDepends": { "posing": "../../libs/posing/wraith.json" } }
             },
             .{
                 "games/kai/zig-out/wraith.json",
-                \\{ "id": "kai", "depends": ["posing"] }
+                \\{ "id": "kai", "provider": "native", "depends": ["posing"] }
             },
             // Posing's build, and its own devDepends on camera, built to dist
             .{
                 "libs/posing/wraith.json",
-                \\{ "id": "posing", "depends": ["camera"], "devDepends": { "camera": "../camera" } }
+                \\{ "id": "posing", "provider": "native", "depends": ["camera"], "devDepends": { "camera": "../camera" } }
             },
             .{
                 "libs/posing/zig-out/wraith.json",
-                \\{ "id": "posing" }
+                \\{ "id": "posing", "provider": "native" }
             },
             .{
                 "libs/camera/wraith.json",
-                \\{ "id": "camera" }
+                \\{ "id": "camera", "provider": "native" }
             },
             .{
                 "libs/camera/dist/wraith.json",
-                \\{ "id": "camera" }
+                \\{ "id": "camera", "provider": "native" }
             },
         };
         for (files) |f| {
@@ -325,7 +325,7 @@ const tests = struct {
         defer tmp.cleanup();
         try tmp.dir.createDirPath(io, "kai");
         try tmp.dir.createDirPath(io, "other");
-        try tmp.dir.writeFile(io, .{ .sub_path = "kai/" ++ manifest.file_name, .data = "{ \"id\": \"kai\" }" });
+        try tmp.dir.writeFile(io, .{ .sub_path = "kai/" ++ manifest.file_name, .data = "{ \"id\": \"kai\", \"provider\": \"native\" }" });
         const root = try tmp.dir.realPathFileAlloc(io, ".", a);
         const path = try std.fs.path.join(a, &.{ root, "settings", file_name });
         const kai = try std.fs.path.join(a, &.{ root, "kai" });
@@ -365,7 +365,7 @@ const tests = struct {
         const root = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
         defer a.free(root);
         try testing.expectError(error.NoManifest, nameOf(a, testing.io, root));
-        try tmp.dir.writeFile(testing.io, .{ .sub_path = manifest.file_name, .data = "{ \"id\": \"kai\" }" });
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = manifest.file_name, .data = "{ \"id\": \"kai\", \"provider\": \"native\" }" });
         const name = try nameOf(a, testing.io, root);
         defer a.free(name);
         try testing.expectEqualStrings("kai", name);

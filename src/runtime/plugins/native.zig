@@ -106,6 +106,8 @@ fn load(loaded: *Loaded) !*Instance {
         log.err("{s} isn't a Wraith plugin (it doesn't export {s})", .{ file, sdk.plugin_symbol });
         return error.NotAPlugin;
     };
+    // NativeAOT builds export .NET's debug header
+    loaded.native_aot = tuft_sys.module.findExport(library, "DotNetRuntimeDebugHeader") != null;
     const get: *const sdk.PluginEntry = @ptrFromInt(addr);
     instance.entry = try entryOf(get, file);
     return instance;

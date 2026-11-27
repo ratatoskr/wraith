@@ -78,6 +78,12 @@ const Row = struct {
         return if (self.listed) |l| l.summary else "";
     }
 
+    /// A DLL, so it can do anything: Zig, C, C++, Rust or C# compiled with NativeAOT.
+    fn isNative(self: Row) bool {
+        if (self.plugin) |p| return std.mem.eql(u8, p.provider.get(), "native");
+        return if (self.listed) |l| l.native else false;
+    }
+
     fn isProject(self: Row) bool {
         return if (self.listed) |l| l.kind == .project else false;
     }
@@ -296,6 +302,7 @@ fn drawTags(row: Row) void {
     if (row.listed) |l| if (l.featured) tag(green, "Recommended");
     if (row.isEssential()) tag(mauve, "Essential");
     if (row.listed) |l| if (l.library) tag(blue, "Library");
+    if (row.isNative()) tag(blue, "Native");
     if (row.isProject()) tag(blue, "Project");
     if (row.dev) tag(blue, "Dev");
     if (row.over()) |o| {
@@ -334,6 +341,7 @@ fn drawDetails(self: *ModsWindow, shell: *Shell, row: Row) void {
         if (row.dev) ui.textDisabled("Dev plugin, from {s}", .{p.source_dir.get()});
         if (row.over()) |o| ui.textColored(amber, "Loaded instead of the installed copy{s}{s}. Stop loading from here to go back to it.", .{ if (o.version.len > 0) ", " else "", o.version });
         if (p.about.games.len() > 0) ui.textDisabled("For {s}", .{p.about.games.get()});
+        if (p.about.permissions.len() > 0) ui.textWrapped("Can use {s}", .{p.about.permissions.get()});
         if (p.last_error) |err| {
             if (err == error.OutdatedApi) {
                 ui.textColored(amber, "Made for an older Wraith, so it's off until its author updates it", .{});

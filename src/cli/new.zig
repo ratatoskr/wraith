@@ -117,7 +117,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
 
     // A Zig build builds each arch unless the game's one. Other native ones build one, x64 unless the game's x86
     const zig_built = language == .zig or ((language == .c or language == .cpp) and build == .zig);
-    const arches: ?[]const core.arch.Arch = if (language.provider() != null and language != .cs)
+    const arches: ?[]const core.arch.Arch = if (language.script())
         null
     else if (zig_built)
         (if (target.arch) |a| try arena.dupe(core.arch.Arch, &.{a}) else null)
@@ -133,7 +133,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
         .wraith = if (std.mem.eql(u8, build_info.version, core.manifest.dev_version)) null else build_info.version,
         .game = target.game,
         .gameEngine = target.engine,
-        .provider = language.provider(),
+        .provider = language.provider(runtime),
         .library = options.library,
         .arches = arches,
     };
@@ -503,7 +503,7 @@ test "an engine and its variant, for every game made with it" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const engine: Manifest = .{ .id = "unity_tools", .title = "Unity tools", .gameEngine = engineOf(a, "unity:IL2CPP") };
+    const engine: Manifest = .{ .id = "unity_tools", .title = "Unity tools", .provider = "native", .gameEngine = engineOf(a, "unity:IL2CPP") };
     const e = try core.manifest.parse(a, try engine.toJson(a), null);
     try testing.expect(e.isFor(.{ .game_engine = "unity", .game_engine_variant = "IL2CPP" }));
     try testing.expect(!e.isFor(.{ .game_engine = "unity", .game_engine_variant = "Mono" }));

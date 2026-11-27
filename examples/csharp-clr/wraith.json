@@ -4,7 +4,7 @@
   "kind": "plugin",
   "version": "0.1.0",
   "apiVersion": 3,
-  "provider": "cs",
+  "provider": "clr",
   "title": "Example (C#, CoreCLR)",
   "summary": "Free shopping, Mira on demand and tailing without being seen, for Trails beyond the Horizon. Written in C#, run by .NET.",
   "arches": ["x64"],

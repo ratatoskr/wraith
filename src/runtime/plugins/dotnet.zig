@@ -1,5 +1,5 @@
-//! The built-in `cs` kind. NativeAOT builds run as native plugins, others in a CoreCLR load context
-//! that goes when they unload. A process gets one CoreCLR, the game's or the installed .NET, shared by all.
+//! The built-in `clr` kind: .NET plugins in a CoreCLR load context that goes when they unload.
+//! NativeAOT builds are `native` instead. A process gets one CoreCLR, the game's or the installed .NET, shared by all.
 
 const std = @import("std");
 
@@ -22,7 +22,7 @@ const log = core.log.scoped(.wraith_runtime);
 const gpa = std.heap.smp_allocator;
 const CoreClr = tuft_managed.CoreClr;
 
-pub const name = "cs";
+pub const name = "clr";
 
 /// Opened by the first C# plugin. Under `lock`.
 var clr: ?CoreClr = null;
@@ -103,7 +103,10 @@ const Kind = struct {
     pub fn start(_: *Kind, guest: host.wraith.Guest) sal.Plain(host.wraith.PluginKind, "start") {
         const loaded = native.loadedOf(guest) orelse return error.Failed;
         const io = host.wraith.ioOf() orelse return error.Failed;
-        if (native.hasLibrary(loaded, io)) return native.startNative(guest);
+        if (native.hasLibrary(loaded, io)) {
+            log.err("{s} is a NativeAOT build, so its wraith.json's provider should be \"native\"", .{loaded.name});
+            return error.Failed;
+        }
         const instance = load(loaded) catch return error.Failed;
         if (!native.startEntry(loaded, guest, instance.entry)) {
             free(instance);
@@ -123,7 +126,7 @@ fn load(loaded: *Loaded) !*Instance {
     var why: []const u8 = "";
     const isolated = cc.loadIsolated(gpa, path, &why) orelse {
         defer if (why.len > 0) gpa.free(why);
-        log.err("Couldn't load {s}, or a NativeAOT build of it: {s}", .{ file, why });
+        log.err("Couldn't load {s}: {s}", .{ file, why });
         return error.LoadFailed;
     };
     errdefer cc.unloadIsolated(isolated);

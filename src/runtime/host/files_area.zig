@@ -98,6 +98,12 @@ pub const Held = struct {
 
 var held: host.Owned(Held) = .{};
 
+fn ownsResolved(loaded: *Loaded, path: []const u8) bool {
+    const resolved = std.fs.path.resolve(allocator, &.{path}) catch return false;
+    defer allocator.free(resolved);
+    return loaded.ownsPath(resolved);
+}
+
 fn imageError(err: api.ImageError) error{ InvalidImage, TooBig, Failed } {
     return switch (err) {
         error.InvalidImage => error.InvalidImage,
@@ -146,6 +152,14 @@ pub const ImagesImpl = struct {
             allocator.dupe(u8, path)
         else
             std.fs.path.join(allocator, &.{ loaded.copy_dir, path });
+        // Elsewhere, like with "..", it needs to say so
+        if (full) |f| {
+            if (!loaded.allows(.files) and !ownsResolved(loaded, f)) {
+                allocator.free(f);
+                resolver.fail(wraith.undeclared(error.NotDeclared, "files"));
+                return pair.promise;
+            }
+        } else |_| {}
         const job = allocator.create(Load) catch {
             resolver.fail(error.Failed);
             return pair.promise;

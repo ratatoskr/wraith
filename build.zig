@@ -524,7 +524,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const test_options = b.addOptions();
-    for ([_][]const u8{ "fixture", "failing", "drawing" }) |name| {
+    for ([_][]const u8{ "fixture", "failing", "drawing", "aot" }) |name| {
         const lib = addDll(b, name, b.path(b.fmt("src/runtime/testing/{s}_plugin.zig", .{name})), main);
         test_options.addOptionPath(b.fmt("{s}_plugin", .{name}), lib.getEmittedBin());
     }

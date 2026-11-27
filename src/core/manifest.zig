@@ -111,6 +111,25 @@ pub const ApiFit = enum {
     }
 };
 
+/// What a plugin does beyond the game, declared so whoever installs it can see. Wraith's own APIs refuse
+/// what isn't declared. Native code could go around them, so the hub's review covers that.
+pub const Permissions = struct {
+    /// Hosts it talks to, like `example.com`, or `*` for any.
+    net: []const []const u8 = &.{},
+    /// Reads or writes files outside its own folder and the game's.
+    files: bool = false,
+    /// Starts programs, or loads native libraries.
+    clipboard: bool = false,
+    /// Takes screenshots or records the screen.
+    capture: bool = false,
+
+    /// Whether `host` is one it said, ignoring case. `*` is any.
+    pub fn allowsHost(self: Permissions, host: []const u8) bool {
+        for (self.net) |h| if (std.mem.eql(u8, h, "*") or std.ascii.eqlIgnoreCase(h, host)) return true;
+        return false;
+    }
+};
+
 pub const Manifest = struct {
     id: []const u8 = "",
     kind: Kind = .plugin,
@@ -143,6 +162,7 @@ pub const Manifest = struct {
     devDepends: std.json.ArrayHashMap([]const u8) = .{},
     /// Markdown file used as `description`; inlined when packaged.
     descriptionFile: ?[]const u8 = null,
+    permissions: Permissions = .{},
 
     /// What it stands in for. Only a game's plugin can supersede.
     pub fn supersedesHere(self: Manifest) []const []const u8 {
@@ -340,6 +360,14 @@ pub fn validImage(path: []const u8) bool {
     return false;
 }
 
+/// What can run a plugin.
+pub const providers = [_][]const u8{ "native", "clr", "js", "lua" };
+
+fn validProvider(provider: []const u8) bool {
+    for (providers) |p| if (std.mem.eql(u8, p, provider)) return true;
+    return false;
+}
+
 pub const ParseError = error{ OutOfMemory, BadManifest, BadId };
 
 pub const PackageError = error{ OutOfMemory, BadManifest, BothDescriptions, DescriptionFile };
@@ -392,6 +420,10 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: ?*[]const u8) 
         if (problem) |p| p.* = "its game needs ids or exes. Leave game out for any game";
         return error.BadManifest;
     };
+    if (m.kind == .plugin and !validProvider(m.provider orelse "")) {
+        if (problem) |p| p.* = "its provider should be native for a DLL, like Zig or C# compiled with NativeAOT, or clr, js or lua";
+        return error.BadManifest;
+    }
     return m;
 }
 
@@ -461,7 +493,7 @@ test "manifest parsing" {
     defer arena.deinit();
     const m = try parse(arena.allocator(),
         \\{
-        \\    "id": "kai", "kind": "plugin", "title": "Kai", "version": "1.0.0", "wraith": "0.2.0", "arches": ["x64"],
+        \\    "id": "kai", "provider": "native", "kind": "plugin", "title": "Kai", "version": "1.0.0", "wraith": "0.2.0", "arches": ["x64"],
         \\    "game": { "ids": ["steam-3316940", "gog-1"], "exes": ["Kai.exe", "kai_dx12.exe"], "builds": ["steam:5"] },
         \\    "autoLoad": false, "library": true, "from_the_future": 1
         \\}
@@ -521,19 +553,35 @@ test "the manifest has every field the hub's schema has, and no others" {
     try expectFieldsMatch(Manifest, properties, &.{"$schema"});
     try expectFieldsMatch(Game, properties.get("game").?.object.get("properties").?.object, &.{});
     try expectFieldsMatch(GameEngine, properties.get("gameEngine").?.object.get("properties").?.object, &.{});
+    try expectFieldsMatch(Permissions, properties.get("permissions").?.object.get("properties").?.object, &.{});
+}
+
+test "permissions say which hosts" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const m = try parse(arena.allocator(), "{ \"id\": \"kai\", \"provider\": \"native\", \"apiVersion\": 3, \"permissions\": { \"net\": [\"example.com\"], \"files\": true } }", null);
+    try std.testing.expect(m.permissions.allowsHost("EXAMPLE.com"));
+    try std.testing.expect(!m.permissions.allowsHost("example.org"));
+    try std.testing.expect(m.permissions.files and !m.permissions.clipboard);
+    try std.testing.expect((Permissions{ .net = &.{"*"} }).allowsHost("anything"));
 }
 
 test "bad manifests say why" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var problem: []const u8 = "";
-    try std.testing.expectError(error.BadManifest, parse(arena.allocator(), "{ \"id\": \"kai\", \"game\": 3 }", &problem));
+    try std.testing.expectError(error.BadManifest, parse(arena.allocator(), "{ \"id\": \"kai\", \"provider\": \"native\", \"game\": 3 }", &problem));
     try std.testing.expect(problem.len > 0);
     problem = "";
-    try std.testing.expectError(error.BadManifest, parse(arena.allocator(), "{ \"id\": \"kai\", \"game\": { \"builds\": [\"steam:1\"] } }", &problem));
+    try std.testing.expectError(error.BadManifest, parse(arena.allocator(), "{ \"id\": \"kai\", \"provider\": \"native\", \"game\": { \"builds\": [\"steam:1\"] } }", &problem));
     try std.testing.expect(problem.len > 0);
     try std.testing.expectError(error.BadId, parse(arena.allocator(), "{ \"id\": \"Kai Bones\" }", &problem));
     try std.testing.expectError(error.BadId, parse(arena.allocator(), "{}", null));
+    // Plugins say what runs them
+    try std.testing.expectError(error.BadManifest, parse(arena.allocator(), "{ \"id\": \"kai\" }", &problem));
+    try std.testing.expect(std.mem.indexOf(u8, problem, "provider") != null);
+    _ = try parse(arena.allocator(), "{ \"id\": \"kai\", \"kind\": \"project\" }", null);
+    try std.testing.expectError(error.BadManifest, parse(arena.allocator(), "{ \"id\": \"kai\", \"provider\": \"cs\" }", null));
 }
 
 test "tags and pictures" {
@@ -556,7 +604,7 @@ test "for every game of a game engine" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const m = try parse(arena.allocator(),
-        \\{ "id": "unity_tools", "kind": "plugin", "gameEngine": { "id": "unity", "variants": ["IL2CPP"] } }
+        \\{ "id": "unity_tools", "provider": "native", "kind": "plugin", "gameEngine": { "id": "unity", "variants": ["IL2CPP"] } }
     , null);
     try std.testing.expect(m.isFor(.{ .game_engine = "unity", .game_engine_variant = "il2cpp" }));
     try std.testing.expect(!m.isFor(.{ .game_engine = "unity", .game_engine_variant = "Mono" }));
@@ -600,7 +648,7 @@ test "devDepends is kept, but left out of packages" {
     defer arena.deinit();
     const a = arena.allocator();
     const text =
-        \\{ "id": "kai", "depends": ["freecam"], "devDepends": { "freecam": "../../libs/freecam" }, "from_the_future": [1] }
+        \\{ "id": "kai", "provider": "native", "depends": ["freecam"], "devDepends": { "freecam": "../../libs/freecam" }, "from_the_future": [1] }
     ;
     const m = try parse(a, text, null);
     try std.testing.expectEqualStrings("../../libs/freecam", m.devDepends.map.get("freecam").?);
@@ -624,7 +672,7 @@ test "a description file goes into packages as the description" {
     try tmp.dir.writeFile(io, .{ .sub_path = "about.md", .data = "\xEF\xBB\xBF# Camera\n\nFlies.\n\n" });
 
     const text =
-        \\{ "id": "camera", "descriptionFile": "about.md" }
+        \\{ "id": "camera", "provider": "native", "descriptionFile": "about.md" }
     ;
     try std.testing.expectEqualStrings("about.md", (try parse(a, text, null)).descriptionFile.?);
     const m = try parse(a, (try packaged(a, io, tmp.dir, text)).?, null);
@@ -632,10 +680,10 @@ test "a description file goes into packages as the description" {
     try std.testing.expectEqual(null, m.descriptionFile);
 
     try std.testing.expectError(error.BothDescriptions, packaged(a, io, tmp.dir,
-        \\{ "id": "camera", "description": "Flies", "descriptionFile": "about.md" }
+        \\{ "id": "camera", "provider": "native", "description": "Flies", "descriptionFile": "about.md" }
     ));
     try std.testing.expectError(error.DescriptionFile, packaged(a, io, tmp.dir,
-        \\{ "id": "camera", "descriptionFile": "gone.md" }
+        \\{ "id": "camera", "provider": "native", "descriptionFile": "gone.md" }
     ));
 }
 
