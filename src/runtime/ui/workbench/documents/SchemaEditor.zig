@@ -46,7 +46,8 @@ pub const example =
     \\
 ;
 
-window: ui.Window = .{ .title = "Schema" },
+/// Its tab's, which the Workbench's tabs keep.
+window: *ui.Window = undefined,
 wb: *Workbench,
 view: devtools.StructView,
 text: ?[:0]u8 = null,

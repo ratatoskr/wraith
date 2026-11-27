@@ -25,6 +25,7 @@ pub const salamander = @import("salamander.zig");
 
 pub const hooks = @import("hooks.zig");
 pub const overlay = @import("overlay.zig");
+pub const slots = @import("slots.zig");
 pub const threads = @import("threads.zig");
 pub const display = @import("display.zig");
 pub const Lease = @import("lease.zig").Lease;

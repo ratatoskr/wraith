@@ -87,7 +87,8 @@ pub const group_template =
     \\
 ;
 
-window: ui.Window = .{ .title = "Tweak" },
+/// Its tab's, which the Workbench's tabs keep.
+window: *ui.Window = undefined,
 wb: *Workbench,
 /// Empty for a new one, till something's typed and it gets a file.
 path: Text(128) = .{},

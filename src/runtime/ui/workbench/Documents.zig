@@ -8,6 +8,9 @@ const Range = @import("tuft_mem").Range;
 const ui = @import("wraith_ui");
 
 const c = @import("../imgui.zig").c;
+const W = @import("wraith_api").wraith;
+const sal = @import("wraith_api").salamander;
+const slots = @import("../../host/slots.zig");
 const Workbench = @import("Workbench.zig");
 const Navigator = @import("Navigator.zig");
 const Disassembly = @import("documents/Disassembly.zig");
@@ -20,6 +23,7 @@ const max_documents = 32;
 
 pub const Document = struct {
     id: u32,
+    /// Its tab's label, like `Memory 2` or `player.sal`.
     title: [48:0]u8,
     dock: c.ImGuiID = 0,
     body: union(enum) {
@@ -30,14 +34,114 @@ pub const Document = struct {
         tweak: TweakEditor,
     },
 
+    /// Its tab's, which the Workbench's tabs keep.
     pub fn window(self: *Document) *ui.Window {
         return switch (self.body) {
-            inline else => |*b| &b.window,
+            inline else => |*b| b.window,
         };
+    }
+
+    fn label(self: *const Document) []const u8 {
+        return std.mem.sliceTo(&self.title, 0);
     }
 };
 
 pub const Kind = std.meta.Tag(@FieldType(Document, "body"));
+
+// Each kind, a tab of many in the `workbench` slot
+
+/// What View's New says, and each one's label till it has its own.
+fn kindTitle(kind: Kind) []const u8 {
+    return switch (kind) {
+        .code => "Disassembly",
+        .memory => "Memory",
+        .script => "Script",
+        .schema => "Schema",
+        .tweak => "Tweak",
+    };
+}
+
+/// Memory and Disassembly first along the top, the new ones after plugins' tabs.
+fn kindOrder(kind: Kind) i32 {
+    return switch (kind) {
+        .memory => 50,
+        .code => 60,
+        .script => 20_000,
+        .schema => 20_100,
+        .tweak => 20_200,
+    };
+}
+
+/// A kind of document as Wraith's own `WorkbenchTab`, each one by its id.
+pub const KindTab = struct {
+    wb: *Workbench,
+    kind: Kind,
+    id_buf: [12]u8 = undefined,
+
+    pub fn describe(self: *KindTab) W.WorkbenchTab.Info {
+        return .{ .title = kindTitle(self.kind), .kind = @tagName(self.kind), .place = .top, .order = kindOrder(self.kind), .multi = true };
+    }
+
+    pub fn draw(self: *KindTab, id: []const u8) void {
+        const d = self.byId(id) orelse return;
+        drawBody(self.wb, d);
+    }
+
+    pub fn status(self: *KindTab, id: []const u8) W.WorkbenchTab.State {
+        const d = self.byId(id) orelse return .{};
+        renamed(d);
+        return .{ .title = d.label(), .unsaved = d.body == .schema and !d.body.schema.saved };
+    }
+
+    /// View's New.
+    pub fn create(self: *KindTab) []const u8 {
+        const d = make(self.wb, self.kind) catch |err| {
+            self.wb.fail("Couldn't open another: {t}", .{err});
+            return "";
+        };
+        return std.fmt.bufPrint(&self.id_buf, "{d}", .{d.id}) catch "";
+    }
+
+    /// Closing one that isn't saved and has no backup asks first.
+    pub fn keepOpen(self: *KindTab, id: []const u8) bool {
+        const d = self.byId(id) orelse return false;
+        if (d.body != .schema or d.body.schema.saved) return false;
+        self.wb.project_menu.askClose(d.id);
+        return true;
+    }
+
+    fn byId(self: *KindTab, id: []const u8) ?*Document {
+        const n = std.fmt.parseInt(u32, id, 10) catch return null;
+        for (self.wb.documents.items) |d| if (d.id == n and d.body == self.kind) return d;
+        return null;
+    }
+};
+
+/// Each kind's tab, Wraith's own. Once, as the Workbench starts.
+pub fn addKinds(self: *Workbench) !void {
+    for (std.enums.values(Kind)) |kind| {
+        self.doc_tabs.set(kind, .{ .wb = self, .kind = kind });
+        const tab = W.WorkbenchTab.init(self.doc_tabs.getPtr(kind), sal.implement(W.WorkbenchTab, KindTab));
+        self.doc_entries.set(kind, try slots.addOwn(.{
+            .slot = .workbench,
+            .id = @tagName(kind),
+            .title = kindTitle(kind),
+            .place = .top,
+            .order = kindOrder(kind),
+            .multi = true,
+        }, .{ .tab = tab }));
+    }
+}
+
+/// A new one of `kind`, like View's New makes.
+fn make(self: *Workbench, kind: Kind) !*Document {
+    return switch (kind) {
+        .script => newScriptDocument(self, null),
+        .schema => newSchemaDocument(self, null),
+        .tweak => newTweakDocument(self, .tweak),
+        else => newDocument(self, kind),
+    };
+}
 
 // Going places
 
@@ -131,7 +235,7 @@ pub fn newDocument(self: *Workbench, kind: Kind) !*Document {
             .tweak => .{ .tweak = .{ .wb = self } },
         },
     };
-    // The part after ### is the ID, so a document keeps its spot. Empty ones are new till saved somewhere
+    // Its tab's ID is its kind and id, so it keeps its spot. Empty ones are new till saved somewhere
     const label = switch (kind) {
         .code => "Disassembly",
         .memory => "Memory",
@@ -141,12 +245,18 @@ pub fn newDocument(self: *Workbench, kind: Kind) !*Document {
     };
     const others = countOf(self, kind);
     if (others == 0) {
-        _ = std.fmt.bufPrintSentinel(&doc.title, "{s}###{t}.{d}", .{ label, kind, id }, 0) catch {};
+        _ = std.fmt.bufPrintSentinel(&doc.title, "{s}", .{label}, 0) catch {};
     } else {
-        _ = std.fmt.bufPrintSentinel(&doc.title, "{s} {d}###{t}.{d}", .{ label, others + 1, kind, id }, 0) catch {};
+        _ = std.fmt.bufPrintSentinel(&doc.title, "{s} {d}", .{ label, others + 1 }, 0) catch {};
     }
-    doc.window().title = std.mem.sliceTo(&doc.title, 0);
-    doc.window().open = true;
+    // Its tab, now, so it can be focused straight away
+    const entry = self.doc_entries.get(kind) orelse return error.NoTab;
+    var id_buf: [12]u8 = undefined;
+    const tab = try self.tabs.open(entry, std.fmt.bufPrint(&id_buf, "{d}", .{id}) catch unreachable);
+    errdefer tab.window.close();
+    switch (doc.body) {
+        inline else => |*b| b.window = &tab.window,
+    }
     try self.documents.append(self.allocator, doc);
     self.next_document += 1;
     switch (kind) {
@@ -176,8 +286,7 @@ pub fn newScriptDocument(self: *Workbench, session: ?u32) !*Document {
         };
     } else {
         try editor.init(null);
-        const title = std.mem.sliceTo(&doc.title, 0);
-        editor.session = try self.scripts.newSession(title[0 .. std.mem.indexOf(u8, title, "###") orelse title.len]);
+        editor.session = try self.scripts.newSession(doc.label());
     }
     return doc;
 }
@@ -222,8 +331,7 @@ pub fn newSchemaDocument(self: *Workbench, path: ?[]const u8) !*Document {
     const editor = &doc.body.schema;
     if (path) |p| {
         try editor.open(p);
-        _ = std.fmt.bufPrintSentinel(&doc.title, "{s}###schema.{d}", .{ std.fs.path.basename(p), doc.id }, 0) catch {};
-        doc.window().title = std.mem.sliceTo(&doc.title, 0);
+        retitle(doc, std.fs.path.basename(p));
     } else {
         try editor.init(null);
     }
@@ -251,8 +359,7 @@ pub fn openTweak(self: *Workbench, path: []const u8) void {
         self.fail("Couldn't open it: {t}", .{err});
         return;
     };
-    _ = std.fmt.bufPrintSentinel(&doc.title, "{s}###tweak.{d}", .{ doc.body.tweak.name(), doc.id }, 0) catch {};
-    doc.window().title = std.mem.sliceTo(&doc.title, 0);
+    retitle(doc, doc.body.tweak.name());
     doc.window().focus();
 }
 
@@ -314,10 +421,31 @@ pub fn dropEditors(self: *Workbench) void {
     for (self.scripts.sessions.items) |s| self.scripts.bindFile(s.id, "");
 }
 
-/// Like `x.sal###schema.3`, so it keeps its spot.
+/// Its tab's label, like `x.sal`. Its ID stays its kind and id, so it keeps its spot.
 fn retitle(d: *Document, label: []const u8) void {
-    _ = std.fmt.bufPrintSentinel(&d.title, "{s}###{s}.{d}", .{ label[0..@min(label.len, 30)], @tagName(d.body), d.id }, 0) catch return;
-    d.window().title = std.mem.sliceTo(&d.title, 0);
+    // It can be what's there already
+    const n = @min(label.len, d.title.len);
+    @memmove(d.title[0..n], label[0..n]);
+    d.title[n] = 0;
+}
+
+/// A new label for one renamed, like by being saved.
+fn renamed(d: *Document) void {
+    switch (d.body) {
+        .schema => |*l| if (l.renamed) {
+            l.renamed = false;
+            if (l.name()) |n| retitle(d, n);
+        },
+        .tweak => |*t| if (t.renamed) {
+            t.renamed = false;
+            retitle(d, t.name());
+        },
+        .script => |*s| if (s.renamed) {
+            s.renamed = false;
+            if (s.projectPath()) |path| retitle(d, std.fs.path.basename(path));
+        },
+        else => {},
+    }
 }
 
 /// A project's schema, `schemas/x.sal`.
@@ -386,13 +514,7 @@ pub fn openSchema(self: *Workbench, path: []const u8) void {
 }
 
 pub fn openNew(self: *Workbench, kind: Kind) void {
-    const made = switch (kind) {
-        .script => newScriptDocument(self, null),
-        .schema => newSchemaDocument(self, null),
-        .tweak => newTweakDocument(self, .tweak),
-        else => newDocument(self, kind),
-    };
-    const doc = made catch |err| {
+    const doc = make(self, kind) catch |err| {
         self.fail("Couldn't open another: {t}", .{err});
         return;
     };
@@ -422,42 +544,8 @@ pub fn dropClosed(self: *Workbench) void {
 
 // Drawing them
 
-pub fn draw(self: *Workbench, d: *Document) void {
-    const w = d.window();
-    if (!w.open) return;
-    if (w.raise) {
-        w.raise = false;
-        ui.setNextWindowFocus();
-    }
-    Workbench.withHost(self);
-    if (self.document_dock != 0) c.ImGui_SetNextWindowDockID(self.document_dock, c.ImGuiCond_FirstUseEver);
-    var flags = w.flags;
-    if (d.body == .schema) {
-        const l = &d.body.schema;
-        w.unsaved = !l.saved;
-        if (l.renamed) {
-            l.renamed = false;
-            if (l.name()) |n| retitle(d, n);
-        }
-    }
-    if (d.body == .tweak) if (d.body.tweak.renamed) {
-        d.body.tweak.renamed = false;
-        retitle(d, d.body.tweak.name());
-    };
-    if (d.body == .script) if (d.body.script.renamed) {
-        d.body.script.renamed = false;
-        if (d.body.script.projectPath()) |p| retitle(d, std.fs.path.basename(p));
-    };
-    flags.unsaved_document = w.unsaved;
-    const was_open = w.open;
-    const shown = ui.window(w.title, .{ .open = &w.open, .flags = flags });
-    defer if (shown) |s| s.end();
-    // Closing one that isn't saved and has no backup asks first
-    if (was_open and !w.open and d.body == .schema and w.unsaved) {
-        w.open = true;
-        self.project_menu.askClose(d.id);
-    }
-    _ = shown orelse return;
+/// Inside its tab's window, which the Workbench's tabs begin.
+fn drawBody(self: *Workbench, d: *Document) void {
     // New ones go where this is, and going somewhere uses this one
     const dock = c.ImGui_GetWindowDockID();
     d.dock = dock;

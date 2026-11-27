@@ -1,6 +1,7 @@
 // Slots: the places in Wraith's UI a plugin can add to, like a Workbench tab, its Settings page, or a
-// node in Photo mode's scene. Wraith describes each one in `Ui.slots`, so what a slot takes is data,
-// not a method per place. Wraith's own parts go through the same slots.
+// node in Photo mode's scene, and plugins' own. What goes in one is an object of the slot's trait,
+// added with `Ui.contributeTo`, and Wraith describes each one in `Ui.slots`. Wraith's own parts go
+// through the same slots.
 
 namespace Wraith;
 
@@ -11,9 +12,11 @@ error SlotError {
     NotTaken,
     // Not letters, digits, `_`, `-` and `.`
     InvalidId,
-    // The plugin has one by that id in that slot already
+    // The plugin has one by that id in that slot already, or a slot by that id's defined already
     AlreadyAdded,
     Failed,
+    // The object isn't the slot's trait
+    WrongTrait,
 }
 
 namespace Slot {
@@ -36,6 +39,8 @@ namespace Slot {
         render,
         // The Workbench's own. Read what game-thread code left rather than calling into the game
         workbench,
+        // A plugin's own slot, used wherever that plugin says
+        any,
     }
 
     // What a slot takes, from Wraith.
@@ -44,6 +49,8 @@ namespace Slot {
         string id;
         string title;
         string help;
+        // What goes in it implements, like `Wraith.PhotoPart`
+        string trait;
         Thread thread;
         // What it takes, the default first
         []Presentation presentations;
@@ -57,29 +64,15 @@ namespace Slot {
         []string known_kinds;
     }
 
-    // Where a contribution goes, and how.
-    struct Placement {
-        // One of `Ui.slots`' ids
-        string slot;
-        // Unique for the plugin in the slot, so its other contributions can name it as `parent`. Can be empty
+    // A slot of a plugin's own, from `Ui.defineSlot`.
+    struct Definition {
+        // Letters, digits, `_`, `-` and `.`. Others name it as `plugin.id`, like `ffxiv.viewers`
         string id;
-        // Its tab, header or row. Defaults to the plugin's name
         string title;
-        // A glyph from Wraith's icon font before the title, as UTF-8. Can be empty
-        string icon;
-        // In slots with a hierarchy: one of the slot's `parents`, or the `id` of one of the plugin's own
-        // nodes. Empty for the top
-        string parent;
-        // For a node, what it is. For anything else in a slot with kinds, which nodes it shows for.
-        // Empty shows it for every node
-        string kind;
-        // For a node, its id among its kind, handed to whatever shows for it
-        u64 node;
-        Presentation presentation;
-        // Lower comes first. Wraith's own are 100 apart, from 100
-        i32 order;
-        // Foldouts and nodes start open
-        bool open;
+        // What goes in it, and where it shows
+        string help;
+        // What's added implements, by its full name, like `Ffxiv.Viewer`
+        string trait;
     }
 
     // What it's drawn for: the picked node, or nothing.
@@ -93,9 +86,70 @@ namespace Slot {
     }
 }
 
-namespace Contribution {
-    // On the slot's thread, inside its part of the window.
-    fn void Draw(Slot.Target target);
+namespace SettingsSection {
+    struct Info {
+        // Its header. Defaults to the plugin's name
+        string title;
+        // Unique for the plugin in Settings. Can be empty
+        string id;
+        // `foldout`, the default, or `inline` after the plugin's settings
+        Slot.Presentation presentation;
+        // Lower comes first. Wraith's own are 100 apart, from 100
+        i32 order;
+        // A foldout starts open
+        bool open;
+    }
+}
+
+// Part of the plugin's page in Settings: `Ui.contributeTo("settings", section)`. On the render thread.
+trait SettingsSection {
+    // Asked once, as it's added
+    SettingsSection.Info describe();
+    void draw();
+}
+
+namespace PhotoPart {
+    struct Info {
+        // Unique for the plugin in the slot, so its other parts can name it as `parent`. Can be empty
+        string id;
+        // Its header or row. Defaults to the plugin's name
+        string title;
+        // A glyph from Wraith's icon font before the title, as UTF-8. Can be empty
+        string icon;
+        // In `photo.scene`: one of its `parents`, like `world/actors`, or the `id` of one of the plugin's
+        // own nodes. Empty for the top
+        string parent;
+        // For a node, what it is. For a part of the others, which nodes it shows for, like `actor`, or
+        // empty for every one
+        string kind;
+        // For a node, its id among its kind, handed to whatever shows for it
+        u64 node;
+        // How it shows, from the slot's `presentations`. `default` is its first
+        Slot.Presentation presentation;
+        // Lower comes first. Wraith's own are 100 apart, from 100
+        i32 order;
+        // Foldouts and nodes start open
+        bool open;
+    }
+}
+
+// Part of Photo mode, in one of its slots, like a node in `photo.scene` or a foldout in
+// `photo.inspector`: `Ui.contributeTo(slot, part)`. On the render thread.
+trait PhotoPart {
+    // Asked once, as it's added
+    PhotoPart.Info describe();
+    // For what's picked, or a bone, inside its part of the window
+    void draw(Slot.Target target);
+}
+
+// A slot a plugin defined with `Ui.defineSlot`, for other plugins to add objects of its trait to.
+trait Slot {
+    // What's in it now, in the order added, each an object of its trait. Kept till the next call; one
+    // thread at a time. Views of them, like `salamander.as` in a script, work while they're there
+    []object contributions();
+    // Takes it away. What's in it stays, for when one by its id comes again, like when its plugin
+    // reloads. Gone with the plugin anyway
+    void remove();
 }
 
 // Something a plugin added to a slot.
@@ -106,4 +160,8 @@ trait Contribution {
     void focus();
     // Waits for a draw under way, except from inside a draw or a script. Fine to call twice.
     void remove();
+    // For a Workbench tab of many: opens the one with this id, or brings it to the front
+    void open(string id);
+    // For a Workbench tab of many: closes the one with this id, without asking. For one, closes it
+    void close(string id);
 }

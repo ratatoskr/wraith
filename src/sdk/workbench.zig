@@ -22,6 +22,7 @@ const std = @import("std");
 const api = @import("wraith_api");
 const sys = @import("tuft_sys");
 const ui = @import("wraith_ui");
+const rt = @import("salamander_runtime");
 
 const Owner = @import("Owner.zig");
 
@@ -40,6 +41,9 @@ pub const Options = struct {
     place: W.WorkbenchPanel.Place = .top,
     /// Lower comes first among tabs in the same place. Wraith's own are 100 apart, from 100, and 0 is after them.
     order: i32 = 0,
+    /// Inside another tab, as one of its tabs: its kind for one of the plugin's own, like `ffxiv`, else
+    /// `plugin/kind`, like `wraith/debug`.
+    parent: []const u8 = "",
 };
 
 /// A panel of yours in the Workbench, gone with the plugin.
@@ -67,64 +71,94 @@ pub fn addPanel(target: anytype, comptime func: fn (@TypeOf(target)) void, optio
     const T = @TypeOf(target);
     if (@typeInfo(T) != .pointer) @compileError("addPanel expects a pointer, found " ++ @typeName(T));
     const owner = Owner.current() orelse return error.OwnerGone;
-    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .kind = options.kind, .id = options.id, .place = options.place, .order = options.order }, W.WorkbenchPanel.Draw.init(target, func));
+    const object = owner.root.ui().addWorkbenchPanel(.{ .title = options.title, .kind = options.kind, .id = options.id, .place = options.place, .order = options.order, .parent = options.parent }, W.WorkbenchPanel.Draw.init(target, func));
     if (object.table == null) return error.Failed;
     return .{ .object = object };
 }
 
-/// Tabs inside one of yours, one per value of the enum `Part`, like Scene and Classes. Draw it from
-/// the tab's draw; `showing` and `focus` work from any thread.
-///
-///     parts: sdk.workbench.Parts(Part) = .init(.{ .scene = "Scene", .classes = "Classes" }),
-///
-///     fn draw(self: *Explorer) void {
-///         self.parts.draw(self, drawPart);
-///     }
-pub fn Parts(comptime Part: type) type {
-    return struct {
-        const Self = @This();
+/// A tab from `addTab`, or a kind of them for `multi`, gone with the plugin.
+pub const Tab = struct {
+    object: W.Contribution,
 
-        labels: std.EnumArray(Part, [:0]const u8),
-        /// In front at the last draw.
-        front: std.atomic.Value(u8) = .init(0),
-        /// To bring to the front at the next, plus one, or 0.
-        pick: std.atomic.Value(u8) = .init(0),
+    /// Whether it showed last frame.
+    pub fn isOpen(self: Tab) bool {
+        return self.object.isOpen();
+    }
 
-        pub fn init(labels: std.enums.EnumFieldStruct(Part, [:0]const u8, null)) Self {
-            return .{ .labels = .init(labels) };
+    /// Opens it and brings it to the front.
+    pub fn focus(self: Tab) void {
+        self.object.focus();
+    }
+
+    /// For `multi`: opens the one with `id`, or brings it to the front. Any thread.
+    pub fn open(self: Tab, id: []const u8) void {
+        self.object.open(id);
+    }
+
+    /// For `multi`: closes the one with `id`, without asking. Any thread.
+    pub fn close(self: Tab, id: []const u8) void {
+        self.object.close(id);
+    }
+
+    /// Waits for a draw under way, unless called from one. Idempotent.
+    pub fn remove(self: Tab) void {
+        self.object.remove();
+    }
+};
+
+/// A tab, or a kind of them for `multi`, from `T`'s functions on `target`, on the Workbench's thread:
+/// `describe(target) WorkbenchTab.Info` and `draw(target, id)`. Optional, else what a missing method
+/// gives: `status(target, id) WorkbenchTab.State` for its label and dot, `create(target) []const u8`
+/// for View's New, and `keepOpen(target, id) bool` for its close button. `target` has to outlive it.
+pub fn addTab(target: anytype, comptime T: type) Error!Tab {
+    const Ptr = @TypeOf(target);
+    if (@typeInfo(Ptr) != .pointer) @compileError("addTab expects a pointer, found " ++ @typeName(Ptr));
+    const Impl = struct {
+        pub fn describe(self: Ptr) W.WorkbenchTab.Info {
+            return T.describe(self);
         }
 
-        /// Whether `part`'s in front while `panel`'s open.
-        pub fn showing(self: *const Self, panel: ?Panel, part: Part) bool {
-            const p = panel orelse return false;
-            return p.isOpen() and self.front.load(.acquire) == index(part);
+        pub fn draw(self: Ptr, id: []const u8) void {
+            T.draw(self, id);
         }
 
-        /// Brings `part` to the front, and `panel` with it.
-        pub fn focus(self: *Self, panel: ?Panel, part: Part) void {
-            self.pick.store(index(part) + 1, .release);
-            if (panel) |p| p.focus();
+        pub fn status(self: Ptr, id: []const u8) W.WorkbenchTab.State {
+            return if (@hasDecl(T, "status")) T.status(self, id) else .{};
         }
 
-        /// A tab bar, with `func(target, part)` drawing the one in front.
-        pub fn draw(self: *Self, target: anytype, comptime func: fn (@TypeOf(target), Part) void) void {
-            const pick = self.pick.swap(0, .acq_rel);
-            const bar = ui.tabBar("parts") orelse return;
-            defer bar.end();
-            for (std.enums.values(Part)) |part| {
-                const tab = ui.tabItem(self.labels.get(part), .{ .select = pick == index(part) + 1 }) orelse continue;
-                defer tab.end();
-                self.front.store(index(part), .release);
-                const child = ui.child(self.labels.get(part), .{ 0, 0 }, .{}) orelse continue;
-                defer child.end();
-                func(target, part);
-            }
+        pub fn create(self: Ptr) []const u8 {
+            return if (@hasDecl(T, "create")) T.create(self) else "";
         }
 
-        fn index(part: Part) u8 {
-            return @intCast(@backingInt(part));
+        pub fn keepOpen(self: Ptr, id: []const u8) bool {
+            return if (@hasDecl(T, "keepOpen")) T.keepOpen(self, id) else false;
         }
     };
+    const owner = Owner.current() orelse return error.OwnerGone;
+    const tab = W.WorkbenchTab.init(target, rt.implement(W.WorkbenchTab, Impl));
+    const object = owner.root.ui().addWorkbenchTab(tab) catch return error.Failed;
+    return .{ .object = object };
+}
+
+/// A tab holding others, which name its `kind` as their `parent`, as tabs inside it. Has to outlive it.
+///
+///     holder: sdk.workbench.Holder = .{ .options = .{ .title = "FFXIV", .kind = "ffxiv" } },
+///
+///     _ = try sdk.workbench.addHolder(&self.holder);
+///     self.sheets = try sdk.workbench.addPanel(self, drawSheets, .{ .title = "Sheets", .parent = "ffxiv" });
+pub const Holder = struct {
+    options: Options,
+
+    pub fn describe(self: *Holder) W.WorkbenchTab.Info {
+        const o = self.options;
+        return .{ .title = o.title, .kind = o.kind, .place = o.place, .order = o.order, .parent = o.parent, .parts = true };
+    }
+
+    pub fn draw(_: *Holder, _: []const u8) void {}
+};
+
+pub fn addHolder(holder: *Holder) Error!Tab {
+    return addTab(holder, Holder);
 }
 
 /// Opens the Workbench's Classes on a C# class by full name, like `UnityEngine.Transform`.

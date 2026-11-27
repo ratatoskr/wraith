@@ -14,7 +14,8 @@ const Versions = @import("Versions.zig");
 
 const is64 = @sizeOf(usize) == 8;
 
-window: ui.Window = .{ .title = "Disassembly", .size = .{ 900, 480 }, .min_size = .{ 480, 260 } },
+/// Its tab's, which the Workbench's tabs keep.
+window: *ui.Window = undefined,
 wb: *Workbench,
 bar: devtools.AddressBar = .{ .symbols = Names.global_symbols, .memory = .local },
 code: devtools.AsmView = .{ .memory = .local, .symbols = Names.global_symbols, .claims = .local },

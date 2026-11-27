@@ -1255,7 +1255,7 @@ trait ImGui {
     // set id to use for open/close storage (default to same as item id).
     static void SetNextItemStorageID(u32 storage_id);
     // retrieve tree node open/close state.
-    static bool TreeNodeGetOpen(u32 storage_id);
+    static bool TreeNodeGetOpen(u32 storage_id, ImGuiTreeNodeFlags flags);
     // Implied selected = false, flags = 0, size = ImVec2(0, 0)
     static bool Selectable(cstring label);
     // "bool selected" carry the selection state (read-only). Selectable() is clicked is returns true so you can modify your selection state. size.x==0.0: use remaining width, size.x>0.0: specify width. size.y==0.0: use label height, size.y>0.0: specify height
@@ -1446,6 +1446,8 @@ trait ImGui {
     static bool IsItemActive();
     // is the last item focused for keyboard/gamepad navigation?
     static bool IsItemFocused();
+    // is the last item disabled? (e.g. typically in a BeginDisabled()/EndDisabled() block)
+    static bool IsItemDisabled();
     // Implied mouse_button = 0
     static bool IsItemClicked();
     // is the last item hovered and mouse clicked on? (**)  == IsMouseClicked(mouse_button) && IsItemHovered()Important. (**) this is NOT equivalent to the behavior of e.g. Button(). Read comments in function definition.
@@ -1572,10 +1574,6 @@ trait ImGui {
     static void SetWindowFontScale(f32 scale);
     // <-- 'border_col' was removed in favor of ImGuiCol_ImageBorder. If you use 'tint_col', use ImageWithBg() instead.
     static void ImageImVec4(TextureRef tex_ref, ImVec2 image_size, ImVec2 uv0, ImVec2 uv1, ImVec4 tint_col, ImVec4 border_col);
-    static void PushButtonRepeat(bool repeat);
-    static void PopButtonRepeat();
-    static void PushTabStop(bool tab_stop);
-    static void PopTabStop();
     // Content boundaries max (e.g. window boundaries including scrolling, or current column boundaries). You should never need this. Always use GetCursorScreenPos() and GetContentRegionAvail()!
     static ImVec2 GetContentRegionMax();
     // Content boundaries min for the window (roughly (0,0)-Scroll), in window-local coordinates. You should never need this. Always use GetCursorScreenPos() and GetContentRegionAvail()!

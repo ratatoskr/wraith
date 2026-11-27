@@ -139,33 +139,71 @@ pub const Panels = struct {
     tweaks: TweaksPanel,
 };
 
-/// Wraith's own tabs, in their default order, 100 apart from 100. Each draws the panel or group of its name.
-pub const Own = enum { search, addresses, names, schemas, tweaks, diagnostics, debug, scripts, log, classes };
+/// Wraith's own tabs, in their default order, 100 apart from 100, then the ones inside Debug and
+/// Diagnostics, which plugins can add to as `wraith/debug` and `wraith/diagnostics`.
+pub const Own = enum {
+    search,
+    addresses,
+    names,
+    schemas,
+    tweaks,
+    diagnostics,
+    debug,
+    scripts,
+    log,
+    classes,
+    threads,
+    registers,
+    breakpoints,
+    timings,
+    frames,
+    memory_use,
+    environment,
+    hooks,
+    claims,
+    io,
+};
 
-const OwnTab = struct { title: [:0]const u8, place: slots.Place };
+const OwnTab = struct {
+    title: [:0]const u8,
+    place: slots.Place = .bottom,
+    /// The `Panels` field it draws. Empty holds the ones inside it, or for Scripts draws its split
+    panel: []const u8 = "",
+    /// The one it's inside
+    parent: ?Own = null,
+};
 
 const own_tabs: std.EnumArray(Own, OwnTab) = .init(.{
-    .search = .{ .title = "Search", .place = .left },
-    .addresses = .{ .title = "Addresses", .place = .bottom },
-    .names = .{ .title = "Names", .place = .bottom },
+    .search = .{ .title = "Search", .place = .left, .panel = "search" },
+    .addresses = .{ .title = "Addresses", .panel = "addresses" },
+    .names = .{ .title = "Names", .panel = "names" },
     // With the documents, since it's as big as one
-    .schemas = .{ .title = "Schemas", .place = .top },
-    .tweaks = .{ .title = "Tweaks", .place = .bottom },
-    .diagnostics = .{ .title = "Diagnostics", .place = .bottom },
-    .debug = .{ .title = "Debug", .place = .bottom },
-    .scripts = .{ .title = "Scripts", .place = .bottom },
-    .log = .{ .title = "Log", .place = .bottom },
+    .schemas = .{ .title = "Schemas", .place = .top, .panel = "schemas" },
+    .tweaks = .{ .title = "Tweaks", .panel = "tweaks" },
+    .diagnostics = .{ .title = "Diagnostics" },
+    // Comes to the front when something stops or a breakpoint's added
+    .debug = .{ .title = "Debug" },
+    // Comes to the front when a script runs
+    .scripts = .{ .title = "Scripts" },
+    .log = .{ .title = "Log", .panel = "log" },
     // Only once the game runs C#
-    .classes = .{ .title = "Classes", .place = .top },
+    .classes = .{ .title = "Classes", .place = .top, .panel = "classes" },
+    .threads = .{ .title = "Threads", .panel = "stopped", .parent = .debug },
+    .registers = .{ .title = "Registers", .panel = "registers", .parent = .debug },
+    .breakpoints = .{ .title = "Breakpoints", .panel = "breakpoints", .parent = .debug },
+    .timings = .{ .title = "Timings", .panel = "timings", .parent = .diagnostics },
+    .frames = .{ .title = "Frames", .panel = "frames", .parent = .diagnostics },
+    .memory_use = .{ .title = "Memory", .panel = "memory", .parent = .diagnostics },
+    .environment = .{ .title = "Environment", .panel = "environment", .parent = .diagnostics },
+    .hooks = .{ .title = "Hooks", .panel = "hooks", .parent = .diagnostics },
+    .claims = .{ .title = "Claims", .panel = "claims", .parent = .diagnostics },
+    .io = .{ .title = "IO", .panel = "file_io", .parent = .diagnostics },
 });
 
-/// Tabs with a few panels in them, so the dock's a few tabs and not a row of them.
+/// Tabs drawing more than one panel.
 pub const Groups = struct {
-    /// Comes to the front when something stops or a breakpoint's added.
-    debug: Group,
-    /// Comes to the front when a script runs.
+    /// Console and Sessions, split.
     scripts: Group,
-    diagnostics: Group,
 };
 
 pub const Options = struct {
@@ -187,7 +225,7 @@ const ui_scale = 1.0;
 const font_size = 15;
 const dockspace_name = "wraith.workbench";
 /// Bump when `defaultLayout` changes.
-const layout_version = "19";
+const layout_version = "20";
 
 allocator: std.mem.Allocator,
 io: ?std.Io,
@@ -215,6 +253,9 @@ starting_documents: usize = 0,
 tabs: Tabs = .{},
 /// Wraith's own in the slot.
 own: std.EnumArray(Own, ?*slots.Entry) = .initFill(null),
+/// Each kind of document, a tab of many of Wraith's own in the slot.
+doc_tabs: std.EnumArray(Kind, Documents.KindTab) = undefined,
+doc_entries: std.EnumArray(Kind, ?*slots.Entry) = .initFill(null),
 panels: Panels,
 groups: Groups,
 scripts: Scripts,
@@ -324,12 +365,11 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
     };
     const p = &self.panels;
     self.groups = .{
-        .debug = .init(.tabs, &.{ .of("Threads", &p.stopped), .of("Registers", &p.registers), .of("Breakpoints", &p.breakpoints) }),
-        .scripts = .init(.{ .split = .{ .ratio = 0.75 } }, &.{ .of("Console", &p.console), .of("Sessions", &p.sessions) }),
-        .diagnostics = .init(.tabs, &.{ .of("Timings", &p.timings), .of("Frames", &p.frames), .of("Memory", &p.memory), .of("Environment", &p.environment), .of("Hooks", &p.hooks), .of("Claims", &p.claims), .of("IO", &p.file_io) }),
+        .scripts = .init(.{ .ratio = 0.75 }, .{ .of("Console", &p.console), .of("Sessions", &p.sessions) }),
     };
     errdefer self.removeOwnTabs();
     inline for (comptime std.enums.values(Own)) |o| if (o != .classes) try self.addOwnTab(o);
+    try Documents.addKinds(self);
     self.tabs.sync();
     if (options.project) |project| {
         self.project = project;
@@ -350,20 +390,30 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*Workbench {
 
 fn addOwnTab(self: *Workbench, comptime o: Own) !void {
     if (self.own.get(o) != null) return;
+    const def = comptime own_tabs.get(o);
     const Draw = struct {
         fn draw(wb: *Workbench, _: slots.Target) void {
-            const name = @tagName(o);
-            if (@hasField(Panels, name)) @field(wb.panels, name).draw() else @field(wb.groups, name).draw();
+            if (def.panel.len > 0) @field(wb.panels, def.panel).draw() else wb.groups.scripts.draw();
         }
     };
-    const def = own_tabs.get(o);
+    const holds = def.panel.len == 0 and o != .scripts;
     const order: i32 = (@as(i32, @backingInt(o)) + 1) * 100;
-    self.own.set(o, try slots.addOwn(.{ .slot = .workbench, .id = @tagName(o), .title = def.title, .place = def.place, .order = order }, .{ .native = .of(self, Draw.draw) }));
+    self.own.set(o, try slots.addOwn(.{
+        .slot = .workbench,
+        .id = @tagName(o),
+        .title = def.title,
+        .place = def.place,
+        .order = order,
+        .parent = if (def.parent) |p| "wraith/" ++ @tagName(p) else "",
+        .parts = holds,
+    }, if (holds) .none else .{ .native = .of(self, Draw.draw) }));
 }
 
 fn removeOwnTabs(self: *Workbench) void {
     for (std.enums.values(Own)) |o| if (self.own.get(o)) |e| e.remove();
     self.own = .initFill(null);
+    for (std.enums.values(Kind)) |k| if (self.doc_entries.get(k)) |e| e.remove();
+    self.doc_entries = .initFill(null);
 }
 
 /// Its window, once `tabs` has it.
@@ -381,10 +431,9 @@ pub fn tabTitle(self: *const Workbench, o: Own) [:0]const u8 {
     return e.label;
 }
 
-/// Something to bring to the front: one of its tabs, a panel in one of its groups, or a kind of
-/// document, with an id for which one.
+/// Something to bring to the front: one of its tabs, one inside Debug or Diagnostics, Scripts' Console
+/// or Sessions, or a kind of document, with an id for which one.
 pub const Tag = enum {
-    // Its tabs, as `Own`
     search,
     addresses,
     names,
@@ -395,14 +444,9 @@ pub const Tag = enum {
     scripts,
     log,
     classes,
-    // In Debug
     threads,
     registers,
     breakpoints,
-    // In Scripts
-    console,
-    sessions,
-    // In Diagnostics
     timings,
     frames,
     memory_use,
@@ -410,6 +454,9 @@ pub const Tag = enum {
     hooks,
     claims,
     io,
+    // In Scripts, split
+    console,
+    sessions,
     // Documents
     code,
     memory,
@@ -420,33 +467,19 @@ pub const Tag = enum {
 
 pub const Target = struct { tag: Tag, id: ?u32 = null };
 
-const Part = struct { tab: Own, panel: *anyopaque };
-
-fn partOf(self: *Workbench, tag: Tag) ?Part {
-    const p = &self.panels;
+/// Its own tab, or one inside another, for a tag that isn't a document.
+fn ownOf(tag: Tag) ?Own {
     return switch (tag) {
-        .threads => .{ .tab = .debug, .panel = &p.stopped },
-        .registers => .{ .tab = .debug, .panel = &p.registers },
-        .breakpoints => .{ .tab = .debug, .panel = &p.breakpoints },
-        .console => .{ .tab = .scripts, .panel = &p.console },
-        .sessions => .{ .tab = .scripts, .panel = &p.sessions },
-        .timings => .{ .tab = .diagnostics, .panel = &p.timings },
-        .frames => .{ .tab = .diagnostics, .panel = &p.frames },
-        .memory_use => .{ .tab = .diagnostics, .panel = &p.memory },
-        .environment => .{ .tab = .diagnostics, .panel = &p.environment },
-        .hooks => .{ .tab = .diagnostics, .panel = &p.hooks },
-        .claims => .{ .tab = .diagnostics, .panel = &p.claims },
-        .io => .{ .tab = .diagnostics, .panel = &p.file_io },
-        else => null,
+        .console, .sessions => .scripts,
+        inline else => |t| if (@hasField(Own, @tagName(t))) @field(Own, @tagName(t)) else null,
     };
 }
 
-/// The tab it's in, for a tab or a panel in a group.
-fn tabOf(self: *Workbench, tag: Tag) ?Own {
-    if (self.partOf(tag)) |part| return part.tab;
-    return switch (tag) {
-        inline else => |t| if (@hasField(Own, @tagName(t))) @field(Own, @tagName(t)) else null,
-    };
+/// The one inside another, as its entry.
+fn partOf(self: *Workbench, tag: Tag) ?*slots.Entry {
+    const o = ownOf(tag) orelse return null;
+    if (own_tabs.get(o).parent == null) return null;
+    return self.own.get(o);
 }
 
 fn kindOf(tag: Tag) ?Kind {
@@ -478,19 +511,19 @@ fn documentFor(self: *Workbench, kind: Kind, id: ?u32) ?*Document {
     return null;
 }
 
-/// Its window: a tab's, the tab a panel's in, or a document's. Its thread.
+/// Its window: a tab's, the one a tab inside another's in, or a document's. Its thread.
 pub fn windowOf(self: *Workbench, target: Target) ?*ui.Window {
     if (kindOf(target.tag)) |kind| {
         const d = self.documentFor(kind, target.id) orelse return null;
         return d.window();
     }
-    const o = self.tabOf(target.tag) orelse return null;
-    const t = self.ownTab(o) orelse return null;
+    const o = ownOf(target.tag) orelse return null;
+    const t = self.ownTab(own_tabs.get(o).parent orelse o) orelse return null;
     return &t.window;
 }
 
-/// Brings it to the front, with the Workbench over everything else. A panel in a group comes to
-/// the front of its tab. Any thread; done next frame, and the newest one wins.
+/// Brings it to the front, with the Workbench over everything else. One inside another comes to its
+/// front. Any thread; done next frame, and the newest one wins.
 pub fn focus(self: *Workbench, tag: Tag, id: ?u32) void {
     // The tag plus one from bit 40, whether there's an id at bit 32, and the id
     const with_id: u64 = if (id) |n| (@as(u64, 1) << 32) | n else 0;
@@ -508,7 +541,7 @@ fn takeFocusRequest(self: *Workbench) void {
         .id = if (r & (@as(u64, 1) << 32) != 0) @truncate(r) else null,
     };
     if (target.tag == .classes) self.addOwnTab(.classes) catch {};
-    if (self.partOf(target.tag)) |part| self.groupOf(part.tab).select(part.panel);
+    self.select(target.tag);
     const w = self.windowOf(target) orelse return;
     w.focus();
     // Again once the window really has focus, since raising it can hand focus back to the old tab
@@ -517,45 +550,30 @@ fn takeFocusRequest(self: *Workbench) void {
     self.focus_for_stop = false;
 }
 
-/// Opens it without changing what's in front, so it's there to look at. A panel in a group comes to
-/// the front of its tab only if the tab was closed. Its thread.
+/// Opens it without changing what's in front, so it's there to look at. One inside another comes to
+/// its front only if that was closed. Its thread.
 pub fn show(self: *Workbench, tag: Tag, id: ?u32) void {
-    if (self.partOf(tag)) |part| if (!self.tabShown(part.tab)) self.groupOf(part.tab).select(part.panel);
     const w = self.windowOf(.{ .tag = tag, .id = id }) orelse return;
+    if (!w.open) self.select(tag);
     w.show();
 }
 
-/// Puts a panel at the front of its group's tab, from the next draw. Its thread.
+/// Brings one inside another to its front, from the next draw. Its thread.
 pub fn select(self: *Workbench, tag: Tag) void {
     const part = self.partOf(tag) orelse return;
-    self.groupOf(part.tab).select(part.panel);
+    self.tabs.select(part);
 }
 
-/// Open, and for a panel in a group, at the front of its tab as of the last frame. Its thread.
+/// Open, and for one inside another, at its front as of the last frame. Its thread.
 pub fn showing(self: *Workbench, tag: Tag, id: ?u32) bool {
+    if (self.partOf(tag)) |part| return self.tabs.showingPart(part);
     const w = self.windowOf(.{ .tag = tag, .id = id }) orelse return false;
-    if (!w.open) return false;
-    const part = self.partOf(tag) orelse return true;
-    return self.groupOf(part.tab).showing(part.panel);
+    return w.open;
 }
 
 /// Closes its tab or document. Its thread.
 pub fn hide(self: *Workbench, tag: Tag, id: ?u32) void {
     if (self.windowOf(.{ .tag = tag, .id = id })) |w| w.close();
-}
-
-fn tabShown(self: *Workbench, o: Own) bool {
-    const t = self.ownTab(o) orelse return false;
-    return t.window.open;
-}
-
-fn groupOf(self: *Workbench, o: Own) *Group {
-    return switch (o) {
-        .debug => &self.groups.debug,
-        .scripts => &self.groups.scripts,
-        .diagnostics => &self.groups.diagnostics,
-        else => unreachable,
-    };
 }
 
 /// Saves the layout and the address list. Waits for its thread.
@@ -799,7 +817,6 @@ pub fn draw(self: *Workbench) void {
     self.tabs.draw(.{ .ctx = self, .func = placeNode }, .{ .ctx = self, .func = withHost });
     self.dev_menus.drawWindows();
     self.own_file_focused = false;
-    for (self.documents.items) |d| Documents.draw(self, d);
     Documents.dropClosed(self);
     const memory_front = if (self.active_memory) |m| tuft_imgui.dock.inFront(m.window().title) else false;
     self.memory_in_front.store(on_screen and memory_front, .release);
@@ -890,11 +907,8 @@ fn defaultLayout(self: *Workbench, id: c.ImGuiID) void {
     var center = id;
     const left = tuft_imgui.dock.split(&center, .left, 0.22);
     const bottom = tuft_imgui.dock.split(&center, .down, 0.35);
-    // Along the top: Memory and Disassembly, the tabs there, like Schemas and plugins', then the other documents
-    const first = [_]Kind{ .memory, .code };
-    for (first) |kind| for (self.documents.items) |d| if (std.meta.activeTag(d.body) == kind) tuft_imgui.dock.window(d.window().title, center);
+    // In their order, which puts Memory and Disassembly first along the top, and new documents after plugins'
     for (self.tabs.list.items) |t| tuft_imgui.dock.window(t.window.title, if (t.place == .left) left else if (t.place == .bottom) bottom else center);
-    for (self.documents.items) |d| if (std.mem.indexOfScalar(Kind, &first, std.meta.activeTag(d.body)) == null) tuft_imgui.dock.window(d.window().title, center);
     tuft_imgui.dock.finish(id);
     self.document_dock = center;
     self.fronts_pending = 1;
@@ -933,12 +947,20 @@ fn drawMenuBar(self: *Workbench) void {
     if (ui.menu("View")) |menu| {
         defer menu.end();
         for (self.tabs.list.items) |t| {
+            // One of many isn't listed, but its kind has New below
+            if (t.id != null) continue;
             var buf: [64]u8 = undefined;
             const label = std.fmt.bufPrintSentinel(&buf, "{s}", .{t.window.label()}, 0) catch continue;
             var ticked = t.window.open;
             if (ui.menuItem(label, .{ .checked = &ticked })) {
                 if (ticked) t.window.focus() else t.window.close();
             }
+        }
+        if (self.tabs.kinds.items.len > 0) ui.separator();
+        for (self.tabs.kinds.items) |k| {
+            var buf: [80]u8 = undefined;
+            const label = std.fmt.bufPrintSentinel(&buf, "New {s}", .{k.title}, 0) catch continue;
+            if (ui.menuItem(label, .{})) self.tabs.newOne(k.key);
         }
         ui.separator();
         if (ui.menu("Plugin schemas")) |sub| {

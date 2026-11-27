@@ -23,6 +23,41 @@ struct Run {
     }
 };
 
+// The Notes tab, many at once, which the loader's tests call like the Workbench does
+struct Notes {
+    uint32_t made = 0;
+    uint32_t drawn = 0;
+    char id[2] = {};
+    char title[32] = {};
+
+    Wraith::WorkbenchTab::Info describe() const {
+        return {.title = sal::String::of("Notes"), .kind = sal::String::of("notes"), .place = Wraith::WorkbenchPanel_Place::bottom, .multi = true};
+    }
+    void draw(std::string_view) { drawn++; }
+    // "Note <id> drawn <draws>", not saved
+    Wraith::WorkbenchTab::State status(std::string_view of) {
+        size_t n = 0;
+        auto put = [&](std::string_view text) {
+            for (char ch : text) if (n < sizeof(title)) title[n++] = ch;
+        };
+        const char draws = static_cast<char>('0' + drawn % 10);
+        put("Note ");
+        put(of);
+        put(" drawn ");
+        put(std::string_view(&draws, 1));
+        return {.title = sal::String::of(std::string_view(title, n)), .unsaved = true};
+    }
+    std::string_view create() {
+        made++;
+        id[0] = static_cast<char>('0' + made % 10);
+        return std::string_view(id, 1);
+    }
+    // The first stays open
+    bool keepOpen(std::string_view of) const { return of == "1"; }
+};
+
+static Notes notes;
+
 struct Plugin {
     // What the fixture's service gave
     uint32_t got = 0;
@@ -76,7 +111,8 @@ struct Plugin {
             .fields = sal::Slice<Wraith::Tweaks::Field>::of(fields),
         };
         auto handler = sal::keep<Wraith::Tweaks::Handler>(Run{});
-        return wraith::api().tweaks().addIn("Test", definition, handler).ok();
+        if (!wraith::api().tweaks().addIn("Test", definition, handler).ok()) return false;
+        return wraith::api().ui().addWorkbenchTab(Wraith::WorkbenchTab::of(notes)).ok();
     }
 
     void stop() {}

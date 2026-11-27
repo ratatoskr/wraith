@@ -18,8 +18,9 @@ pub const usage =
     \\                                       engine, if given (see `games` for IDs)
     \\  mods install <id> [<version>]        install one (its newest, unless a version's given),
     \\                                       or update it, plus any mods it needs
-    \\  mods update                          update every installed one that has a newer version,
-    \\                                       and take out any the hub pulled
+    \\  mods update [<game.exe | game id>]   update every installed one that has a newer version,
+    \\                                       and take out any the hub pulled; only those that
+    \\                                       load in the game, if given
     \\  mods remove <id>                     take one out (only one installed from the hub)
 ;
 
@@ -87,6 +88,14 @@ fn gameMadeWith(ctx: ops.Context, arena: std.mem.Allocator, g: games.Game) !regi
     } };
 }
 
+/// One of your games, by its id.
+fn madeWithOf(ctx: ops.Context, arena: std.mem.Allocator, id: []const u8) !registry.mods.MadeWith {
+    for (ops.discover(ctx, arena) catch &.{}) |g| {
+        if (std.mem.eql(u8, g.id, id)) return gameMadeWith(ctx, arena, g);
+    }
+    return error.GameNotFound;
+}
+
 pub const Kept = struct {
     id: []const u8,
     title: []const u8,
@@ -107,12 +116,10 @@ pub const KeepOptions = struct {
 /// Installs or updates essential mods for your games and engines. Failures are logged, not fatal.
 pub fn keepEssentials(ctx: ops.Context, arena: std.mem.Allocator, options: KeepOptions) ![]const Kept {
     const w = try where(ctx, arena);
-    const made_with = if (options.game) |id| blk: {
-        const g = for (ops.discover(ctx, arena) catch &.{}) |g| {
-            if (std.mem.eql(u8, g.id, id)) break g;
-        } else return error.GameNotFound;
-        break :blk try arena.dupe(registry.mods.MadeWith, &.{try gameMadeWith(ctx, arena, g)});
-    } else (try yourGames(ctx, arena)).made_with;
+    const made_with = if (options.game) |id|
+        try arena.dupe(registry.mods.MadeWith, &.{try madeWithOf(ctx, arena, id)})
+    else
+        (try yourGames(ctx, arena)).made_with;
     const index = try w.index(arena, ctx.io);
     var kept: std.ArrayList(Kept) = .empty;
     for (try registry.mods.essentials(arena, ctx.io, index, w, made_with, null)) |e| {
@@ -139,10 +146,11 @@ pub fn remove(ctx: ops.Context, arena: std.mem.Allocator, id: []const u8) !void 
 
 pub const Updated = registry.mods.Updated;
 
-/// Failures get logged and the rest still update.
-pub fn updateAll(ctx: ops.Context, arena: std.mem.Allocator) ![]const Updated {
+/// Every installed one, or only those that load in `game`, by its id. Failures get logged and the rest still update.
+pub fn update(ctx: ops.Context, arena: std.mem.Allocator, game: ?[]const u8) ![]const Updated {
     const w = try where(ctx, arena);
-    return registry.mods.update(arena, ctx.io, try w.index(arena, ctx.io), w, null);
+    const only: registry.mods.Only = if (game) |id| .{ .game = try madeWithOf(ctx, arena, id) } else .all;
+    return registry.mods.update(arena, ctx.io, try w.index(arena, ctx.io), w, only);
 }
 
 pub fn run(ctx: ops.Context, args: anytype) !u8 {
@@ -162,7 +170,14 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
             _ = install(ctx, arena, id, args.next()) catch return 2;
         },
         .update => {
-            const updated = updateAll(ctx, arena) catch return 2;
+            const game = if (args.next()) |arg| gameIdOf(ctx, arena, arg) orelse {
+                log.err("Couldn't tell which game {s} is", .{arg});
+                return 2;
+            } else null;
+            const updated = update(ctx, arena, game) catch |err| {
+                if (err == error.GameNotFound) log.err("{s} isn't one of your games (see `games`)", .{game.?});
+                return 2;
+            };
             log.info("{d} mod(s) updated or taken out", .{updated.len});
         },
         .remove => {

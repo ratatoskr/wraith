@@ -1,6 +1,7 @@
 //! A Rust plugin for the loader's tests, built with cargo over what `wraith sdk rust types` writes.
 //! Its tweak `rust_fixture:count` fails when `step` is 0.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use salamander::{Code, Object, Slice, Str};
@@ -47,6 +48,56 @@ impl schema::RustServiceImpl for Service {
 
 static SERVICE: Service = Service;
 
+// The Notes tab, many at once, which the loader's tests call like the Workbench does
+struct Notes {
+    made: AtomicU32,
+    drawn: AtomicU32,
+    title: Mutex<String>,
+}
+
+impl wraith::WorkbenchTabImpl for Notes {
+    fn describe(&self) -> wraith::WorkbenchTabInfo {
+        wraith::WorkbenchTabInfo {
+            title: Str::new("Notes"),
+            kind: Str::new("notes"),
+            place: wraith::WorkbenchPanelPlace::BOTTOM,
+            multi: true,
+            ..unsafe { std::mem::zeroed() }
+        }
+    }
+
+    fn draw(&self, _id: &str) {
+        self.drawn.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // "Note <id> drawn <draws>", not saved. The title lasts till the next one
+    fn status(&self, id: &str) -> wraith::WorkbenchTabState {
+        let mut title = self.title.lock().unwrap();
+        *title = format!("Note {id} drawn {}", self.drawn.load(Ordering::Relaxed));
+        wraith::WorkbenchTabState {
+            title: Str::new(&title),
+            unsaved: true,
+            ..unsafe { std::mem::zeroed() }
+        }
+    }
+
+    fn create(&self) -> &str {
+        const IDS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        IDS[(self.made.fetch_add(1, Ordering::Relaxed) as usize + 1) % 10]
+    }
+
+    // The first stays open
+    fn keep_open(&self, id: &str) -> bool {
+        id == "1"
+    }
+}
+
+static NOTES: Notes = Notes {
+    made: AtomicU32::new(0),
+    drawn: AtomicU32::new(0),
+    title: Mutex::new(String::new()),
+};
+
 static FIELDS: [TweaksField; 1] = [TweaksField {
     name: Str::new("step"),
     r#type: TweaksFieldType::U32,
@@ -84,6 +135,10 @@ impl wraith::Plugin for Fixture {
         wraith::api()
             .tweaks()
             .add_in("Test", definition, handler)
+            .ok()?;
+        wraith::api()
+            .ui()
+            .add_workbench_tab(wraith::WorkbenchTab::from_static(&NOTES))
             .ok()?;
         Some(Fixture)
     }

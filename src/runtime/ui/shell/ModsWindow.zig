@@ -668,7 +668,7 @@ fn updateOne(self: *ModsWindow, io: std.Io, loader: *PluginLoader, scratch: std.
     self.setDoing(io, "Updating {s}...", .{id});
     const was_on = isState(loader, id, .loaded);
     if (was_on) unloadNow(self, io, loader, id);
-    const updated = registry.mods.update(scratch, io, hub.index, hub.where, id) catch |err| blk: {
+    const updated = registry.mods.update(scratch, io, hub.index, hub.where, .{ .id = id }) catch |err| blk: {
         self.failed(io, "Couldn't update {s}: {t}", .{ id, err });
         break :blk &.{};
     };

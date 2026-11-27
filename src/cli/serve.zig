@@ -18,7 +18,7 @@ const game_engine = games.game_engine;
 const log = core.log.scoped(.wraith_cli);
 
 /// Bump when a message change would break an older launcher.
-pub const protocol = 3;
+pub const protocol = 4;
 
 pub const Method = enum { processes, anticheat, inspect, identify, games, game_add, game_remove, executables, mods, mod_install, mod_remove, mod_update, mod_essentials, install, uninstall, inject, launch, watch, play, dev_list, dev_add, dev_set, dev_remove, cancel };
 
@@ -274,7 +274,10 @@ const Call = struct {
                 try mods.remove(ctx, self.arena.allocator(), p.id);
                 self.reply(@as(struct {}, .{}));
             },
-            .mod_update => self.reply(.{ .updated = try mods.updateAll(ctx, self.arena.allocator()) }),
+            .mod_update => {
+                const p = try self.params(struct { game: ?[]const u8 = null });
+                self.reply(.{ .updated = try mods.update(ctx, self.arena.allocator(), p.game) });
+            },
             .mod_essentials => {
                 const p = try self.params(mods.KeepOptions);
                 self.reply(.{ .kept = try mods.keepEssentials(ctx, self.arena.allocator(), p) });

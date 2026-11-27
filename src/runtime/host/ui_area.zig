@@ -387,35 +387,106 @@ pub const UiImpl = struct {
         };
         var id_buf: [128]u8 = undefined;
         const id = tabId(&id_buf, options);
-        const e = host.slots.add(loaded, .{ .slot = .workbench, .id = id, .title = options.title, .place = options.place, .order = if (options.order == 0) after_own_tabs else options.order }, .{ .panel = draw }) catch return .{};
+        var parent_buf: [160]u8 = undefined;
+        const e = host.slots.add(loaded, .{
+            .slot = .workbench,
+            .id = id,
+            .title = options.title,
+            .place = options.place,
+            .order = if (options.order == 0) after_own_tabs else options.order,
+            .parent = parentKey(&parent_buf, loaded.name, options.parent),
+        }, .{ .panel = draw }) catch return .{};
         return .init(e, t.workbench_panel);
     }
 
+    /// Wraith's, then plugins' own.
     pub fn slots(_: *Loaded) []const W.Slot.Info {
-        return host.slots.infos(@import("scratch.zig").begin()) catch &.{};
+        const a = @import("scratch.zig").begin();
+        const own = host.slots.infos(a) catch return &.{};
+        const plugins = host.plugin_slots.infos(a) catch return own;
+        return std.mem.concat(a, W.Slot.Info, &.{ own, plugins }) catch own;
     }
 
-    pub fn contribute(loaded: *Loaded, placement: W.Slot.Placement, draw: W.Contribution.Draw) sal.Plain(Ui, "contribute") {
+    pub fn defineSlot(loaded: *Loaded, definition: W.Slot.Definition) sal.Plain(Ui, "defineSlot") {
+        const t = wraith.tablesOf(loaded) orelse return error.Failed;
+        const d = host.plugin_slots.define(loaded, definition) catch |err| return slotError(err, definition.id);
+        return .init(d, t.plugin_slot);
+    }
+
+    pub fn contributeTo(loaded: *Loaded, slot: []const u8, contribution: sal.AnyObject) sal.Plain(Ui, "contributeTo") {
         const t = wraith.tablesOf(loaded) orelse {
-            draw.release();
+            sal.host().release(contribution);
             return error.Failed;
         };
-        const slot = host.slots.Slot.byId(placement.slot) orelse {
-            draw.release();
-            return error.UnknownSlot;
+        if (host.slots.Slot.byId(slot)) |own| return contributeOwn(loaded, t, own, contribution);
+        const a = host.plugin_slots.contribute(loaded, slot, contribution) catch |err| return slotError(err, slot);
+        return .init(a, t.plugin_contribution);
+    }
+
+    /// One of Wraith's slots, from what the object says it is.
+    fn contributeOwn(loaded: *Loaded, t: *wraith.Tables, slot: host.slots.Slot, obj: sal.AnyObject) sal.Plain(Ui, "contributeTo") {
+        const table = obj.table orelse return error.WrongTrait;
+        const trait = slot.def().trait;
+        if (!std.mem.eql(u8, sal.headerOf(table).info.name.get(), trait)) {
+            sal.host().release(obj);
+            return sal.host().explain(error.WrongTrait, "{s} takes a {s}; a script names it with salamander.implement", .{ slot.def().id, trait });
+        }
+        switch (slot) {
+            .workbench => return UiImpl.addWorkbenchTab(loaded, obj.as(W.WorkbenchTab)),
+            .settings => {
+                const section = sal.host().adapt(W.SettingsSection, obj);
+                const info = section.describe();
+                const e = try host.slots.add(loaded, .{
+                    .slot = .settings,
+                    .id = info.id,
+                    .title = info.title,
+                    .presentation = info.presentation,
+                    .order = info.order,
+                    .open = info.open,
+                }, .{ .settings = section });
+                return .init(e, t.contribution);
+            },
+            else => {
+                const part = sal.host().adapt(W.PhotoPart, obj);
+                const info = part.describe();
+                const e = try host.slots.add(loaded, .{
+                    .slot = slot,
+                    .id = info.id,
+                    .title = info.title,
+                    .icon = info.icon,
+                    .parent = info.parent,
+                    .kind = info.kind,
+                    .node = info.node,
+                    .presentation = info.presentation,
+                    .order = info.order,
+                    .open = info.open,
+                }, .{ .photo = part });
+                return .init(e, t.contribution);
+            },
+        }
+    }
+
+    pub fn addWorkbenchTab(loaded: *Loaded, tab: W.WorkbenchTab) sal.Plain(Ui, "addWorkbenchTab") {
+        const t = wraith.tablesOf(loaded) orelse {
+            tab.release();
+            return error.Failed;
         };
-        const e = try host.slots.add(loaded, .{
-            .slot = slot,
-            .id = placement.id,
-            .title = placement.title,
-            .icon = placement.icon,
-            .parent = placement.parent,
-            .kind = placement.kind,
-            .node = placement.node,
-            .presentation = placement.presentation,
-            .order = placement.order,
-            .open = placement.open,
-        }, .{ .plugin = draw });
+        // Laid out for this build's trait, if the plugin's was made for another
+        const adapted = sal.host().adapt(W.WorkbenchTab, tab);
+        const info = adapted.describe();
+        var id_buf: [128]u8 = undefined;
+        var parent_buf: [160]u8 = undefined;
+        const e = host.slots.add(loaded, .{
+            .slot = .workbench,
+            .id = tabId(&id_buf, .{ .title = info.title, .kind = info.kind }),
+            .title = info.title,
+            .place = info.place,
+            .order = if (info.order == 0) after_own_tabs else info.order,
+            .multi = info.multi,
+            .parts = info.parts,
+            // One of many has a window each
+            .parent = if (info.multi) "" else parentKey(&parent_buf, loaded.name, info.parent),
+        }, .{ .tab = adapted }) catch |err| return err;
         return .init(e, t.contribution);
     }
 
@@ -439,9 +510,22 @@ pub const ContributionImpl = struct {
     pub fn remove(e: *Entry) void {
         e.remove();
     }
+
+    pub fn open(e: *Entry, id: []const u8) void {
+        e.request(true, id);
+    }
+
+    pub fn close(e: *Entry, id: []const u8) void {
+        e.request(false, id);
+    }
 };
 
-pub const WorkbenchPanelImpl = ContributionImpl;
+pub const WorkbenchPanelImpl = struct {
+    const Entry = host.slots.Entry;
+    pub const isOpen = ContributionImpl.isOpen;
+    pub const focus = ContributionImpl.focus;
+    pub const remove = ContributionImpl.remove;
+};
 
 /// A plugin's Settings button in the Mods window and under its button on the bar.
 const SettingsHandler = struct {
@@ -556,6 +640,23 @@ pub const GizmoImpl = struct {
 
 /// Where a tab's order of 0 puts it: after Wraith's own, which are 100 apart from 100.
 const after_own_tabs = 10_000;
+
+/// Says why, for plugins' slots.
+fn slotError(err: host.plugin_slots.Error, slot: []const u8) W.SlotError {
+    return switch (err) {
+        error.UnknownSlot => sal.host().explain(error.UnknownSlot, "no plugin's defined a slot {s}", .{slot}),
+        error.WrongTrait => sal.host().explain(error.WrongTrait, "that isn't the trait slot {s} takes; a script names it with salamander.implement", .{slot}),
+        error.AlreadyAdded => sal.host().explain(error.AlreadyAdded, "there's a slot {s} already", .{slot}),
+        error.InvalidId => error.InvalidId,
+        error.Failed => error.Failed,
+    };
+}
+
+/// A tab's `parent` as `plugin/kind`: a bare kind is the plugin's own.
+fn parentKey(buf: []u8, plugin: []const u8, parent: []const u8) []const u8 {
+    if (parent.len == 0 or std.mem.indexOfScalar(u8, parent, '/') != null) return parent;
+    return std.fmt.bufPrint(buf, "{s}/{s}", .{ plugin, parent }) catch parent;
+}
 
 /// `kind/id`, or the title for an empty kind, as a slot id: what it can't have becomes `_`.
 fn tabId(buf: []u8, options: W.WorkbenchPanel.Options) []const u8 {

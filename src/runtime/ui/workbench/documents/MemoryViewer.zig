@@ -12,7 +12,8 @@ const ui = @import("wraith_ui");
 const Workbench = @import("../Workbench.zig");
 const Versions = @import("Versions.zig");
 
-window: ui.Window = .{ .title = "Memory viewer", .size = .{ 900, 480 }, .min_size = .{ 560, 260 } },
+/// Its tab's, which the Workbench's tabs keep.
+window: *ui.Window = undefined,
 wb: *Workbench,
 bar: devtools.AddressBar = .{ .symbols = Names.global_symbols, .memory = .local },
 hex: devtools.HexView = .{ .memory = .local, .claims = .local },

@@ -36,7 +36,8 @@ const example_lua =
     \\timers.setInterval(function() print("frames:", frames) end, 1000)
 ;
 
-window: ui.Window = .{ .title = "Script" },
+/// Its tab's, which the Workbench's tabs keep.
+window: *ui.Window = undefined,
 wb: *Workbench,
 session: u32 = 0,
 code: ?[:0]u8 = null,

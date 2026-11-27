@@ -37,7 +37,51 @@ namespace WorkbenchPanel {
         Place place;
         // Lower comes first among tabs in the same place. Wraith's own are 100 apart, from 100, and 0 is after them
         i32 order;
+        // Inside another tab, as one of its tabs: its kind for one of the plugin's own, like `ffxiv`, else
+        // `plugin/kind`, like `wraith/debug`. Empty for one of its own
+        string parent;
     }
+}
+
+namespace WorkbenchTab {
+    struct Info {
+        // Its tab's label. For `multi`, what View's New item makes, and each one's label till `status` says
+        string title;
+        // What it is, like `sheets`. How Wraith remembers where it was moved, with each one's id. Empty uses the title
+        string kind;
+        WorkbenchPanel.Place place;
+        // Lower comes first among tabs in the same place. Wraith's own are 100 apart, from 100, and 0 is after them
+        i32 order;
+        // Several at once, each with an id, and View has New for another. Else one, which View lists
+        bool multi;
+        // Inside another tab, as `WorkbenchPanel.Options.parent` says. Not with `multi`
+        string parent;
+        // Holds the tabs that name it as their `parent`, as tabs inside it, and isn't drawn itself
+        bool parts;
+    }
+
+    struct State {
+        // Its tab's label, which can change. Empty keeps the one before
+        string title;
+        // A dot on its tab, like for a file not saved
+        bool unsaved;
+    }
+}
+
+// A tab in the Workbench, or a kind of them, from `Ui.addWorkbenchTab`. All on the Workbench's thread. `id`
+// is empty unless it's `multi`. Only `describe` and `draw` are needed; without the rest, it has no New, keeps
+// its label and closes when asked.
+trait WorkbenchTab {
+    // Asked once, as it's added
+    WorkbenchTab.Info describe();
+    void draw(string id);
+    // Asked each frame it shows
+    WorkbenchTab.State status(string id);
+    // For `multi`, from View's New: a new one's id, or empty for none
+    string create();
+    // Its close button was pressed. True keeps it open, like to ask about saving first, then
+    // `Contribution.close` it. For `multi`, a closed one's gone; else it comes back from View
+    bool keepOpen(string id);
 }
 
 // A panel of the plugin's in the Workbench.
@@ -208,10 +252,9 @@ trait Ui {
 
     // Wraith's own UI
 
-    // Where a plugin can add to Wraith's UI, and what each place takes. Any thread.
+    // Where a plugin can add to Wraith's UI, plugins' own slots too, and what each takes. Any thread.
     []Slot.Info slots();
-    // Adds `draw` to a slot, placed as `placement` says. Gone with the plugin. Any thread.
-    Contribution!SlotError contribute(Slot.Placement placement, keep Contribution.Draw draw);
+
     // Drawn by `draw` while open; close, Esc, menu entry and Settings button all just work. Gone with
     // the plugin. Any thread.
     Window addWindow(Window.Options options, keep Window.Draw draw);
@@ -227,6 +270,18 @@ trait Ui {
     // tabs inside it, draw them with ImGui's tab bars. Gone with the plugin. Any thread. The same as
     // contributing to the `workbench` slot, with `kind/id` as its id
     WorkbenchPanel addWorkbenchPanel(WorkbenchPanel.Options options, keep WorkbenchPanel.Draw draw);
+    // A tab, or a kind of them, that `tab` draws and says more about, like several at once. In the
+    // `workbench` slot. Gone with the plugin. Any thread.
+    Contribution!SlotError addWorkbenchTab(keep WorkbenchTab tab);
+
+    // Adds `contribution` to a slot, an object of the trait its `Slot.Info` says: `PhotoPart` for Photo
+    // mode's, `SettingsSection` for `settings`, `WorkbenchTab` for `workbench`, or a plugin slot's own.
+    // A script names its trait first, like `salamander.implement("Wraith.PhotoPart", obj)`. Gone with
+    // the plugin. Any thread
+    Contribution!SlotError contributeTo(string slot, keep object contribution);
+    // A slot of the plugin's own, `plugin.id` to others, which they add objects of its trait to with
+    // `contributeTo`. Any thread
+    Slot!SlotError defineSlot(Slot.Definition definition);
     // Opens the Workbench's Classes on a C# class by full name. Any thread.
     void showClass(string class_name);
 

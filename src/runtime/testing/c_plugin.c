@@ -40,6 +40,72 @@ static uint32_t total(uintptr_t self) {
 
 static const CFixture_CService_table service_table = { SAL_TABLE(CFixture_CService), .total = total };
 
+/* The Notes tab, many at once, which the loader's tests call like the Workbench does */
+static uint32_t notes_made;
+static uint32_t notes_drawn;
+static char notes_id[2];
+static char notes_title[32];
+
+static Wraith_WorkbenchTab_Info notes_describe(uintptr_t self) {
+    (void)self;
+    Wraith_WorkbenchTab_Info info = { .title = SAL_STR_INIT("Notes"), .kind = SAL_STR_INIT("notes"), .place = Wraith_WorkbenchPanel_Place_bottom, .multi = true };
+    return info;
+}
+
+static void notes_draw(uintptr_t self, sal_string id) {
+    (void)self;
+    (void)id;
+    notes_drawn++;
+}
+
+static void notes_put(size_t *n, const char *text, uintptr_t len) {
+    for (uintptr_t i = 0; i < len && *n < sizeof(notes_title); i++) notes_title[(*n)++] = text[i];
+}
+
+/* "Note <id> drawn <draws>", not saved */
+static Wraith_WorkbenchTab_State notes_status(uintptr_t self, sal_string id) {
+    (void)self;
+    size_t n = 0;
+    char draws = (char)('0' + notes_drawn % 10);
+    notes_put(&n, "Note ", 5);
+    notes_put(&n, id.ptr, id.len);
+    notes_put(&n, " drawn ", 7);
+    notes_put(&n, &draws, 1);
+    Wraith_WorkbenchTab_State state = { .title = { notes_title, n }, .unsaved = true };
+    return state;
+}
+
+static sal_string notes_create(uintptr_t self) {
+    (void)self;
+    notes_made++;
+    notes_id[0] = (char)('0' + notes_made % 10);
+    sal_string id = { notes_id, 1 };
+    return id;
+}
+
+/* The first stays open */
+static bool notes_keep_open(uintptr_t self, sal_string id) {
+    (void)self;
+    return id.len == 1 && id.ptr[0] == '1';
+}
+
+static const Wraith_WorkbenchTab_table notes_table = {
+    SAL_TABLE(Wraith_WorkbenchTab),
+    .describe = notes_describe,
+    .draw = notes_draw,
+    .status = notes_status,
+    .create = notes_create,
+    .keepOpen = notes_keep_open,
+};
+
+/* A counter for the fixture's `counters` slot, which only has one when the fixture's loaded */
+static uint32_t nine(uintptr_t self) {
+    (void)self;
+    return 9;
+}
+
+static const Fixture_FixtureCounter_table counter_table = { SAL_TABLE(Fixture_FixtureCounter), .next = nine };
+
 static sal_Host host_;
 static sal_Owner *owner_;
 
@@ -72,7 +138,15 @@ static bool start(sal_Host host, wraith_Guest guest) {
         .fields = { fields, 1 },
     };
     Wraith_Tweaks_Handler handler = { (uintptr_t)&count, &run_table };
-    return Wraith_Tweaks_addIn(Wraith_Api_tweaks(w), SAL_STR("Test"), definition, handler) == SAL_OK;
+    if (Wraith_Tweaks_addIn(Wraith_Api_tweaks(w), SAL_STR("Test"), definition, handler) != SAL_OK) return false;
+
+    sal_object counting = { 0, &counter_table };
+    Wraith_Contribution counted;
+    (void)Wraith_Ui_contributeTo(Wraith_Api_ui(w), SAL_STR("fixture.counters"), counting, &counted);
+
+    Wraith_WorkbenchTab notes = { 0, &notes_table };
+    Wraith_Contribution tab;
+    return Wraith_Ui_addWorkbenchTab(Wraith_Api_ui(w), notes, &tab) == SAL_OK;
 }
 
 static void stop(void) {}

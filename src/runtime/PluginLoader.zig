@@ -243,6 +243,85 @@ const tests = struct {
 
     const Install = @import("testing/Install.zig");
 
+    /// What each language's fixture's Notes tab gives, called the way the Workbench calls it.
+    const Notes = struct {
+        made: [2][4]u8 = undefined,
+        made_len: [2]usize = .{ 0, 0 },
+        title: [32]u8 = undefined,
+        title_len: usize = 0,
+        unsaved: bool = false,
+        keeps_first: bool = false,
+        keeps_second: bool = true,
+
+        fn run(self: *Notes, tab: @import("wraith_api").wraith.WorkbenchTab) void {
+            for (&self.made, &self.made_len) |*buf, *len| {
+                const id = tab.create();
+                len.* = @min(id.len, buf.len);
+                @memcpy(buf[0..len.*], id[0..len.*]);
+            }
+            tab.draw("2");
+            const state = tab.status("2");
+            self.title_len = @min(state.title.len, self.title.len);
+            @memcpy(self.title[0..self.title_len], state.title[0..self.title_len]);
+            self.unsaved = state.unsaved;
+            self.keeps_first = tab.keepOpen("1");
+            self.keeps_second = tab.keepOpen("2");
+        }
+    };
+
+    /// `plugin`'s Plain tab, which only has `describe` and `draw`, so the rest give what a missing one does.
+    fn expectPlainTab(plugin: []const u8) !void {
+        const slots = @import("host/slots.zig");
+        var held = slots.take(.workbench);
+        defer held.end();
+        const e = for (held.items()) |x| {
+            if (!x.own and std.mem.eql(u8, x.loaded.name, plugin) and std.mem.eql(u8, x.title, "Plain")) break x;
+        } else return error.NoPlainTab;
+        try testing.expect(!e.multi);
+        const Asked = struct {
+            title_len: usize = 99,
+            unsaved: bool = true,
+            made_len: usize = 99,
+            keeps: bool = true,
+
+            fn run(self: *@This(), tab: @import("wraith_api").wraith.WorkbenchTab) void {
+                tab.draw("");
+                const state = tab.status("");
+                self.title_len = state.title.len;
+                self.unsaved = state.unsaved;
+                self.made_len = tab.create().len;
+                self.keeps = tab.keepOpen("");
+            }
+        };
+        var asked: Asked = .{};
+        slots.callTab(e, &asked, Asked.run);
+        try testing.expectEqual(0, asked.title_len);
+        try testing.expect(!asked.unsaved);
+        try testing.expectEqual(0, asked.made_len);
+        try testing.expect(!asked.keeps);
+    }
+
+    /// `plugin`'s Notes tab: many, at the bottom, each made by New, drawn, labelled, and the first kept open.
+    fn expectNotesTab(plugin: []const u8) !void {
+        const slots = @import("host/slots.zig");
+        var held = slots.take(.workbench);
+        defer held.end();
+        const e = for (held.items()) |x| {
+            if (!x.own and std.mem.eql(u8, x.loaded.name, plugin)) break x;
+        } else return error.NoNotesTab;
+        try testing.expect(e.multi);
+        try testing.expectEqualStrings("Notes", e.title);
+        try testing.expectEqual(.bottom, e.place);
+        var notes: Notes = .{};
+        slots.callTab(e, &notes, Notes.run);
+        try testing.expectEqualStrings("1", notes.made[0][0..notes.made_len[0]]);
+        try testing.expectEqualStrings("2", notes.made[1][0..notes.made_len[1]]);
+        try testing.expectEqualStrings("Note 2 drawn 1", notes.title[0..notes.title_len]);
+        try testing.expect(notes.unsaved);
+        try testing.expect(notes.keeps_first);
+        try testing.expect(!notes.keeps_second);
+    }
+
     test "list shows every plugin" {
         const options = @import("test_options");
         var install: Install = undefined;
@@ -256,6 +335,7 @@ const tests = struct {
         try testing.expectEqualStrings(loader.find("fixture").?.copy_dir, loaded.copy_dir.get());
         try testing.expect(std.mem.endsWith(u8, loaded.source_dir.get(), "fixture"));
         try testing.expect(loaded.library != 0);
+        try expectNotesTab("fixture");
 
         // Jobs run in order, so waiting on the last waits for all
         _ = try loader.unload("fixture");
@@ -296,6 +376,8 @@ const tests = struct {
         try testing.expect(problem.message().len > 0);
         try testing.expectEqual(3, countNow());
 
+        try expectNotesTab("c_fixture");
+
         try (try loader.unload("c_fixture")).wait();
         try testing.expectEqual(.gone, tweaks.call("c_fixture:count", .{ .kind = .on }, &problem));
     }
@@ -335,6 +417,14 @@ const tests = struct {
         // The fixture's second `next`, through C to Lua
         try testing.expectEqual(2, out.n);
         try testing.expectEqual(1, loader.find("c_fixture").?.services.items.len);
+        // The C one's counter, in the fixture's slot, as the fixture sees it
+        const counters = host.plugin_slots.byId("fixture.counters") orelse return error.NoSlot;
+        const held = host.plugin_slots.contributions(counters);
+        try testing.expectEqual(1, held.len);
+        const Counter = @import("wraith_test_fixture").FixtureCounter;
+        try testing.expectEqual(9, @import("salamander_runtime").host().adapt(Counter, held[0]).next());
+        try (try loader.unload("c_fixture")).wait();
+        try testing.expectEqual(0, host.plugin_slots.contributions(counters).len);
     }
 
     test "a C++ plugin starts, its kept tweak runs and fails like any, and goes when it unloads" {
@@ -358,6 +448,8 @@ const tests = struct {
         _ = tweaks.call("cpp_fixture:count", .{ .kind = .changed, .field = "step", .value = 0 }, &problem);
         try testing.expectEqual(.failed, tweaks.call("cpp_fixture:count", .{ .kind = .on }, &problem));
         try testing.expectEqual(3, countNow());
+
+        try expectNotesTab("cpp_fixture");
 
         try (try loader.unload("cpp_fixture")).wait();
         try testing.expectEqual(.gone, tweaks.call("cpp_fixture:count", .{ .kind = .on }, &problem));
@@ -430,6 +522,8 @@ const tests = struct {
         _ = tweaks.call("rust_fixture:count", .{ .kind = .changed, .field = "step", .value = 0 }, &problem);
         try testing.expectEqual(.failed, tweaks.call("rust_fixture:count", .{ .kind = .on }, &problem));
         try testing.expectEqual(3, countNow());
+
+        try expectNotesTab("rust_fixture");
 
         try (try loader.unload("rust_fixture")).wait();
         try testing.expectEqual(.gone, tweaks.call("rust_fixture:count", .{ .kind = .on }, &problem));
@@ -515,6 +609,190 @@ const tests = struct {
 
         try testing.expectEqual(.loaded, install.info("fixture").?.state);
         try testing.expectEqual(.failed, install.info("guest").?.state);
+    }
+
+    test "script plugins add Workbench tabs of their own, many at once" {
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        var install: Install = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const files = [_]struct { []const u8, []const u8, []const u8, []const u8 }{
+            .{
+                "notes_js", "js", "main.js",
+                \\import { Wraith } from "wraith";
+                \\let made = 0, drawn = 0;
+                \\Wraith.ui().addWorkbenchTab({
+                \\    describe() { return { title: "Notes", kind: "notes", place: "bottom", order: 0, multi: true }; },
+                \\    draw(id) { drawn++; },
+                \\    status(id) { return { title: `Note ${id} drawn ${drawn}`, unsaved: true }; },
+                \\    create() { return String(++made); },
+                \\    keepOpen(id) { return id === "1"; },
+                \\});
+            },
+            .{
+                "notes_lua", "lua", "main.lua",
+                \\local Wraith = require("wraith").Wraith
+                \\local made, drawn = 0, 0
+                \\local Notes = {}
+                \\function Notes:describe() return { title = "Notes", kind = "notes", place = "bottom", order = 0, multi = true } end
+                \\function Notes:draw(id) drawn = drawn + 1 end
+                \\function Notes:status(id) return { title = "Note " .. id .. " drawn " .. drawn, unsaved = true } end
+                \\function Notes:create() made = made + 1 return tostring(made) end
+                \\function Notes:keepOpen(id) return id == "1" end
+                \\Wraith.ui():addWorkbenchTab(Notes)
+            },
+        };
+        for (files) |f| {
+            try install.addScript(f[0], f[1]);
+            const path = try std.fmt.allocPrint(testing.allocator, "plugins/{s}/{s}", .{ f[0], f[2] });
+            defer testing.allocator.free(path);
+            try install.tmp.dir.writeFile(testing.io, .{ .sub_path = path, .data = f[3] });
+        }
+        try install.loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("notes_js").?.state);
+        try testing.expectEqual(.loaded, install.info("notes_lua").?.state);
+        try expectNotesTab("notes_js");
+        try expectNotesTab("notes_lua");
+    }
+
+    test "plugins define slots taking a trait of theirs, which others add to in any language" {
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        host.frame.setFrames(true);
+        defer host.frame.setFrames(false);
+        const Out = extern struct { count: u32 = 0, js: u32 = 0, lua: u32 = 0, wrong: u32 = 0 };
+        var out: Out = .{};
+
+        var install: Install = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const io = testing.io;
+        try install.addScript("viewer_host", "lua");
+        try install.tmp.dir.createDirPath(io, "plugins/viewer_host/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/viewer_host/schemas/viewer.sal", .data = "trait Viewer { string name(); }\nstruct Out { u32 count; u32 js; u32 lua; u32 wrong; }" });
+        // Each frame, what's in its slot, as Viewers
+        const owner = try std.fmt.allocPrint(testing.allocator,
+            \\local wraith = require("wraith")
+            \\local sal = require("salamander")
+            \\local slot = wraith.Wraith.ui():defineSlot({{ id = "viewers", title = "Viewers", help = "Shows a sheet", trait = "ViewerHost.Viewer" }})
+            \\local out = wraith.ViewerHost.Out.at({d})
+            \\wraith.Wraith.threads():onDraw(function()
+            \\  local n, js, lua = 0, 0, 0
+            \\  for _, o in ipairs(slot:contributions()) do
+            \\    local name = sal.as("ViewerHost.Viewer", o):name()
+            \\    n = n + 1
+            \\    if name == "js" then js = js + 1 end
+            \\    if name == "lua" then lua = lua + 1 end
+            \\  end
+            \\  out.count, out.js, out.lua = n, js, lua
+            \\end)
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(owner);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/viewer_host/main.lua", .data = owner });
+
+        try install.tmp.dir.createDirPath(io, "plugins/viewer_js");
+        try install.pluginManifest("viewer_js", "\"provider\": \"js\", \"depends\": [\"viewer_host\"]");
+        // Another trait isn't taken
+        const js = try std.fmt.allocPrint(testing.allocator,
+            \\import {{ Wraith, ViewerHost }} from "wraith";
+            \\import {{ implement }} from "salamander";
+            \\Wraith.ui().contributeTo("viewer_host.viewers", implement("ViewerHost.Viewer", {{ name() {{ return "js"; }} }}));
+            \\try {{ Wraith.ui().contributeTo("viewer_host.viewers", implement("Wraith.WorkbenchTab", {{}})); }}
+            \\catch (e) {{ ViewerHost.Out.at({d}).wrong = 1; }}
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(js);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/viewer_js/main.js", .data = js });
+
+        try install.tmp.dir.createDirPath(io, "plugins/viewer_lua");
+        try install.pluginManifest("viewer_lua", "\"provider\": \"lua\", \"depends\": [\"viewer_host\"]");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/viewer_lua/main.lua", .data =
+            \\local Wraith = require("wraith").Wraith
+            \\local sal = require("salamander")
+            \\Wraith.ui():contributeTo("viewer_host.viewers", sal.implement("ViewerHost.Viewer", { name = function(self) return "lua" end }))
+        });
+
+        const loader = &install.loader;
+        try loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("viewer_host").?.state);
+        try testing.expectEqual(.loaded, install.info("viewer_js").?.state);
+        try testing.expectEqual(.loaded, install.info("viewer_lua").?.state);
+        host.frame.run();
+        try testing.expectEqual(Out{ .count = 2, .js = 1, .lua = 1, .wrong = 1 }, out);
+
+        // It's listed with Wraith's own
+        const listed = for (@import("host/ui_area.zig").UiImpl.slots(loader.find("viewer_lua").?)) |info| {
+            if (std.mem.eql(u8, info.id, "viewer_host.viewers")) break true;
+        } else false;
+        try testing.expect(listed);
+
+        // What a plugin added goes with it
+        try (try loader.unload("viewer_js")).wait();
+        host.frame.run();
+        try testing.expectEqual(1, out.count);
+        try testing.expectEqual(0, out.js);
+    }
+
+    test "script plugins add to Wraith's slots, like Photo mode's, with objects of their traits" {
+        const host = @import("host/root.zig");
+        host.wraith.setIo(testing.io);
+        defer host.wraith.setIo(null);
+        const Out = extern struct { js: u32 = 0, lua: u32 = 0 };
+        var out: Out = .{};
+
+        var install: Install = undefined;
+        try install.init(.{});
+        defer install.deinit();
+        const io = testing.io;
+        try install.tmp.dir.createDirPath(io, "plugins/parts/schemas");
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/parts/schemas/out.sal", .data = "struct Out { u32 js; u32 lua; }" });
+        try install.pluginManifest("parts", "\"provider\": \"lua\"");
+        // Counts the actor id each draw's for
+        const lua = try std.fmt.allocPrint(testing.allocator,
+            \\local wraith = require("wraith")
+            \\local sal = require("salamander")
+            \\local out = wraith.Parts.Out.at({d})
+            \\wraith.Wraith.ui():contributeTo("photo.inspector", sal.implement("Wraith.PhotoPart", {{
+            \\  describe = function(self) return {{ id = "lua", kind = "actor", title = "From Lua" }} end,
+            \\  draw = function(self, target) out.lua = out.lua + target.id end,
+            \\}}))
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(lua);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/parts/main.lua", .data = lua });
+
+        try install.tmp.dir.createDirPath(io, "plugins/parts_js");
+        try install.pluginManifest("parts_js", "\"provider\": \"js\", \"depends\": [\"parts\"]");
+        const js = try std.fmt.allocPrint(testing.allocator,
+            \\import {{ Wraith, Parts }} from "wraith";
+            \\import {{ implement }} from "salamander";
+            \\const out = Parts.Out.at({d});
+            \\Wraith.ui().contributeTo("photo.inspector", implement("Wraith.PhotoPart", {{
+            \\  describe() {{ return {{ id: "js", kind: "actor", title: "From JS" }}; }},
+            \\  draw(target) {{ out.js += Number(target.id); }},
+            \\}}));
+        , .{@intFromPtr(&out)});
+        defer testing.allocator.free(js);
+        try install.tmp.dir.writeFile(io, .{ .sub_path = "plugins/parts_js/main.js", .data = js });
+
+        try install.loader.start(&.{});
+        try testing.expectEqual(.loaded, install.info("parts").?.state);
+        try testing.expectEqual(.loaded, install.info("parts_js").?.state);
+
+        // Both, described as they said, drawn for the actor picked
+        const slots = host.slots;
+        var held = slots.take(.photo_inspector);
+        defer held.end();
+        var titled: usize = 0;
+        for (held.items()) |e| {
+            if (e.own) continue;
+            if (std.mem.eql(u8, e.title, "From Lua") or std.mem.eql(u8, e.title, "From JS")) titled += 1;
+            try testing.expectEqualStrings("actor", e.kind);
+            slots.draw(e, .{ .kind = "actor", .id = 7 });
+        }
+        try testing.expectEqual(2, titled);
+        try testing.expectEqual(Out{ .js = 7, .lua = 7 }, out);
     }
 
     test "script plugins run on Salamander, with Wraith's areas" {
@@ -1143,6 +1421,8 @@ const tests = struct {
         try testing.expectEqual(Out{ .first = 1, .second = 2 }, out);
         // Its typed hook, with the original from what the handler's given
         try testing.expectEqual(15, seven.call(2));
+        try expectNotesTab("cs_fixture");
+        try expectPlainTab("cs_fixture");
 
         // Its dependents reload with it, and its counter starts over
         out = .{};

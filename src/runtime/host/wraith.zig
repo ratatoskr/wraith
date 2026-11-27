@@ -142,6 +142,8 @@ pub const Tables = struct {
     gizmo: *const sal.Table(ui_area.Gizmo),
     workbench_panel: *const sal.Table(ui_area.WorkbenchPanel),
     contribution: *const sal.Table(ui_area.Contribution),
+    plugin_slot: *const sal.Table(W.Slot),
+    plugin_contribution: *const sal.Table(ui_area.Contribution),
     draw_list: *const sal.Table(ui_area.DrawList),
     /// What its UI keeps between frames.
     ui: ui_area.State = .{},
@@ -224,6 +226,8 @@ pub fn tablesOf(loaded: *Loaded) ?*Tables {
         .gizmo = h.adopt(ui_area.Gizmo, sal.implement(ui_area.Gizmo, ui_area.GizmoImpl), o) catch return null,
         .workbench_panel = h.adopt(ui_area.WorkbenchPanel, sal.implement(ui_area.WorkbenchPanel, ui_area.WorkbenchPanelImpl), o) catch return null,
         .contribution = h.adopt(ui_area.Contribution, sal.implement(ui_area.Contribution, ui_area.ContributionImpl), o) catch return null,
+        .plugin_slot = h.adopt(W.Slot, sal.implement(W.Slot, host.plugin_slots.SlotImpl), o) catch return null,
+        .plugin_contribution = h.adopt(ui_area.Contribution, sal.implement(ui_area.Contribution, host.plugin_slots.AddedImpl), o) catch return null,
         .draw_list = h.adopt(ui_area.DrawList, ui_area.draw_list_table, o) catch return null,
         .hook = h.adopt(Hook, sal.implement(Hook, hooks_area.HookImpl), o) catch return null,
         .watches = h.adopt(Watches, sal.implement(Watches, hooks_area.WatchesImpl), o) catch return null,

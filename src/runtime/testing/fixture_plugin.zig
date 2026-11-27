@@ -41,6 +41,40 @@ const Kind = struct {
 
 var kind: Kind = .{};
 
+/// The Notes tab, many at once, which the loader's tests call like the Workbench does.
+const Notes = struct {
+    made: u32 = 0,
+    drawn: u32 = 0,
+    id: [8]u8 = undefined,
+    title: [32]u8 = undefined,
+
+    pub fn describe(_: *Notes) W.WorkbenchTab.Info {
+        return .{ .title = "Notes", .kind = "notes", .place = .bottom, .multi = true };
+    }
+
+    pub fn draw(self: *Notes, _: []const u8) void {
+        self.drawn += 1;
+    }
+
+    /// Not saved
+    pub fn status(self: *Notes, id: []const u8) W.WorkbenchTab.State {
+        const title = std.fmt.bufPrint(&self.title, "Note {s} drawn {d}", .{ id, self.drawn }) catch "";
+        return .{ .title = title, .unsaved = true };
+    }
+
+    pub fn create(self: *Notes) []const u8 {
+        self.made += 1;
+        return std.fmt.bufPrint(&self.id, "{d}", .{self.made}) catch "";
+    }
+
+    /// The first stays open
+    pub fn keepOpen(_: *Notes, id: []const u8) bool {
+        return std.mem.eql(u8, id, "1");
+    }
+};
+
+var notes: Notes = .{};
+
 pub const Plugin = struct {
     settings: *sdk.Config(Settings) = undefined,
 
@@ -57,6 +91,10 @@ pub const Plugin = struct {
         const rt = sdk.salamander.rt;
         try sdk.salamander.provide("fixture.counter", 1, Counter.init(&count, rt.implement(Counter, Count)));
         try sdk.salamander.provide("wraith.kind.fixture", 1, PluginKind.init(&kind, rt.implement(PluginKind, Kind)));
+        notes = .{};
+        _ = try sdk.workbench.addTab(&notes, Notes);
+        // A slot of its own, which plugins depending on it add counters to
+        _ = try ctx.wraith.ui().defineSlot(.{ .id = "counters", .title = "Counters", .help = "Counts things", .trait = "Fixture.FixtureCounter" });
         try ctx.spawn(waitForever, .{ self, ctx.io });
     }
 

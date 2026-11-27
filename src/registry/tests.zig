@@ -302,7 +302,7 @@ test "updates, and takes out pulled ones" {
     try hub.publish(&.{try hub.hello(&.{"1.0.0"}, "", "")}, &.{});
     const where: registry.mods.Where = .{ .source = hub.source(), .mods_dir = hub.path("mods"), .wraith = "1.0.0" };
     _ = try registry.mods.install(a, io, try hub.index(), where, "hello", null);
-    try testing.expectEqual(0, (try registry.mods.update(a, io, try hub.index(), where, null)).len);
+    try testing.expectEqual(0, (try registry.mods.update(a, io, try hub.index(), where, .all)).len);
 
     try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, "", "")}, &.{});
     const listing = try registry.mods.list(a, io, try hub.index(), where.mods_dir, where.wraith, &.{}, &.{});
@@ -310,13 +310,32 @@ test "updates, and takes out pulled ones" {
     // What the app gets says so too
     const json = try std.json.Stringify.valueAlloc(a, listing.find("hello").?.*, .{});
     try testing.expect(std.mem.indexOf(u8, json, "\"has_update\":true") != null);
-    const updated = try registry.mods.update(a, io, try hub.index(), where, null);
+    const updated = try registry.mods.update(a, io, try hub.index(), where, .all);
     try testing.expectEqualStrings("1.1.0", updated[0].version.?);
 
     try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, "", "")}, &.{&helloSha256()});
-    const pulled = try registry.mods.update(a, io, try hub.index(), where, null);
+    const pulled = try registry.mods.update(a, io, try hub.index(), where, .all);
     try testing.expectEqual(null, pulled[0].version);
     try testing.expectEqual(null, try registry.installed(a, io, where.mods_dir, "hello"));
+}
+
+test "a game's update leaves mods for other games alone" {
+    const saved = core.log.mute(&.{.other});
+    defer core.log.setFilter(saved);
+    var hub: Hub = try .init();
+    defer hub.deinit();
+    const a = hub.arena.allocator();
+    const unity = ", \"gameEngine\": { \"id\": \"unity\" }";
+    try hub.publish(&.{try hub.hello(&.{"1.0.0"}, "", unity)}, &.{});
+    const where: registry.mods.Where = .{ .source = hub.source(), .mods_dir = hub.path("mods"), .wraith = "1.0.0" };
+    _ = try registry.mods.install(a, io, try hub.index(), where, "hello", null);
+
+    try hub.publish(&.{try hub.hello(&.{ "1.1.0", "1.0.0" }, "", unity)}, &.{});
+    const unreal: registry.mods.MadeWith = .{ .game = "steam-2", .here = .{ .game_engine = "unreal" } };
+    try testing.expectEqual(0, (try registry.mods.update(a, io, try hub.index(), where, .{ .game = unreal })).len);
+    const ours: registry.mods.MadeWith = .{ .game = "steam-1", .here = .{ .game_engine = "unity" } };
+    const updated = try registry.mods.update(a, io, try hub.index(), where, .{ .game = ours });
+    try testing.expectEqualStrings("1.1.0", updated[0].version.?);
 }
 
 test "only the package it says, and only plugins" {

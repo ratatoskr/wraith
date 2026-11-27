@@ -94,6 +94,21 @@ fn codepoint(text: []const u8) c.ImWchar {
     return @intCast(std.unicode.utf8Decode(text) catch unreachable);
 }
 
+/// The tabs that are one of their own, not one of many like documents, in order.
+fn singles(wb: *Workbench, out: *[24]*Workbench.Tabs.Tab) []*Workbench.Tabs.Tab {
+    var n: usize = 0;
+    for (wb.tabs.list.items) |t| if (t.id == null and n < out.len) {
+        out[n] = t;
+        n += 1;
+    };
+    return out[0..n];
+}
+
+fn tabLabelled(wb: *Workbench, label: []const u8) ?*Workbench.Tabs.Tab {
+    for (wb.tabs.list.items) |t| if (std.mem.eql(u8, t.window.label(), label)) return t;
+    return null;
+}
+
 test "default layout" {
     var frames = try Frames.init();
     defer frames.deinit();
@@ -107,14 +122,20 @@ test "default layout" {
     try testing.expect(tuft_imgui.dock.inFront(wb.documents.items[1].window().title));
     try testing.expect(tuft_imgui.dock.inFront(wb.tabTitle(.addresses)));
     try testing.expect(wb.document_dock != 0);
-    inline for (comptime std.enums.values(Workbench.Own)) |o| if (o != .classes) try testing.expect(wb.showing(@field(Workbench.Tag, @tagName(o)), null));
+    // Open from the start, or what they're inside is
+    inline for (comptime std.enums.values(Workbench.Own)) |o| if (o != .classes) try testing.expect(wb.windowOf(.{ .tag = @field(Workbench.Tag, @tagName(o)) }).?.open);
     const search_spot = tuft_imgui.dock.of(wb.tabTitle(.search)).?;
     const names_spot = tuft_imgui.dock.of(wb.tabTitle(.names)).?;
     try testing.expect(search_spot != names_spot);
     try testing.expectEqual(tuft_imgui.dock.of(wb.tabTitle(.addresses)).?, names_spot);
     // Every one of Wraith's but Classes, in order, Names right after Addresses
-    const tabs = wb.tabs.list.items;
+    var buf: [24]*Workbench.Tabs.Tab = undefined;
+    const tabs = singles(wb, &buf);
     try testing.expectEqual(9, tabs.len);
+    // The documents are tabs too, Memory and Disassembly first along the top
+    try testing.expectEqual(9 + 5, wb.tabs.list.items.len);
+    try testing.expectEqualStrings("Memory", wb.tabs.list.items[0].window.label());
+    try testing.expectEqualStrings("Disassembly", wb.tabs.list.items[1].window.label());
     try testing.expectEqualStrings("Addresses", tabs[1].window.label());
     try testing.expectEqualStrings("Names", tabs[2].window.label());
     try testing.expectEqualStrings("Schemas", tabs[3].window.label());
@@ -143,7 +164,7 @@ test "default layout" {
     wb.focus(.memory_use, null);
     frames.run(wb, 3);
     try testing.expect(wb.showing(.diagnostics, null));
-    try testing.expectEqual(2, wb.groups.diagnostics.shown);
+    try testing.expect(wb.showing(.memory_use, null));
 
     // From any thread, the newest wins, and a panel comes to the front of its group's tab
     const Asker = struct {
@@ -201,12 +222,14 @@ test "plugins' tabs are windows of their own, drawn in its frame" {
 
     // A window each after Wraith's own, open from the start, behind what you were looking at
     frames.run(wb, 4);
-    try testing.expectEqual(12, wb.tabs.list.items.len);
-    try testing.expectEqualStrings("Party 2", wb.tabs.list.items[2].window.label());
-    try testing.expectEqualStrings("Names", wb.tabs.list.items[3].window.label());
+    var buf: [24]*Workbench.Tabs.Tab = undefined;
+    const tabs = singles(wb, &buf);
+    try testing.expectEqual(12, tabs.len);
+    try testing.expectEqualStrings("Party 2", tabs[2].window.label());
+    try testing.expectEqualStrings("Names", tabs[3].window.label());
     // Order 0, so after Wraith's own
-    const party = wb.tabs.list.items[10];
-    const scene_tab = wb.tabs.list.items[11];
+    const party = tabs[10];
+    const scene_tab = tabs[11];
     try testing.expectEqualStrings("Party", party.window.label());
     try testing.expect(party.window.open and scene_tab.window.open);
     // At the bottom with Addresses, and at the top with the documents
@@ -232,7 +255,7 @@ test "plugins' tabs are windows of their own, drawn in its frame" {
     scene_tab.window.close();
     frames.run(wb, 2);
     try testing.expect(!scene.isOpen());
-    try testing.expectEqual(12, wb.tabs.list.items.len);
+    try testing.expectEqual(12, singles(wb, &buf).len);
     scene.focus();
     frames.run(wb, 3);
     try testing.expect(scene.isOpen());
@@ -247,7 +270,172 @@ test "plugins' tabs are windows of their own, drawn in its frame" {
     frames.run(wb, 3);
     try testing.expectEqual(draws, mine.draws);
     try testing.expect(!panel.isOpen());
-    try testing.expectEqual(9, wb.tabs.list.items.len);
+    try testing.expectEqual(9, singles(wb, &buf).len);
+    loaded.deinitForTest();
+}
+
+test "a tab of many: New makes one, each with its own label and dot, gone when closed or with the plugin" {
+    const sdk = @import("wraith_sdk");
+    const W = @import("wraith_api").wraith;
+    const sal = @import("wraith_api").salamander;
+    const Loaded = @import("../../PluginLoader.zig").Loaded;
+    var frames = try Frames.init();
+    defer frames.deinit();
+    const wb = try Workbench.create(testing.allocator, .{});
+    defer wb.destroy();
+    frames.run(wb, 3);
+
+    var loaded: Loaded = undefined;
+    loaded.initForTest(testing.allocator, "tools");
+    sdk.Owner.attach(loaded.root());
+    defer sdk.Owner.detach();
+
+    const Notes = struct {
+        made: u32 = 0,
+        drawn: u32 = 0,
+        id: [8]u8 = undefined,
+        title: [32]u8 = undefined,
+
+        pub fn describe(_: *@This()) W.WorkbenchTab.Info {
+            return .{ .title = "Notes", .kind = "notes", .multi = true };
+        }
+        pub fn draw(self: *@This(), _: []const u8) void {
+            self.drawn += 1;
+        }
+        // The first one's not saved
+        pub fn status(self: *@This(), id: []const u8) W.WorkbenchTab.State {
+            const title = std.fmt.bufPrint(&self.title, "Note {s}", .{id}) catch "";
+            return .{ .title = title, .unsaved = std.mem.eql(u8, id, "1") };
+        }
+        pub fn create(self: *@This()) []const u8 {
+            self.made += 1;
+            return std.fmt.bufPrint(&self.id, "{d}", .{self.made}) catch "";
+        }
+        pub fn keepOpen(_: *@This(), _: []const u8) bool {
+            return false;
+        }
+    };
+    var notes: Notes = .{};
+    const area = sdk.wraith.root().?.ui();
+    const contribution = try area.addWorkbenchTab(W.WorkbenchTab.init(&notes, sal.implement(W.WorkbenchTab, Notes)));
+
+    // A kind for View's New, after the documents' kinds, with none of it yet
+    frames.run(wb, 2);
+    try testing.expectEqual(5 + 1, wb.tabs.kinds.items.len);
+    const kind = for (wb.tabs.kinds.items) |k| {
+        if (std.mem.eql(u8, k.title, "Notes")) break k;
+    } else return error.NoNotes;
+    // Copied, since the kind goes with the plugin
+    var key_buf: [128]u8 = undefined;
+    const key = key_buf[0..kind.key.len];
+    @memcpy(key, kind.key);
+    try testing.expectEqual(null, wb.tabs.findOne(key, "1"));
+
+    // New makes one and brings it to the front, labelled and dotted as its status says
+    wb.tabs.newOne(key);
+    frames.run(wb, 3);
+    const first = wb.tabs.findOne(key, "1").?;
+    try testing.expectEqualStrings("Note 1", first.window.label());
+    try testing.expect(first.window.unsaved);
+    try testing.expectEqual(wb.document_dock, tuft_imgui.dock.of(first.window.title).?);
+    try testing.expect(tuft_imgui.dock.inFront(first.window.title));
+    try testing.expect(notes.drawn > 0);
+
+    // The plugin opens one by its id, from any thread
+    contribution.open("7");
+    frames.run(wb, 3);
+    const seventh = wb.tabs.findOne(key, "7").?;
+    try testing.expectEqualStrings("Note 7", seventh.window.label());
+    try testing.expect(!seventh.window.unsaved);
+
+    // And closes one, which is gone
+    contribution.close("7");
+    frames.run(wb, 2);
+    try testing.expectEqual(null, wb.tabs.findOne(key, "7"));
+    try testing.expect(wb.tabs.findOne(key, "1") != null);
+
+    // All of it goes with the plugin
+    loaded.owner.close();
+    frames.run(wb, 2);
+    try testing.expectEqual(5, wb.tabs.kinds.items.len);
+    try testing.expectEqual(null, wb.tabs.findOne(key, "1"));
+    loaded.deinitForTest();
+}
+
+test "tabs inside tabs: in Wraith's Debug, and in a plugin's own" {
+    const sdk = @import("wraith_sdk");
+    const W = @import("wraith_api").wraith;
+    const sal = @import("wraith_api").salamander;
+    const Loaded = @import("../../PluginLoader.zig").Loaded;
+    var frames = try Frames.init();
+    defer frames.deinit();
+    const wb = try Workbench.create(testing.allocator, .{});
+    defer wb.destroy();
+    frames.run(wb, 3);
+
+    var loaded: Loaded = undefined;
+    loaded.initForTest(testing.allocator, "tools");
+    sdk.Owner.attach(loaded.root());
+    defer sdk.Owner.detach();
+    const area = sdk.wraith.root().?.ui();
+
+    // A tab holding others, drawing none of its own
+    const Box = struct {
+        pub fn describe(_: *@This()) W.WorkbenchTab.Info {
+            return .{ .title = "Tools", .kind = "tools", .parts = true };
+        }
+        pub fn draw(_: *@This(), _: []const u8) void {}
+        pub fn status(_: *@This(), _: []const u8) W.WorkbenchTab.State {
+            return .{};
+        }
+        pub fn create(_: *@This()) []const u8 {
+            return "";
+        }
+        pub fn keepOpen(_: *@This(), _: []const u8) bool {
+            return false;
+        }
+    };
+    var box: Box = .{};
+    _ = try area.addWorkbenchTab(W.WorkbenchTab.init(&box, sal.implement(W.WorkbenchTab, Box)));
+    var sheets: PanelDraws = .{};
+    var watch: PanelDraws = .{};
+    // Its own, by its kind, and one in Wraith's Debug
+    const sheets_panel = area.addWorkbenchPanel(.{ .title = "Sheets", .kind = "sheets", .parent = "tools" }, .init(&sheets, PanelDraws.draw));
+    const watch_panel = area.addWorkbenchPanel(.{ .title = "Watch", .kind = "watch", .parent = "wraith/debug" }, .init(&watch, PanelDraws.draw));
+    frames.run(wb, 3);
+
+    // Only the one holding them is a window
+    try testing.expect(tabLabelled(wb, "Tools") != null);
+    try testing.expectEqual(null, tabLabelled(wb, "Sheets"));
+    try testing.expectEqual(null, tabLabelled(wb, "Watch"));
+
+    // Focusing one inside brings what it's in to the front, on it
+    watch_panel.focus();
+    frames.run(wb, 3);
+    try testing.expect(watch.draws > 0);
+    try testing.expect(watch.in_workbench);
+    try testing.expect(watch_panel.isOpen());
+    try testing.expect(tuft_imgui.dock.inFront(wb.tabTitle(.debug)));
+    try testing.expect(!wb.showing(.threads, null));
+    sheets_panel.focus();
+    frames.run(wb, 3);
+    try testing.expect(sheets.draws > 0);
+    try testing.expect(sheets_panel.isOpen());
+    try testing.expect(tuft_imgui.dock.inFront(tabLabelled(wb, "Tools").?.window.title));
+
+    // Wraith's own inside Debug, by its tag
+    wb.focus(.registers, null);
+    frames.run(wb, 3);
+    try testing.expect(wb.showing(.registers, null));
+    try testing.expect(!watch_panel.isOpen());
+
+    // Gone with the plugin, and Debug keeps its own
+    loaded.owner.close();
+    frames.run(wb, 3);
+    try testing.expectEqual(null, tabLabelled(wb, "Tools"));
+    wb.focus(.threads, null);
+    frames.run(wb, 3);
+    try testing.expect(wb.showing(.threads, null));
     loaded.deinitForTest();
 }
 
@@ -522,7 +710,7 @@ test "going places" {
     frames.run(wb, 2);
     try testing.expectEqual(6, wb.documents.items.len);
     const added = wb.documents.items[5];
-    try testing.expectEqualStrings("Disassembly 2###code.6", added.window().title);
+    try testing.expectEqualStrings("Disassembly 2###wraith/wraith/workbench/code/6", added.window().title);
     try testing.expect(added.dock != 0);
     try testing.expectEqual(code.dock, added.dock);
 
@@ -559,7 +747,7 @@ test "schema document" {
     wb.openSchema(path);
     frames.run(wb, 2);
     const doc = wb.documents.items[5];
-    try testing.expectEqualStrings("player.sal###schema.6", doc.window().title);
+    try testing.expectEqualStrings("player.sal###wraith/wraith/workbench/schema/6", doc.window().title);
     const editor = &doc.body.schema;
     try testing.expectEqual(null, editor.problem);
     // Base comes from the file next to it, and Vec3 from Wraith's, which aren't listed

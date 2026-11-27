@@ -851,7 +851,6 @@ const tests = struct {
         loaded.initForTest(testing.allocator, "lights");
         sdk.Owner.attach(loaded.root());
         defer sdk.Owner.detach();
-        const area = sdk.wraith.root().?.ui();
         const Draws = struct {
             count: u32 = 0,
             kind: [16]u8 = undefined,
@@ -862,13 +861,20 @@ const tests = struct {
                 self.kind_len = @min(target.kind.len, self.kind.len);
                 @memcpy(self.kind[0..self.kind_len], target.kind[0..self.kind_len]);
             }
+
+            fn drawPage(self: *@This()) void {
+                self.count += 1;
+            }
         };
         var node: Draws = .{};
         var facet: Draws = .{};
         var page: Draws = .{};
-        const lamp = try area.contribute(.{ .slot = "photo.scene", .id = "lamp", .parent = "world", .kind = "light", .node = 1, .title = "Lamp" }, .init(&node, Draws.draw));
-        _ = try area.contribute(.{ .slot = "photo.inspector", .kind = "light", .title = "Colour", .open = true }, .init(&facet, Draws.draw));
-        _ = try area.contribute(.{ .slot = "settings", .title = "Lights", .open = true }, .init(&page, Draws.draw));
+        var node_part: sdk.slots.PhotoPart = .{ .info = .{ .id = "lamp", .parent = "world", .kind = "light", .node = 1, .title = "Lamp" } };
+        var facet_part: sdk.slots.PhotoPart = .{ .info = .{ .kind = "light", .title = "Colour", .open = true } };
+        var section: sdk.slots.SettingsSection = .{ .info = .{ .title = "Lights", .open = true } };
+        const lamp = try sdk.slots.addPhotoPart("photo.scene", &node_part, &node, Draws.draw);
+        _ = try sdk.slots.addPhotoPart("photo.inspector", &facet_part, &facet, Draws.draw);
+        _ = try sdk.slots.addSettingsSection(&section, &page, Draws.drawPage);
 
         photo.setOpen(true);
         for (0..2) |_| rig.present();

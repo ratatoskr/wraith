@@ -266,11 +266,23 @@ pub const Updated = struct {
     version: ?[]const u8,
 };
 
-/// Updates installed mods and removes pulled ones; failures are logged. Null `only` means all.
-pub fn update(arena: std.mem.Allocator, io: std.Io, index: Index, where: Where, only: ?[]const u8) ![]const Updated {
+/// Which installed mods `update` looks at.
+pub const Only = union(enum) {
+    all,
+    id: []const u8,
+    /// Those that load in this game: for it, its engine or any game.
+    game: MadeWith,
+};
+
+/// Updates installed mods and removes pulled ones; failures are logged.
+pub fn update(arena: std.mem.Allocator, io: std.Io, index: Index, where: Where, only: Only) ![]const Updated {
     var updated: std.ArrayList(Updated) = .empty;
     for (try registry.installedAll(arena, io, where.mods_dir)) |have| {
-        if (only) |id| if (!std.mem.eql(u8, id, have.id)) continue;
+        switch (only) {
+            .all => {},
+            .id => |id| if (!std.mem.eql(u8, id, have.id)) continue,
+            .game => |m| if (!loadsIn((index.find(have.id) orelse continue).*, m)) continue,
+        }
         if (index.isRevoked(have.sha256)) {
             log.warn("{s} {s} was pulled from the hub, so it's being taken out", .{ have.id, have.version });
             registry.remove(arena, io, where.mods_dir, have.id) catch continue;
@@ -284,6 +296,11 @@ pub fn update(arena: std.mem.Allocator, io: std.Io, index: Index, where: Where, 
         try updated.append(arena, .{ .id = have.id, .version = newest.version });
     }
     return updated.items;
+}
+
+fn loadsIn(p: registry.Package, m: MadeWith) bool {
+    const v = p.newest() orelse return false;
+    return v.anyGame() or essentialIn(v, m);
 }
 
 /// A missing or outdated essential: an engine's official plugin, or a game's replacement for it.

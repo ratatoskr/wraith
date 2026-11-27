@@ -36,6 +36,7 @@ pub const watches = @import("watches.zig");
 pub const sound = @import("sound.zig");
 pub const workbench_panels = @import("workbench_panels.zig");
 pub const slots = @import("slots.zig");
+pub const plugin_slots = @import("plugin_slots.zig");
 pub const windows = @import("windows.zig");
 pub const Owned = @import("Owned.zig").Owned;
 pub const OnGone = @import("Owned.zig").OnGone;
