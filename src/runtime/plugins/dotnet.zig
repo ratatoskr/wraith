@@ -19,7 +19,7 @@ const native = @import("native.zig");
 const sal = api.salamander;
 const log = core.log.scoped(.wraith_runtime);
 /// The CoreCLR handle lives as long as the process does, like the runtime.
-const gpa = std.heap.smp_allocator;
+const gpa = core.heap.main;
 const CoreClr = tuft_managed.CoreClr;
 
 pub const name = "clr";

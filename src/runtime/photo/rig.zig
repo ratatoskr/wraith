@@ -153,6 +153,30 @@ pub const Pose = struct {
     }
 };
 
+/// The turn taking the world's right, up and look onto these, which must be at right angles.
+pub fn rotationOf(b: Basis, right: V3, up: V3, ahead: V3) Quat {
+    return fromBases(.{ b.right, b.up, b.look }, .{ right, up, ahead });
+}
+
+/// Where a pose is, and its turn from the world's own right, up and look, rolled. Always a turn, never a
+/// mirror, whichever way round the world's axes are, so it comes back the same through a quaternion.
+pub fn matrixOf(p: Pose, b: Basis) Mat4 {
+    const s = p.sides(b);
+    const c = @cos(p.roll);
+    const n = @sin(p.roll);
+    const r = splat(c) * s.right + splat(n) * s.up;
+    const u = splat(c) * s.up - splat(n) * s.right;
+    return .transform(.from(p.position), rotationOf(b, r, u, p.forward(b)), .one);
+}
+
+/// The pose `matrixOf` gave `m` from, keeping `like`'s field of view and reach.
+pub fn poseOf(m: Mat4, b: Basis, like: Pose) Pose {
+    var p: Pose = .fromCamera(b, .{ .position = m.getTranslation(), .aim = .rotation, .target = .zero, .rotation = m.rotation(), .roll = 0, .fov = like.fov });
+    p.fov = like.fov;
+    p.reach = like.reach;
+    return p;
+}
+
 fn sidesFor(b: Basis, f: V3) struct { right: V3, up: V3 } {
     const r = normalize(rightOf(f, b.up, b.left_handed));
     return .{ .right = r, .up = upOf(r, f, b.left_handed) };
@@ -220,6 +244,20 @@ const testing = std.testing;
 
 fn expectNear(a: V3, b: V3) !void {
     inline for (0..3) |i| try testing.expectApproxEqAbs(a[i], b[i], 1e-4);
+}
+
+test "a pose's matrix gives the same pose back, whichever way round the world is" {
+    const bases = [_]Basis{ .default, .init(.pos_z, .pos_y, false), .init(.pos_z, .neg_x, true), .init(.pos_y, .neg_z, false) };
+    for (bases) |b| {
+        const p: Pose = .{ .position = .{ 5, 6, 7 }, .yaw = 0.7, .pitch = -0.4, .roll = 0.3, .fov = 1, .reach = 1 };
+        // Through the Transform boxes' form and back
+        const m = matrixOf(p, b);
+        const back = poseOf(Mat4.transform(m.getTranslation(), m.rotation(), .one), b, p);
+        try testing.expectApproxEqAbs(p.yaw, back.yaw, 1e-4);
+        try testing.expectApproxEqAbs(p.pitch, back.pitch, 1e-4);
+        try testing.expectApproxEqAbs(p.roll, back.roll, 1e-4);
+        try expectNear(back.position, p.position);
+    }
 }
 
 test "yaw 0 faces look, positive yaw turns right" {

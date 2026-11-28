@@ -15,7 +15,7 @@ const sal = api.salamander;
 const W = api.wraith;
 const Raw = api.wraith_raw;
 const log = core.log.scoped(.wraith_runtime);
-const allocator = std.heap.smp_allocator;
+const allocator = core.heap.main;
 
 pub const Net = W.Net;
 
@@ -571,6 +571,10 @@ const tests = struct {
     }
 
     test "hosts it doesn't declare are refused, redirects too" {
+        // A refused redirect warns, as it should
+        const saved_level = testing.log_level;
+        testing.log_level = .err;
+        defer testing.log_level = saved_level;
         wraith.setIo(testing.io);
         defer wraith.setIo(null);
         var server: Server = undefined;

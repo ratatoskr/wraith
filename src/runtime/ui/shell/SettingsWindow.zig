@@ -26,7 +26,7 @@ const log = core.log.scoped(.wraith_ui);
 
 window: ui.Window = .{ .title = "Wraith Settings###wraith.settings", .size = .{ 720, 560 } },
 shell: *Shell = undefined,
-allocator: std.mem.Allocator = std.heap.page_allocator,
+allocator: std.mem.Allocator = core.heap.main,
 /// What's registered, refreshed when the registry changes.
 settings: []*Setting = &.{},
 seen_changes: u32 = std.math.maxInt(u32),
@@ -46,7 +46,7 @@ page_name_len: usize = 0,
 /// The Game speed page's, the same speed the Workbench and Photo mode show.
 speed: GameSpeed = .{},
 /// This frame's lists, names and text boxes, freed at the start of the next.
-frame: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
+frame: std.heap.ArenaAllocator = .init(core.heap.main),
 
 const PageKind = enum {
     /// One of Wraith's sections, by name. Empty is General.
@@ -484,7 +484,7 @@ const Picked = struct {
 };
 
 var mailbox: Picked = .{};
-const picker_allocator = std.heap.smp_allocator;
+const picker_allocator = core.heap.main;
 
 fn pickerBusy() bool {
     mailbox.lock.lockShared();

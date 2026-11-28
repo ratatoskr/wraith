@@ -14,7 +14,7 @@ const shared_schemas = @import("shared_schemas.zig");
 const addresses = @import("addresses.zig");
 
 const log = core.log.scoped(.wraith_runtime);
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 pub const File = schemas.File;
 
@@ -104,6 +104,7 @@ pub fn keep(keys: []const []const u8) void {
             continue;
         }
         _ = list.orderedRemove(i);
+        if (list.items.len == 0) list.clearAndFree(allocator);
         destroy(p);
     }
 }

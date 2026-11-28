@@ -1,6 +1,7 @@
 //! The `game` area: game and build info, and speed. Reads no files, so it's cheap from any thread.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const build_info = @import("build_info");
@@ -23,7 +24,7 @@ const W = api.wraith;
 
 pub const Game = W.Game;
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 const HashPromise = sal.Plain(Game, "sha512");
 const HashResolver = threads.Back(wraith.ResolverOf(HashPromise));
@@ -292,7 +293,6 @@ const HashWait = struct {
 test "a plugin asks about the game" {
     const testing = std.testing;
     const sdk = @import("wraith_sdk");
-    const core = @import("wraith_core");
     const saved = core.log.mute(&.{.runtime});
     defer core.log.setFilter(saved);
     GameInfo.global.start(testing.allocator, testing.io);

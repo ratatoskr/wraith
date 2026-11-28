@@ -3,6 +3,7 @@
 const Libraries = @This();
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const tuft_sys = @import("tuft_sys");
@@ -23,7 +24,7 @@ pub const Entry = struct {
     source: []const u8,
 };
 
-allocator: std.mem.Allocator = std.heap.page_allocator,
+allocator: std.mem.Allocator = core.heap.main,
 lock: tuft_sys.sync.RwLock = .{},
 entries: std.ArrayList(*Held) = .empty,
 

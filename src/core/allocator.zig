@@ -9,7 +9,8 @@ pub const Default = struct {
     safe: if (checking) std.heap.SafeAllocator else void,
 
     pub fn init() Default {
-        return .{ .safe = if (checking) .init(std.heap.page_allocator, .{}) else {} };
+        // Deep enough to get past the tracked and main heaps' frames to who asked
+        return .{ .safe = if (checking) .init(std.heap.page_allocator, .{ .stack_trace_frames = 16 }) else {} };
     }
 
     pub fn allocator(self: *Default) std.mem.Allocator {

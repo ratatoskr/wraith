@@ -4,6 +4,7 @@
 const Classes = @This();
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const devtools = @import("tuft_devtools");
 const ui = @import("wraith_ui");
@@ -118,7 +119,7 @@ fn fail(self: *Classes, why: []const u8) void {
 const Snapshot = struct { entries: []const Entry, images: usize };
 
 fn snapshot(rt: *const Runtime, a: Allocator) Allocator.Error!Snapshot {
-    const gpa = std.heap.smp_allocator;
+    const gpa = core.heap.main;
     const list = try rt.assemblies(gpa);
     defer gpa.free(list);
     var out: std.ArrayList(Entry) = .empty;

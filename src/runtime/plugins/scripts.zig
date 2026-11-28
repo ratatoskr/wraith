@@ -15,7 +15,7 @@ const Atomic = @import("tuft_arch").atomic.Value;
 const sal = api.salamander;
 const engine = hosts.engine;
 const log = core.log.scoped(.wraith_plugin);
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 const Kind = struct {
     language: hosts.Language,
@@ -284,8 +284,8 @@ pub const Lanes = struct {
     };
 
     pub fn create() !*Lanes {
-        const self = try std.heap.page_allocator.create(Lanes);
-        errdefer std.heap.page_allocator.destroy(self);
+        const self = try allocator.create(Lanes);
+        errdefer allocator.destroy(self);
         inline for (&self.lanes, .{ threads.Thread.render, .game, .worker }) |*l, t| {
             l.* = .{ .queue = sal.host().queue() catch return error.OutOfMemory, .thread = t };
         }

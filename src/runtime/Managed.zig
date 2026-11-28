@@ -22,7 +22,7 @@ pub const ElementType = tuft_managed.ElementType;
 
 const log = core.log.scoped(.wraith_runtime);
 /// For work on the attached thread. Not the render thread's.
-const gpa = std.heap.smp_allocator;
+const gpa = core.heap.main;
 
 pub var global: Managed = .{};
 

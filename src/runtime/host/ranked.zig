@@ -78,6 +78,11 @@ pub fn Ranked(comptime T: type, comptime key: fn (T) usize) type {
             return if (top) |t| t.value else null;
         }
 
+        /// Gives its room back once nothing's in it, so nothing's left at shutdown.
+        pub fn freeIfEmpty(self: *Self, gpa: std.mem.Allocator) void {
+            if (self.entries.items.len == 0) self.entries.clearAndFree(gpa);
+        }
+
         pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
             self.entries.deinit(gpa);
         }

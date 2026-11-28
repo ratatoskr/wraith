@@ -2,6 +2,7 @@
 //! first. Value scans run on workers, see `scans.zig`.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const mem = @import("tuft_mem");
@@ -21,7 +22,7 @@ const ModuleInfo = W.Memory.Module;
 const Region = W.Memory.Region;
 
 const local = mem.Memory.local;
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 /// Bigger than anyone should read at once.
 const max_read = 16 << 20;
 const default_text = 4096;

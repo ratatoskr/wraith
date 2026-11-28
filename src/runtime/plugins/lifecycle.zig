@@ -459,7 +459,7 @@ pub const ServiceError = error{ OutOfMemory, MissingService };
 /// What its main exports for each [Service] trait in its own schemas. Fails if one's missing.
 fn collectServices(loaded: *Loaded) ServiceError!void {
     const s = loaded.schemas orelse return;
-    const gpa = std.heap.page_allocator;
+    const gpa = core.heap.main;
     const names = try s.services(gpa, loaded.name);
     defer gpa.free(names);
     for (names) |trait| {
@@ -477,7 +477,7 @@ fn collectServices(loaded: *Loaded) ServiceError!void {
 
 fn releaseServices(loaded: *Loaded) void {
     for (loaded.services.items) |svc| sal.host().release(svc.obj);
-    loaded.services.deinit(std.heap.page_allocator);
+    loaded.services.deinit(core.heap.main);
     loaded.services = .empty;
 }
 

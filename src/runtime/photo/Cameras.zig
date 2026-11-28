@@ -4,6 +4,8 @@
 const Cameras = @This();
 
 const std = @import("std");
+const math = @import("tuft_math");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 const ui = @import("wraith_ui");
 
@@ -33,7 +35,50 @@ pub fn init(self: *Cameras, scene: *Scene, camera: *Camera) !void {
     try scene.add(.{ .slot = .photo_row, .id = "free_camera", .kind = "camera", .order = 100 }, .{ .native = .of(self, freeIcon) });
     try scene.add(.{ .slot = .photo_row, .id = "view_camera", .kind = "camera", .order = 200 }, .{ .native = .of(self, viewIcon) });
     try scene.add(.{ .slot = .photo_menu, .id = "camera", .kind = "camera", .order = 100 }, .{ .native = .of(self, cameraMenu) });
+    // Boxes but no gizmo, which would sit on the eye of the one being looked through
+    try scene.addKind(.of("camera", self, CameraKind, .{ .parts = .{ .scale = false }, .gizmo = false }));
 }
+
+/// What a camera can do in the scene. Only listed ones have names or can go.
+const CameraKind = struct {
+    pub fn label(_: *Cameras, t: Target, buf: []u8) ?[]const u8 {
+        if (t.id == main_id) return null;
+        const held = lists.cameras() orelse return null;
+        defer held.end();
+        var arena: std.heap.ArenaAllocator = .init(core.heap.main);
+        defer arena.deinit();
+        const snap = held.record.snapshot(arena.allocator()) orelse return null;
+        for (snap.items) |it| if (it.id == t.id) return std.fmt.bufPrint(buf, "{s}", .{it.name}) catch null;
+        return null;
+    }
+
+    pub fn can_remove(_: *Cameras, t: Target) bool {
+        if (t.id == main_id) return false;
+        const held = lists.cameras() orelse return false;
+        defer held.end();
+        var arena: std.heap.ArenaAllocator = .init(core.heap.main);
+        defer arena.deinit();
+        const snap = held.record.snapshot(arena.allocator()) orelse return false;
+        return snap.has.remove;
+    }
+
+    pub fn remove(_: *Cameras, t: Target) void {
+        const held = lists.cameras() orelse return;
+        defer held.end();
+        held.record.callRemove(t.id);
+    }
+
+    /// The one on screen, since that's what the free camera moves.
+    pub fn get_transform(self: *Cameras, t: Target) ?math.Mat4 {
+        if (t.id != self.onScreen()) return null;
+        return self.camera.transform();
+    }
+
+    pub fn set_transform(self: *Cameras, t: Target, m: math.Mat4) void {
+        if (t.id != self.onScreen()) return;
+        self.camera.setTransform(m);
+    }
+};
 
 /// The listed camera `loaded` should put on screen, or 0 for its main one. Any thread.
 pub fn wantedCamera(self: *Cameras, loaded: *const anyopaque) u64 {
@@ -84,7 +129,7 @@ fn rows(self: *Cameras, _: Target) void {
     }
     const held = lists.cameras() orelse return;
     defer held.end();
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var arena: std.heap.ArenaAllocator = .init(core.heap.main);
     defer arena.deinit();
     const snap = held.record.snapshot(arena.allocator()) orelse return;
     for (snap.items) |it| {
@@ -102,7 +147,7 @@ fn note(on_screen: bool) []const u8 {
 fn addIcon(_: *Cameras, _: Target) void {
     const held = lists.cameras() orelse return Scene.skipIcon();
     defer held.end();
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var arena: std.heap.ArenaAllocator = .init(core.heap.main);
     defer arena.deinit();
     const snap = held.record.snapshot(arena.allocator()) orelse return Scene.skipIcon();
     if (!snap.has.add) return Scene.skipIcon();
@@ -126,24 +171,13 @@ fn viewIcon(self: *Cameras, key: Target) void {
     if (Scene.rowIcon(if (on) icons.eye ++ "##view" else icons.eye_off ++ "##view", on, "{s}", .{tip}) and !on) self.show(key.id);
 }
 
-/// A camera's right-click menu in the scene.
+/// Showing a camera and the free camera, in its right-click menu. The scene adds copying and removing.
 fn cameraMenu(self: *Cameras, key: Target) void {
     const on_screen = self.onScreen() == key.id;
     if (listed() and ui.menuItem(if (key.id == main_id) "Let the game pick" else "Show this one", .{ .enabled = !on_screen })) self.show(key.id);
     const cam = self.camera;
     var on = cam.isOn();
     if (ui.menuItem("Free camera", .{ .checked = &on, .enabled = on_screen and cam.hasCamera() })) cam.flip();
-    if (key.id == main_id) return;
-    const held = lists.cameras() orelse return;
-    defer held.end();
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer arena.deinit();
-    const snap = held.record.snapshot(arena.allocator()) orelse return;
-    const it = for (snap.items) |it| {
-        if (it.id == key.id) break it;
-    } else return;
-    if (ui.menuItem("Copy its name", .{})) self.scene.copy(it.name);
-    if (snap.has.remove and ui.menuItem("Remove", .{})) held.record.callRemove(it.id);
 }
 
 /// Wraith's own Look, till a plugin for the game has one.
@@ -181,7 +215,7 @@ fn drawListed(self: *Cameras, id: u64, on_screen: bool) bool {
     };
     defer held.end();
     const record = held.record;
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var arena: std.heap.ArenaAllocator = .init(core.heap.main);
     defer arena.deinit();
     const snap = record.snapshot(arena.allocator()) orelse return false;
     const it = for (snap.items) |it| {

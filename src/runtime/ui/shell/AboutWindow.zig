@@ -166,7 +166,7 @@ fn open(url: []const u8) void {
 }
 
 fn openOnThread(url: []const u8) void {
-    wraith_platform.process.openUri(std.heap.page_allocator, url) catch |err| log.warn("Couldn't open {s}: {t}", .{ url, err });
+    wraith_platform.process.openUri(core.heap.main, url) catch |err| log.warn("Couldn't open {s}: {t}", .{ url, err });
 }
 
 fn rgb(r: u8, g: u8, b: u8) ui.Color {

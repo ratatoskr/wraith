@@ -9,7 +9,7 @@ const sync = @import("tuft_sys").sync;
 
 const Bus = core.Event(fn (message: *const api.Message) void);
 
-var bus: Bus = .init(std.heap.page_allocator);
+var bus: Bus = .init(core.heap.main);
 
 const max_queued = 1024;
 
@@ -23,7 +23,7 @@ var queued: std.ArrayList(*Queued) = .empty;
 /// Only touched by `deliver`, and by `setFrames` once frames stopped.
 var delivering: std.ArrayList(*Queued) = .empty;
 
-const list_allocator = std.heap.page_allocator;
+const list_allocator = core.heap.main;
 
 /// Turn it off only once `deliver` can't be running.
 pub fn setFrames(on: bool) void {
@@ -84,7 +84,7 @@ const Queued = struct {
 pub fn publishFromRuntime(topic: []const u8, payload: []const u8) api.MessageError!void {
     if (!api.validTopic(topic)) return error.InvalidTopic;
     if (!frames.load(.acquire) or live.load(.acquire) == 0) return;
-    const q = try Queued.create(std.heap.smp_allocator, .{ .topic = topic, .payload = payload, .from = api.script.runtime });
+    const q = try Queued.create(core.heap.main, .{ .topic = topic, .payload = payload, .from = api.script.runtime });
     errdefer q.destroy();
     queue_lock.lock();
     defer queue_lock.unlock();

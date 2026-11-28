@@ -1,6 +1,7 @@
 //! The `Hooks` and `Watches` areas. Handlers get the registers as `cpu.sal`'s `Cpu`, see `cpu.zig`.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 
@@ -15,7 +16,7 @@ pub const Hook = W.Hook;
 pub const Watches = W.Watches;
 pub const Watch = W.Watch;
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 /// Hook functions take a `Loaded` they never look at.
 const nobody: *Loaded = undefined;

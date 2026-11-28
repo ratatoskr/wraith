@@ -2,6 +2,7 @@
 //! the render thread draws the one shown last and keeps where it's dragged for its owner to take.
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 const math = @import("tuft_math");
 const sync = @import("tuft_sys").sync;
@@ -90,6 +91,7 @@ pub const Gizmo = struct {
         if (self.removed) return;
         self.removed = true;
         if (std.mem.indexOfScalar(*Gizmo, list.items, self)) |at| _ = list.swapRemove(at);
+        if (list.items.len == 0) list.clearAndFree(gpa);
     }
 };
 
@@ -97,7 +99,7 @@ pub const Gizmo = struct {
 var lock: sync.Mutex = .{};
 var list: std.ArrayList(*Gizmo) = .empty;
 var shows: u64 = 0;
-const gpa = std.heap.page_allocator;
+const gpa = core.heap.main;
 
 /// Free it with `destroy`, which removes it too.
 pub fn create() !*Gizmo {

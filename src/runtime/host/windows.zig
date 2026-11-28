@@ -2,6 +2,7 @@
 //! the plugin goes, so a handle's always safe to call.
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const api = @import("wraith_api");
@@ -14,7 +15,7 @@ const Loaded = @import("../PluginLoader.zig").Loaded;
 const MenuItems = @import("../ui/MenuItems.zig");
 
 const W = api.wraith;
-const gpa = std.heap.page_allocator;
+const gpa = core.heap.main;
 
 pub const Window = struct {
     loaded: *Loaded,

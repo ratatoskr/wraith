@@ -3,6 +3,7 @@
 //! under way, unless that'd wait on itself: from the drawing thread or from a script.
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const api = @import("wraith_api");
@@ -17,7 +18,7 @@ pub const Presentation = W.Slot.Presentation;
 pub const Place = W.WorkbenchPanel.Place;
 pub const Thread = W.Slot.Thread;
 
-const gpa = std.heap.page_allocator;
+const gpa = core.heap.main;
 
 /// Every slot Wraith has.
 pub const Slot = enum(u8) {
@@ -310,6 +311,8 @@ var next_seq: Atomic(u32) = .init(0);
 
 /// What this thread has from `take` and hasn't let go of, so it never waits on those.
 threadlocal var held: std.ArrayList(*Entry) = .empty;
+/// A heap of its own, since each thread keeps its `held` room for good, past the runtime's heap
+const held_gpa = core.heap.named("slot holds", std.heap.smp_allocator);
 
 fn heldHere(e: *const Entry) bool {
     return std.mem.indexOfScalar(*Entry, held.items, @constCast(e)) != null;
@@ -319,6 +322,8 @@ fn unlist(e: *Entry) void {
     lock.lock();
     defer lock.unlock();
     if (std.mem.indexOfScalar(*Entry, list.items, e)) |at| _ = list.orderedRemove(at);
+    // Back to the heap once the last goes, so nothing's left at shutdown
+    if (list.items.len == 0) list.clearAndFree(gpa);
 }
 
 pub const AddError = error{ UnknownSlot, NotTaken, InvalidId, AlreadyAdded, Failed };
@@ -435,20 +440,38 @@ pub fn version() u32 {
 }
 
 /// A slot's live contributions, in order, each held till `end`.
+/// Keep it where it is while using `items`, which point into it.
 pub const Taken = struct {
-    list: std.ArrayList(*Entry) = .empty,
+    /// Where they go, since drawing takes slots many times a frame and mustn't allocate
+    inline_buf: [32]*Entry = undefined,
+    len: usize = 0,
+    /// Past `inline_buf`, all of them
+    more: std.ArrayList(*Entry) = .empty,
 
-    pub fn items(self: *const Taken) []*Entry {
-        return self.list.items;
+    pub fn items(self: *Taken) []*Entry {
+        return if (self.more.items.len > 0) self.more.items else self.inline_buf[0..self.len];
+    }
+
+    fn room(self: *Taken) !void {
+        if (self.more.items.len > 0) return self.more.ensureUnusedCapacity(gpa, 1);
+        if (self.len < self.inline_buf.len) return;
+        try self.more.ensureTotalCapacity(gpa, self.len * 2);
+        self.more.appendSliceAssumeCapacity(self.inline_buf[0..self.len]);
+    }
+
+    fn appendAssumeRoom(self: *Taken, e: *Entry) void {
+        if (self.more.items.len > 0) return self.more.appendAssumeCapacity(e);
+        self.inline_buf[self.len] = e;
+        self.len += 1;
     }
 
     /// Lets go of them. They mustn't be used after.
     pub fn end(self: *Taken) void {
-        for (self.list.items) |e| {
+        for (self.items()) |e| {
             if (std.mem.indexOfScalar(*Entry, held.items, e)) |at| _ = held.swapRemove(at);
             e.put();
         }
-        self.list.deinit(gpa);
+        self.more.deinit(gpa);
     }
 };
 
@@ -461,18 +484,18 @@ pub fn take(slot: Slot) Taken {
         for (list.items) |e| {
             if (e.slot != slot) continue;
             // Out of memory draws what it has rather than nothing
-            out.list.ensureUnusedCapacity(gpa, 1) catch break;
-            held.ensureUnusedCapacity(gpa, 1) catch break;
+            out.room() catch break;
+            held.ensureUnusedCapacity(held_gpa, 1) catch break;
             // Held before checking, so a stop either sees it or this sees it's stopped
             if (e.state.fetchAdd(1, .acq_rel) & Entry.stopped_bit != 0) {
                 e.put();
                 continue;
             }
-            out.list.appendAssumeCapacity(e);
+            out.appendAssumeRoom(e);
             held.appendAssumeCapacity(e);
         }
     }
-    std.sort.insertion(*Entry, out.list.items, {}, before);
+    std.sort.insertion(*Entry, out.items(), {}, before);
     return out;
 }
 
@@ -846,6 +869,8 @@ const tests = struct {
         try testing.expectEqual(first, got.items()[0]);
         try testing.expectEqual(second, got.items()[1]);
         try testing.expectEqual(late, got.items()[2]);
+        // Few enough to need no heap, since slots are taken many times a frame
+        try testing.expectEqual(0, got.more.capacity);
     }
 };
 

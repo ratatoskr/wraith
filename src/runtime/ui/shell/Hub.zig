@@ -181,9 +181,7 @@ fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
             ui.tooltip("{s}", .{b.label});
         };
     }
-    var frame: std.heap.ArenaAllocator = .init(shell.allocator);
-    defer frame.deinit();
-    const plugins = self.pluginButtons(shell, frame.allocator());
+    const plugins = self.pluginButtons(shell, shell.frame.allocator());
     divider();
     if (tile("workbench", icons.square_terminal, shell.workbench.isOpen(), 0)) shell.toggleWorkbench();
     var key_buf: [64]u8 = undefined;
@@ -199,14 +197,7 @@ fn drawBar(self: *Hub, shell: *Shell, fade: f32) void {
 
 fn tweaksOn(shell: *Shell) usize {
     const tweaks = shell.tweaks orelse return 0;
-    var arena: std.heap.ArenaAllocator = .init(shell.allocator);
-    defer arena.deinit();
-    const list = tweaks.snapshot(arena.allocator()) catch return 0;
-    var n: usize = 0;
-    for (list) |*t| {
-        if (!t.is_group and t.on) n += 1;
-    }
-    return n;
+    return tweaks.countOn();
 }
 
 /// A dock tile that rises when hovered, with a dot while open and an optional count badge.

@@ -2,6 +2,7 @@
 //! on what it held and drops what it waited for. A `Lock` object is just an id.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const Owner = @import("tuft_event").Owner;
@@ -18,7 +19,7 @@ const W = api.wraith;
 pub const Sync = W.Sync;
 pub const Lock = W.Sync.Lock;
 
-const allocator = std.heap.smp_allocator;
+const allocator = core.heap.main;
 
 const LockPromise = sal.Plain(Sync, "lock");
 // Settles back on the thread that asked

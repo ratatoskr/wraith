@@ -1,6 +1,7 @@
 //! The `Addresses` and `Code` areas. Patches and injects are host objects, so they go with the plugin.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const disasm = @import("tuft_asm").disasm;
@@ -18,7 +19,7 @@ pub const Code = W.Code;
 pub const Patch = W.Patch;
 const SalName = W.Addresses.Name;
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 const local = mem.Memory.local;
 const max_asm = 4096;
 

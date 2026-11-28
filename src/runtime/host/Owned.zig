@@ -2,6 +2,7 @@
 //! `Loaded.making`, so part of an owner, like a session's tweak, can be stopped alone.
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const Owner = @import("tuft_event").Owner;
@@ -63,7 +64,7 @@ pub fn Owned(comptime Record: type) type {
         watch: Owner.Watch(*Self, .{ .closing = closing, .released = released }) = .{},
         listed: Atomic(bool) = .init(false),
 
-        const allocator = std.heap.page_allocator;
+        const allocator = core.heap.main;
 
         pub fn lease(self: *Self, owner: *Owner) ?Owner.Lease {
             return self.watch.lease(self, owner, .calls);
@@ -191,6 +192,8 @@ pub fn Owned(comptime Record: type) type {
                     .free => {
                         const record = e.record;
                         _ = self.entries.swapRemove(i);
+                        // Back to the heap once the last goes, so nothing's left at shutdown
+                        if (self.entries.items.len == 0) self.entries.clearAndFree(allocator);
                         return record;
                     },
                 }

@@ -3,6 +3,7 @@
 const SharedSchemas = @This();
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const tuft_sys = @import("tuft_sys");
@@ -23,7 +24,7 @@ pub const Entry = struct {
     text: []const u8,
 };
 
-allocator: std.mem.Allocator = std.heap.page_allocator,
+allocator: std.mem.Allocator = core.heap.main,
 lock: tuft_sys.sync.RwLock = .{},
 entries: std.ArrayList(*Held) = .empty,
 /// Bumped on every change, so views can catch up.

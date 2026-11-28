@@ -2,6 +2,7 @@
 //! with live-edited fields. They need `[Instance]`. Kept till the plugin closes or the file changes.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const tuft_sys = @import("tuft_sys");
 const Owner = @import("tuft_event").Owner;
@@ -28,7 +29,7 @@ pub const Entry = struct {
     schemas: *Schemas,
 };
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 const tweak_file = "tweak/tweak.sal";
 
 var lock: tuft_sys.sync.RwLock = .{};
@@ -179,6 +180,7 @@ fn removeLocked(owner: *const Owner) void {
     while (i < entries.items.len) {
         if (entries.items[i].owner == owner) _ = entries.orderedRemove(i) else i += 1;
     }
+    if (entries.items.len == 0) entries.clearAndFree(allocator);
 }
 
 fn removeFileLocked(key: usize) void {
@@ -186,6 +188,7 @@ fn removeFileLocked(key: usize) void {
     while (i < entries.items.len) {
         if (entries.items[i].owner == null and entries.items[i].file == key) _ = entries.orderedRemove(i) else i += 1;
     }
+    if (entries.items.len == 0) entries.clearAndFree(allocator);
 }
 
 fn closing(owner: *Owner) void {

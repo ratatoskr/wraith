@@ -1,4 +1,4 @@
-//! The process's memory, each heap we track, and how long heap calls take.
+//! The process's memory, each heap we track, and which timing zone allocations came from. Timings has how long heap calls take.
 
 const Memory = @This();
 
@@ -10,10 +10,16 @@ const core = @import("wraith_core");
 const ui = @import("wraith_ui");
 
 const Rates = @import("../Rates.zig");
+const Clip = ui.Clip;
+const Symbols = memory.Symbols;
 
 const Stats = core.heap.Stats;
+const ZoneStats = core.timing.Stats;
+const Trace = core.heap.Trace;
 const max_heaps = 64;
 const refresh_seconds = 0.5;
+/// The row for allocations outside every zone. Zones' ids are addresses, so never this
+const outside_id = 1;
 
 /// tuft keeps the counts.
 var pages: core.heap.Usage = .init("pages");
@@ -30,10 +36,26 @@ pub fn refreshPages() void {
 
 stats: [max_heaps]Stats = undefined,
 len: usize = 0,
+zone_stats: [Rates.max]ZoneStats = undefined,
+zone_rows: [Rates.max + 1]ZoneRow = undefined,
 process: ?wraith_platform.process.MemoryInfo = null,
 since_refresh: f32 = refresh_seconds,
 rates: Rates = .{},
-op_rates: Rates = .{ .unit = .us },
+alloc_rates: Rates = .{},
+byte_rates: Rates = .{},
+traces: [64]Trace = undefined,
+/// What's traced, for showing; the heap keeps which by address
+traced_name: @import("tuft_text").Message(48) = .{},
+/// Names for traces' addresses, looked up once
+names: std.AutoHashMapUnmanaged(usize, []const u8) = .empty,
+names_text: std.heap.ArenaAllocator = .init(gpa),
+
+const gpa = core.heap.named("memory panel", core.heap.main);
+
+pub fn deinit(self: *Memory) void {
+    self.names.deinit(gpa);
+    self.names_text.deinit();
+}
 
 pub fn draw(self: *Memory) void {
     self.since_refresh += ui.getIO().DeltaTime;
@@ -46,15 +68,13 @@ pub fn draw(self: *Memory) void {
     const heaps = self.stats[0..self.len];
 
     var samples: [max_heaps]Rates.Sample = undefined;
-    var op_samples: [max_heaps * 4]Rates.Sample = undefined;
     var tracked: u64 = 0;
     for (heaps, 0..) |*s, i| {
         samples[i] = allocSample(s);
-        for (s.ops, 0..) |f, op| op_samples[i * 4 + op] = .{ .id = s.id + op, .figures = f };
-        tracked += s.live_bytes;
+        // One inside another is counted there already
+        if (s.within().len == 0) tracked += s.live_bytes;
     }
     self.rates.tick(samples[0..heaps.len]);
-    self.op_rates.tick(op_samples[0 .. heaps.len * 4]);
 
     if (self.process) |p| {
         ui.textWrapped("Working set {Bi:.1} (peak {Bi:.1})   Private {Bi:.1}", .{ p.working_set, p.peak_working_set, p.private_bytes });
@@ -63,15 +83,22 @@ pub fn draw(self: *Memory) void {
     ui.text("Tracked by Wraith {Bi:.1}", .{tracked});
 
     self.heapTable(heaps);
-    if (ui.collapsingHeader("Call timings", true)) self.callTable(heaps);
+    if (ui.collapsingHeader("By zone", true)) self.zoneTable();
+    if (ui.collapsingHeader("Where allocations come from", false)) self.drawTraces();
 }
 
 const table_options: ui.TableOptions = .{ .borders = true, .row_background = true, .resizable = true, .sortable = true, .sizing = .stretch_prop };
 
-fn nameColumns() void {
+fn nameColumns(second: [:0]const u8) void {
     ui.tableColumnWith("Group", .{ .stretch = true });
-    ui.tableColumnWith("Heap", .{ .stretch = true });
+    ui.tableColumnWith(second, .{ .stretch = true });
 }
+
+fn groupOf(owner: []const u8) []const u8 {
+    return if (owner.len == 0) "wraith" else owner;
+}
+
+// Heaps
 
 fn allocSample(s: *const Stats) Rates.Sample {
     return .{ .id = s.id, .figures = .{ .calls = s.allocs } };
@@ -80,7 +107,7 @@ fn allocSample(s: *const Stats) Rates.Sample {
 const HeapColumn = enum { group, heap, live, peak, live_allocs, per_second, allocs, frees };
 
 fn heapOrder(rates: *const Rates, column: ?HeapColumn, a: *const Stats, b: *const Stats) std.math.Order {
-    return switch (column orelse return byName(a, b)) {
+    return switch (column orelse return byName(a.ownerName(), a.name(), b.ownerName(), b.name())) {
         .group => std.mem.order(u8, a.ownerName(), b.ownerName()),
         .heap => std.mem.order(u8, a.name(), b.name()),
         .live => std.math.order(a.live_bytes, b.live_bytes),
@@ -95,7 +122,7 @@ fn heapOrder(rates: *const Rates, column: ?HeapColumn, a: *const Stats, b: *cons
 fn heapTable(self: *Memory, heaps: []const Stats) void {
     const table = ui.table("heaps", 8, table_options) orelse return;
     defer table.end();
-    nameColumns();
+    nameColumns("Heap");
     inline for (.{ "Live", "Peak", "Live allocs", "Allocs/s", "Allocs", "Frees" }) |label| ui.tableColumnWith(label, .{ .fixed = true });
     ui.tableHeaders();
 
@@ -106,9 +133,12 @@ fn heapTable(self: *Memory, heaps: []const Stats) void {
     for (rows[0..heaps.len]) |s| {
         ui.tableNextRow();
         _ = ui.tableNextColumn();
-        ui.text("{s}", .{if (s.ownerName().len == 0) "wraith" else s.ownerName()});
+        ui.text("{s}", .{groupOf(s.ownerName())});
         _ = ui.tableNextColumn();
-        ui.text("{s}", .{s.name()});
+        if (s.within().len > 0) {
+            ui.text("{s} / {s}", .{ s.within(), s.name() });
+            ui.tooltip("Takes from {s}, so its bytes are counted there too", .{s.within()});
+        } else ui.text("{s}", .{s.name()});
         _ = ui.tableNextColumn();
         ui.text("{Bi:.1}", .{s.live_bytes});
         _ = ui.tableNextColumn();
@@ -116,7 +146,7 @@ fn heapTable(self: *Memory, heaps: []const Stats) void {
         _ = ui.tableNextColumn();
         ui.text("{d}", .{s.live_allocs});
         _ = ui.tableNextColumn();
-        if (self.rates.find(s.id)) |r| ui.text("{d:.0}", .{r.per_second}) else ui.textDisabled("-", .{});
+        perSecond(&self.rates, s.id);
         _ = ui.tableNextColumn();
         ui.text("{d}", .{s.allocs});
         _ = ui.tableNextColumn();
@@ -124,65 +154,145 @@ fn heapTable(self: *Memory, heaps: []const Stats) void {
     }
 }
 
-const CallRow = struct {
-    heap: *const Stats,
-    op: core.heap.Op,
+fn perSecond(rates: *const Rates, id: u64) void {
+    if (rates.find(id)) |r| ui.text("{d:.0}", .{r.per_second}) else ui.textDisabled("-", .{});
+}
 
-    fn sample(row: CallRow) Rates.Sample {
-        const op = @backingInt(row.op);
-        return .{ .id = row.heap.id + op, .figures = row.heap.ops[op] };
+// Zones
+
+/// A zone that's allocated, or everything outside every zone.
+const ZoneRow = struct {
+    id: u64,
+    group: []const u8,
+    name: []const u8,
+    allocs: u64,
+    bytes: u64,
+
+    fn allocSample(r: ZoneRow) Rates.Sample {
+        return .{ .id = r.id, .figures = .{ .calls = r.allocs } };
+    }
+
+    fn byteSample(r: ZoneRow) Rates.Sample {
+        return .{ .id = r.id, .figures = .{ .calls = r.bytes } };
     }
 };
 
-const CallColumn = enum { group, heap, call, per_second, avg, max, last, calls };
+const ZoneColumn = enum { group, zone, allocs_per_second, bytes_per_second, allocs, bytes };
 
-fn callOrder(rates: *const Rates, column: ?CallColumn, a: CallRow, b: CallRow) std.math.Order {
-    const by = column orelse {
-        const by_heap = byName(a.heap, b.heap);
-        return if (by_heap != .eq) by_heap else std.math.order(@backingInt(a.op), @backingInt(b.op));
-    };
-    return switch (by) {
-        .group => std.mem.order(u8, a.heap.ownerName(), b.heap.ownerName()),
-        .heap => std.mem.order(u8, a.heap.name(), b.heap.name()),
-        .call => std.math.order(@backingInt(a.op), @backingInt(b.op)),
-        inline else => |figure| rates.order(@field(Rates.Figure, @tagName(figure)), a.sample(), b.sample()),
+fn zoneOrder(self: *const Memory, column: ?ZoneColumn, a: ZoneRow, b: ZoneRow) std.math.Order {
+    return switch (column orelse return byName(a.group, a.name, b.group, b.name)) {
+        .group => std.mem.order(u8, a.group, b.group),
+        .zone => std.mem.order(u8, a.name, b.name),
+        .allocs_per_second => self.alloc_rates.order(.per_second, a.allocSample(), b.allocSample()),
+        .bytes_per_second => self.byte_rates.order(.per_second, a.byteSample(), b.byteSample()),
+        .allocs => std.math.order(a.allocs, b.allocs),
+        .bytes => std.math.order(a.bytes, b.bytes),
     };
 }
 
-fn callTable(self: *Memory, heaps: []const Stats) void {
-    const table = ui.table("calls", 3 + Rates.columns(.us).len, table_options) orelse return;
-    defer table.end();
-    nameColumns();
-    ui.tableColumnWith("Call", .{ .fixed = true });
-    Rates.setupColumns(.us);
-    ui.tableHeaders();
-
-    var rows: [max_heaps * 4]CallRow = undefined;
+/// Allocations on Wraith's heaps by the innermost timing zone on their thread.
+fn zoneTable(self: *Memory) void {
+    const zones = self.zone_stats[0..core.timing.registry.snapshot(&self.zone_stats)];
     var len: usize = 0;
-    for (heaps) |*s| {
-        for (s.ops, 0..) |f, op| {
-            if (f.calls == 0) continue;
-            rows[len] = .{ .heap = s, .op = @fromBackingInt(@intCast(op)) };
-            len += 1;
-        }
+    const outside = core.heap.unscopedCounts();
+    self.zone_rows[len] = .{ .id = outside_id, .group = "wraith", .name = "(outside any zone)", .allocs = outside.allocs, .bytes = outside.bytes };
+    len += 1;
+    for (zones) |*z| {
+        if (z.allocs == 0) continue;
+        self.zone_rows[len] = .{ .id = z.id, .group = groupOf(z.ownerName()), .name = z.name(), .allocs = z.allocs, .bytes = z.alloc_bytes };
+        len += 1;
     }
-    table.sort(CallColumn, CallRow, rows[0..len], &self.op_rates, callOrder);
+    const rows = self.zone_rows[0..len];
+    var samples: [Rates.max + 1]Rates.Sample = undefined;
+    for (rows, 0..) |r, i| samples[i] = r.allocSample();
+    self.alloc_rates.tick(samples[0..len]);
+    for (rows, 0..) |r, i| samples[i] = r.byteSample();
+    self.byte_rates.tick(samples[0..len]);
 
-    for (rows[0..len]) |row| {
-        const s = row.heap;
+    const table = ui.table("zones", 6, table_options) orelse return;
+    defer table.end();
+    nameColumns("Zone");
+    inline for (.{ "Allocs/s", "Bytes/s", "Allocs", "Bytes" }) |label| ui.tableColumnWith(label, .{ .fixed = true });
+    ui.tableHeaders();
+    table.sort(ZoneColumn, ZoneRow, rows, @as(*const Memory, self), zoneOrder);
+    for (rows) |r| {
         ui.tableNextRow();
         _ = ui.tableNextColumn();
-        ui.text("{s}", .{if (s.ownerName().len == 0) "wraith" else s.ownerName()});
+        ui.text("{s}", .{r.group});
         _ = ui.tableNextColumn();
-        ui.text("{s}", .{s.name()});
+        // Picks what's traced below
+        const traced = core.heap.tracedZone() == if (r.id == outside_id) 0 else @as(usize, @intCast(r.id));
+        if (ui.selectable(ui.format("{s}##zone{d}", .{ r.name, r.id }), traced) and !traced) {
+            core.heap.traceZone(if (r.id == outside_id) null else @ptrFromInt(@as(usize, @intCast(r.id))));
+            self.traced_name.set(r.name);
+        }
+        ui.tooltip("{s}Click to trace where its allocations come from, under Where allocations come from.", .{if (r.id == outside_id) "Not in any zone's scope on their thread. " else ""});
         _ = ui.tableNextColumn();
-        ui.text("{t}", .{row.op});
-        const sample = row.sample();
-        self.op_rates.row(sample.id, sample.figures);
+        perSecond(&self.alloc_rates, r.id);
+        _ = ui.tableNextColumn();
+        if (self.byte_rates.find(r.id)) |rate| ui.text("{Bi:.1}", .{@as(u64, @intFromFloat(rate.per_second))}) else ui.textDisabled("-", .{});
+        _ = ui.tableNextColumn();
+        ui.text("{d}", .{r.allocs});
+        _ = ui.tableNextColumn();
+        ui.text("{Bi:.1}", .{r.bytes});
     }
 }
 
-fn byName(a: *const Stats, b: *const Stats) std.math.Order {
-    const by_owner = std.mem.order(u8, a.ownerName(), b.ownerName());
-    return if (by_owner != .eq) by_owner else std.mem.order(u8, a.name(), b.name());
+// Traces
+
+/// Call stacks of the picked zone's allocations, while asked.
+fn drawTraces(self: *Memory) void {
+    ui.text("Tracing {s}", .{if (core.heap.tracedZone() == 0) "(outside any zone)" else self.traced_name.message()});
+    ui.sameLine();
+    ui.textDisabled("Pick another in By zone.", .{});
+    var on = core.heap.tracing.load(.monotonic);
+    if (ui.checkbox("Record", &on)) core.heap.tracing.store(on, .monotonic);
+    ui.tooltip("Walks the stack for each one, so it's slow while it's on", .{});
+    ui.sameLine();
+    if (ui.smallButton("Clear")) core.heap.clearTraces();
+    const got = core.heap.traces(&self.traces);
+    ui.sameLine();
+    const none = ui.disabled(got.len == 0);
+    if (ui.smallButton("Copy all")) self.copyTraces(self.traces[0..got.len]);
+    none.end();
+    ui.tooltip("Each trace's count, then its stack, newest first", .{});
+    if (got.len == 0) return ui.textDisabled("{s}", .{if (on) "None yet." else "Turn on Record to see where they come from."});
+    for (self.traces[0..got.len], 0..) |*t, i| {
+        const node = ui.treeNode(ui.format("{d}  {s}##trace{d}", .{ t.count, self.where(t), i })) orelse continue;
+        defer node.end();
+        for (t.addresses()) |address| ui.textDisabled("{s}", .{self.nameOf(address)});
+        if (ui.smallButton("Copy")) self.copyTraces(t[0..1]);
+    }
+    if (got.missed > 0) ui.textDisabled("And {d} from other places, past the first {d}.", .{ got.missed, self.traces.len });
+}
+
+fn copyTraces(self: *Memory, traces: []const Trace) void {
+    var clip: Clip = .{};
+    for (traces) |*t| {
+        clip.line("{d} allocations", .{t.count});
+        for (t.addresses()) |address| clip.line("  {s}", .{self.nameOf(address)});
+    }
+    clip.copy();
+}
+
+/// Past the tracked heap's own frames, which are always the first few, toward who asked.
+fn where(self: *Memory, t: *const Trace) []const u8 {
+    const own_frames = 3;
+    if (t.len == 0) return "?";
+    return self.nameOf(t.frames[@min(own_frames, t.len - 1)]);
+}
+
+/// Its module and offset, or an export's name. Not the PDB: std looks for it by the game's exe, and reading it is slow.
+fn nameOf(self: *Memory, address: usize) []const u8 {
+    if (self.names.get(address)) |n| return n;
+    var buf: [256]u8 = undefined;
+    const found = Symbols.local.describe(address, &buf) orelse (std.fmt.bufPrint(&buf, "0x{x}", .{address}) catch "?");
+    const text = self.names_text.allocator().dupe(u8, found) catch "?";
+    self.names.put(gpa, address, text) catch {};
+    return text;
+}
+
+fn byName(a_group: []const u8, a_name: []const u8, b_group: []const u8, b_name: []const u8) std.math.Order {
+    const by_group = std.mem.order(u8, a_group, b_group);
+    return if (by_group != .eq) by_group else std.mem.order(u8, a_name, b_name);
 }

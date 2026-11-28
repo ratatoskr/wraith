@@ -56,6 +56,8 @@ pub const Options = struct {
 };
 
 allocator: std.mem.Allocator,
+/// For what a frame draws and drops, emptied each frame but keeping its room, so drawing doesn't allocate
+frame: std.heap.ArenaAllocator,
 overlay: *Overlay,
 keybinds: *Keybinds,
 options: Options,
@@ -136,6 +138,7 @@ pub fn create(allocator: std.mem.Allocator, overlay: *Overlay, keybinds: *Keybin
 
     self.* = .{
         .allocator = allocator,
+        .frame = .init(core.heap.named("shell frame", core.heap.main)),
         .overlay = overlay,
         .keybinds = keybinds,
         .options = options,
@@ -269,6 +272,7 @@ pub fn destroy(self: *Shell) void {
     if (self.project) |p| p.destroy();
     // Last, since tweaks take their keys out of it
     if (self.owns_registry) self.registry.destroy();
+    self.frame.deinit();
     self.allocator.destroy(self);
 }
 
@@ -451,15 +455,30 @@ fn saveTweakLayout(self: *Shell) void {
 }
 
 fn draw(self: *Shell) void {
-    if (self.tweaks) |t| t.tick();
+    const timed = core.timing.scope("shell");
+    defer timed.end();
+    _ = self.frame.reset(.retain_capacity);
+    if (self.tweaks) |t| {
+        const tweaks = core.timing.scope("shell tweaks");
+        defer tweaks.end();
+        t.tick();
+    }
     self.saveTweakLayout();
     self.workbench.tickUnopened();
     self.followOsTheme();
     self.watchClashes();
-    self.hub.draw(self);
+    {
+        const hub = core.timing.scope("shell hub");
+        defer hub.end();
+        self.hub.draw(self);
+    }
     // What drew last frame is what's showing; a closed window drew nothing
     inline for (.{ .settings, .photo_toolbar, .photo_scene, .photo_inspector, .photo_row, .photo_menu, .photo_tools }) |slot| slots.settleSlot(slot);
-    self.windows.system.draw();
+    {
+        const windows = core.timing.scope("shell windows");
+        defer windows.end();
+        self.windows.system.draw();
+    }
     if (self.welcome.draw(self.overlay)) |choices| {
         self.finishWelcome(choices);
         self.openAfterWelcome();
@@ -825,7 +844,7 @@ const tests = struct {
         // Picking a bone in the game shows its actor
         photo.posing.select(photo.posing.store.byId(7).?, 1);
         for (0..2) |_| rig.present();
-        try testing.expectEqual(7, photo.scene.selectedOf("actor"));
+        try testing.expectEqual(7, photo.scene.panelOf(photo.scene.active().?).id);
 
         window.window.open = false;
         for (0..2) |_| rig.present();

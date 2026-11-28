@@ -337,9 +337,7 @@ pub fn drawOnScreen(self: *TweaksWindow, shell: *Shell, interactive: bool) void 
     _ = self;
     if (!shell.registry.get(shell.own.tweaks_on_screen).toggle) return;
     const tweaks = shell.tweaks orelse return;
-    var arena: std.heap.ArenaAllocator = .init(shell.allocator);
-    defer arena.deinit();
-    const list = tweaks.snapshot(arena.allocator()) catch return;
+    const list = tweaks.snapshot(shell.frame.allocator()) catch return;
     var shown: [max_on_screen]*const Info = undefined;
     var n: usize = 0;
     for (list) |*t| {

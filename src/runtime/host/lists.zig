@@ -2,6 +2,7 @@
 //! they survive id changes. Buttons call the plugin on the render thread.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const ui = @import("wraith_ui");
@@ -19,7 +20,7 @@ const Registry = @import("../settings/Registry.zig");
 const W = api.wraith;
 pub const Pick = W.ItemList.Pick;
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 /// What a Wraith feature uses a list for. Plain ones are just the plugin's.
 pub const Purpose = enum { plain, cameras };

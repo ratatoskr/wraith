@@ -234,7 +234,7 @@ fn enumChoices(r: Ref) []const TweakFields.Choice {
         .@"enum" => |e| e.values,
         else => return &.{},
     };
-    enum_choices.resize(std.heap.page_allocator, values.len) catch return &.{};
+    enum_choices.resize(core.heap.main, values.len) catch return &.{};
     for (values, enum_choices.items) |item, *ch| ch.* = .{ .value = @floatFromInt(item.value), .label = item.name };
     return enum_choices.items;
 }
@@ -260,7 +260,7 @@ pub fn instanceOf(schema: *const Schema, type_name: []const u8) ?usize {
 const Choices = struct {
     key: u64 = 0,
     read_ns: u64 = 0,
-    arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
+    arena: std.heap.ArenaAllocator = .init(core.heap.main),
     list: []const TweakFields.Choice = &.{},
 };
 

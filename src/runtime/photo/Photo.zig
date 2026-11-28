@@ -20,6 +20,7 @@ pub const Scene = @import("Scene.zig");
 pub const Camera = @import("Camera.zig");
 pub const Cameras = @import("Cameras.zig");
 pub const Posing = @import("Posing.zig");
+pub const View = @import("View.zig");
 const slots = @import("../host/slots.zig");
 const Target = slots.Target;
 
@@ -33,12 +34,19 @@ scene: Scene,
 camera: Camera = undefined,
 cameras: Cameras = undefined,
 posing: Posing = undefined,
+/// The scene over the game: handles and the gizmo
+view: View = undefined,
 speed: GameSpeed = .{},
 /// The shell's, for the toolbar's button
 screenshot: ?*Screenshot = null,
 scope: core.Scope,
 /// Opens and closes it. Posing's id still, so bindings carry over
 window_key: *Registry.Setting = undefined,
+undo_key: *Registry.Setting = undefined,
+redo_key: *Registry.Setting = undefined,
+/// Keys wait for the frame, since the history's the render thread's
+want_undo: Atomic(bool) = .init(false),
+want_redo: Atomic(bool) = .init(false),
 /// Whether it's open, from any thread.
 open: Atomic(bool) = .init(false),
 /// The shell's, so the key opens it. Render thread.
@@ -54,16 +62,24 @@ pub fn create(allocator: std.mem.Allocator, registry: *Registry, overlay: *Overl
     errdefer self.scene.deinit();
     try self.scene.add(.{ .slot = .photo_scene, .id = "world", .kind = "world", .title = "World", .icon = icons.globe, .open = true, .order = 100 }, .none);
     try self.scene.add(.{ .slot = .photo_inspector, .id = "world", .kind = "world", .presentation = .@"inline", .order = 100 }, .{ .native = .of(self, drawWorld) });
-    inline for (.{ .{ "camera", drawCameraTools }, .{ "speed", drawSpeedTool }, .{ "overlay", drawOverlayTool }, .{ "screenshot", drawScreenshotTool } }, 1..) |t, i| {
+    inline for (.{ .{ "history", drawHistoryTool }, .{ "camera", drawCameraTools }, .{ "speed", drawSpeedTool }, .{ "overlay", drawHandlesTool }, .{ "screenshot", drawScreenshotTool } }, 1..) |t, i| {
         try self.scene.add(.{ .slot = .photo_toolbar, .id = t[0], .order = i * 100 }, .{ .native = .of(self, t[1]) });
     }
+    self.scene.keybinds = keybinds;
     try self.camera.init(registry, overlay, keybinds);
     errdefer self.camera.deinit();
     try self.cameras.init(&self.scene, &self.camera);
     try self.posing.init(registry, overlay, &self.scene);
     errdefer self.posing.deinit();
+    self.view = try .init(&self.scene);
+    errdefer self.view.deinit();
     self.window_key = try registry.add(.{ .id = "wraith.posing.window", .name = "Open or close Photo mode", .group = Settings.group, .section = section, .heading = "Window", .kind = .{ .key = .{ .default = .one(.{ .key = .f7 }), .consume = true } } }, .{ .key = .{ .ctx = self, .call = windowKey } });
     errdefer registry.remove(self.window_key);
+    // Only while it's open, so the game keeps them otherwise
+    self.undo_key = try registry.add(.{ .id = "wraith.photo.undo", .name = "Undo", .group = Settings.group, .section = section, .heading = "Window", .kind = .{ .key = .{ .default = .one(.{ .key = .z, .mods = .{ .ctrl = true } }), .consume = false } } }, .{ .key = .{ .ctx = self, .call = undoKey } });
+    errdefer registry.remove(self.undo_key);
+    self.redo_key = try registry.add(.{ .id = "wraith.photo.redo", .name = "Redo", .group = Settings.group, .section = section, .heading = "Window", .kind = .{ .key = .{ .default = .one(.{ .key = .y, .mods = .{ .ctrl = true } }), .consume = false } } }, .{ .key = .{ .ctx = self, .call = redoKey } });
+    errdefer registry.remove(self.redo_key);
     try overlay.update.subscribe(&self.scope, self, update);
     return self;
 }
@@ -72,6 +88,9 @@ pub fn destroy(self: *Photo) void {
     // Waits for a frame in flight
     self.scope.deinit();
     self.registry.remove(self.window_key);
+    self.registry.remove(self.undo_key);
+    self.registry.remove(self.redo_key);
+    self.view.deinit();
     self.posing.deinit();
     self.camera.deinit();
     self.scene.deinit();
@@ -86,6 +105,16 @@ pub fn setOpen(self: *Photo, on: bool) void {
     self.open.store(on, .release);
 }
 
+fn undoKey(ctx: *anyopaque, phase: Keybinds.Phase) void {
+    const self: *Photo = @ptrCast(@alignCast(ctx));
+    if (phase == .pressed) self.want_undo.store(true, .release);
+}
+
+fn redoKey(ctx: *anyopaque, phase: Keybinds.Phase) void {
+    const self: *Photo = @ptrCast(@alignCast(ctx));
+    if (phase == .pressed) self.want_redo.store(true, .release);
+}
+
 fn windowKey(ctx: *anyopaque, phase: Keybinds.Phase) void {
     const self: *Photo = @ptrCast(@alignCast(ctx));
     if (phase == .pressed) self.setOpen(!self.isOpen());
@@ -93,10 +122,30 @@ fn windowKey(ctx: *anyopaque, phase: Keybinds.Phase) void {
 
 /// Every frame, even when the overlay can't draw.
 fn update(self: *Photo) void {
+    const timed = core.timing.scope("photo mode");
+    defer timed.end();
     self.syncOpen();
     self.camera.tick();
     self.posing.tick(self.isOpen());
+    // After posing, so its picks are in and the skeletons drawn under the gizmo
+    self.view.update(self.isOpen());
+    self.updateHistory();
     if (self.scene.takeFocus()) |point| self.camera.focus(point);
+}
+
+/// Undo or redo by key, then a step for whatever's finished changing.
+fn updateHistory(self: *Photo) void {
+    const h = &self.scene.history;
+    // Mid-drag or with a box held, it's not done yet
+    const busy = self.view.dragging or ui.isAnyItemActive();
+    const undo = self.want_undo.swap(false, .acq_rel);
+    const redo = self.want_redo.swap(false, .acq_rel);
+    // While typing, the box's own undo has the keys
+    if (self.isOpen() and !busy and !ui.getIO().WantTextInput) {
+        if (undo) h.undo();
+        if (redo) h.redo();
+    }
+    h.tick(busy);
 }
 
 /// The key and the window's own close button both open and close it.
@@ -117,14 +166,7 @@ fn drawWorld(self: *Photo, _: Target) void {
     ui.textDisabled("Right-click the slider for normal speed.", .{});
 }
 
-/// An icon button in the toolbar, flat till it's hovered, and lit while it's on.
-pub fn toolButton(label: [:0]const u8, on: bool, comptime tip: []const u8, args: anytype) bool {
-    const lit: ui.StyleColors = if (on) ui.withStyleColor(.button, .button_active) else ui.withColor(.button, @as(u32, 0));
-    defer lit.end();
-    const clicked = ui.iconButton(label, "");
-    ui.tooltip(tip, args);
-    return clicked;
-}
+pub const toolButton = Scene.toolButton;
 
 /// Room between groups of tools.
 pub fn gap() void {
@@ -134,6 +176,27 @@ pub fn gap() void {
 /// Tighter than the rest of the window, so the tools take one slim row.
 pub fn compact() ui.StyleScope {
     return ui.styleVars(.{ .frame_padding = .{ ui.scaled(4), ui.scaled(2) }, .item_spacing = .{ ui.scaled(2), ui.scaled(4) } });
+}
+
+fn drawHistoryTool(self: *Photo, _: Target) void {
+    const tight = compact();
+    defer tight.end();
+    const h = &self.scene.history;
+    var buf: [96]u8 = undefined;
+    {
+        const none = ui.disabled(!h.canUndo());
+        defer none.end();
+        if (toolButton(icons.undo_2 ++ "##photo_undo", false, "Undo. {s}", .{self.keyName(self.undo_key, &buf)})) h.undo();
+    }
+    ui.sameLine();
+    const none = ui.disabled(!h.canRedo());
+    defer none.end();
+    if (toolButton(icons.redo_2 ++ "##photo_redo", false, "Redo. {s}", .{self.keyName(self.redo_key, &buf)})) h.redo();
+}
+
+fn keyName(self: *Photo, setting: *Registry.Setting, buf: []u8) []const u8 {
+    const keys = self.registry.get(setting).key orelse return "No key";
+    return ui.chordName(buf, keys.first());
 }
 
 fn drawCameraTools(self: *Photo, _: Target) void {
@@ -154,10 +217,10 @@ fn drawSpeedTool(self: *Photo, _: Target) void {
     self.speed.draw(.{ .width = 70, .label = false });
 }
 
-fn drawOverlayTool(self: *Photo, _: Target) void {
+fn drawHandlesTool(self: *Photo, _: Target) void {
     const tight = compact();
     defer tight.end();
-    self.posing.drawOverlayTool();
+    self.scene.drawHandlesTool();
 }
 
 fn drawScreenshotTool(self: *Photo, _: Target) void {
@@ -199,6 +262,9 @@ const testing = std.testing;
 
 test {
     _ = Scene;
+    _ = View;
+    _ = @import("transform.zig");
+    _ = Scene.History;
 }
 
 test "the game's camera goes through untouched till the free camera's on, then it's ours" {
@@ -282,7 +348,7 @@ test "the free camera hides only its controls from the game, unless it's set to 
     try testing.expect(!rig.blocker.consume_wheel.load(.acquire));
 }
 
-test "one selection: picking a bone picks its actor, and picking World lets the actor go" {
+test "picking a bone shows its actor, and picking World lets the actor go" {
     const Rig = @import("../testing/Rig.zig");
     var rig: Rig = undefined;
     try rig.init(.{});
@@ -298,11 +364,11 @@ test "one selection: picking a bone picks its actor, and picking World lets the 
     photo.setOpen(true);
 
     photo.posing.select(photo.posing.store.byId(7).?, 1);
-    try testing.expectEqual(7, photo.scene.selectedOf("actor"));
+    try testing.expectEqualStrings("actor", photo.scene.panelOf(photo.scene.active().?).kind);
+    try testing.expectEqual(7, photo.scene.panelOf(photo.scene.active().?).id);
     try testing.expect(photo.posing.wants(7));
 
     photo.scene.select("world", 0);
     rig.present();
-    try testing.expectEqual(null, photo.posing.actor);
     try testing.expect(!photo.posing.wants(7));
 }

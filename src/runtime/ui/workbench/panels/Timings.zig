@@ -1,4 +1,4 @@
-//! How often things run and how long they take.
+//! How often things run and how long they take: each zone, and each heap's calls. Memory counts what they allocate.
 
 const Timings = @This();
 
@@ -12,10 +12,16 @@ const Rates = @import("../Rates.zig");
 const Clip = @import("wraith_ui").Clip;
 
 const Stats = core.timing.Stats;
+const HeapStats = core.heap.Stats;
+const max_heaps = 64;
 
 stats: [Rates.max]Stats = undefined,
 rates: Rates = .{},
+heaps: [max_heaps]HeapStats = undefined,
+call_rates: Rates = .{ .unit = .us },
 picked: ui.Selection = .{},
+
+const table_options: ui.TableOptions = .{ .borders = true, .row_background = true, .resizable = true, .sortable = true, .sizing = .stretch_prop };
 
 pub fn deinit(self: *Timings) void {
     self.picked.deinit();
@@ -24,30 +30,34 @@ pub fn deinit(self: *Timings) void {
 pub fn draw(self: *Timings) void {
     const n = core.timing.registry.snapshot(&self.stats);
     const zones = self.stats[0..n];
-
     var samples: [Rates.max]Rates.Sample = undefined;
     for (zones, 0..) |*s, i| samples[i] = sample(s);
     self.rates.tick(samples[0..n]);
 
-    const table = ui.table("timings", 2 + Rates.columns(.ms).len, .{
-        .borders = true,
-        .row_background = true,
-        .resizable = true,
-        .sortable = true,
-        .sizing = .stretch_prop,
-        .scroll_y = true,
-    }) orelse return;
+    const heaps = self.heaps[0..core.heap.registry.snapshot(&self.heaps)];
+    var call_samples: [max_heaps * 4]Rates.Sample = undefined;
+    for (heaps, 0..) |*s, i| {
+        for (s.ops, 0..) |f, op| call_samples[i * 4 + op] = .{ .id = s.id + op, .figures = f };
+    }
+    self.call_rates.tick(call_samples[0 .. heaps.len * 4]);
+
+    self.zoneTable(zones);
+    if (ui.collapsingHeader("Heap calls", false)) self.callTable(heaps);
+}
+
+fn zoneTable(self: *Timings, zones: []Stats) void {
+    const table = ui.table("timings", 2 + Rates.columns(.ms).len, table_options) orelse return;
     ui.tableColumnWith("Group", .{ .stretch = true, .width = 1 });
     ui.tableColumnWith("Zone", .{ .stretch = true, .width = 2 });
     Rates.setupColumns(.ms);
     ui.tableHeaders();
     table.sort(Column, Stats, zones, &self.rates, order);
 
-    var picking = self.picked.begin(n, ui.Selection.Rows(Stats, idOf){ .rows = zones }, .{});
+    var picking = self.picked.begin(zones.len, ui.Selection.Rows(Stats, idOf){ .rows = zones }, .{});
     for (zones, 0..) |*s, i| {
         ui.tableNextRow();
         _ = ui.tableNextColumn();
-        _ = picking.row(i, ui.format("{s}##{d}", .{ if (s.ownerName().len == 0) "wraith" else s.ownerName(), s.id }));
+        _ = picking.row(i, ui.format("{s}##{d}", .{ groupOf(s.ownerName()), s.id }));
         _ = ui.tableNextColumn();
         ui.text("{s}", .{s.name()});
         self.rates.row(s.id, figures(s));
@@ -62,12 +72,75 @@ pub fn draw(self: *Timings) void {
         var clip: Clip = .{};
         for (zones) |*s| if (self.picked.contains(s.id)) {
             const f = figures(s);
-            clip.line("{s}\t{s}\t{d}\t{d:.3}\t{d:.3}", .{ if (s.ownerName().len == 0) "wraith" else s.ownerName(), s.name(), f.calls, ms(f.max_ns), ms(f.last_ns) });
+            clip.line("{s}\t{s}\t{d}\t{d:.3}\t{d:.3}", .{ groupOf(s.ownerName()), s.name(), f.calls, ms(f.max_ns), ms(f.last_ns) });
         };
         clip.copy();
     }
     menu.separator();
     if (menu.item(.{ .label = "Reset all", .tooltip = "Clears every zone's counts and maximum" })) core.timing.registry.forEach(core.timing.Zone.reset);
+}
+
+/// How long each heap takes to allocate, resize and free.
+const CallRow = struct {
+    heap: *const HeapStats,
+    op: core.heap.Op,
+
+    fn sample(row: CallRow) Rates.Sample {
+        const op = @backingInt(row.op);
+        return .{ .id = row.heap.id + op, .figures = row.heap.ops[op] };
+    }
+};
+
+const CallColumn = enum { group, heap, call, per_second, avg, max, last, calls };
+
+fn callOrder(rates: *const Rates, column: ?CallColumn, a: CallRow, b: CallRow) std.math.Order {
+    const by = column orelse {
+        const by_heap = byHeap(a.heap, b.heap);
+        return if (by_heap != .eq) by_heap else std.math.order(@backingInt(a.op), @backingInt(b.op));
+    };
+    return switch (by) {
+        .group => std.mem.order(u8, a.heap.ownerName(), b.heap.ownerName()),
+        .heap => std.mem.order(u8, a.heap.name(), b.heap.name()),
+        .call => std.math.order(@backingInt(a.op), @backingInt(b.op)),
+        inline else => |figure| rates.order(@field(Rates.Figure, @tagName(figure)), a.sample(), b.sample()),
+    };
+}
+
+fn callTable(self: *Timings, heaps: []const HeapStats) void {
+    const table = ui.table("calls", 3 + Rates.columns(.us).len, table_options) orelse return;
+    defer table.end();
+    ui.tableColumnWith("Group", .{ .stretch = true });
+    ui.tableColumnWith("Heap", .{ .stretch = true });
+    ui.tableColumnWith("Call", .{ .fixed = true });
+    Rates.setupColumns(.us);
+    ui.tableHeaders();
+
+    var rows: [max_heaps * 4]CallRow = undefined;
+    var len: usize = 0;
+    for (heaps) |*s| {
+        for (s.ops, 0..) |f, op| {
+            if (f.calls == 0) continue;
+            rows[len] = .{ .heap = s, .op = @fromBackingInt(@intCast(op)) };
+            len += 1;
+        }
+    }
+    table.sort(CallColumn, CallRow, rows[0..len], &self.call_rates, callOrder);
+
+    for (rows[0..len]) |row| {
+        ui.tableNextRow();
+        _ = ui.tableNextColumn();
+        ui.text("{s}", .{groupOf(row.heap.ownerName())});
+        _ = ui.tableNextColumn();
+        ui.text("{s}", .{row.heap.name()});
+        _ = ui.tableNextColumn();
+        ui.text("{t}", .{row.op});
+        const s = row.sample();
+        self.call_rates.row(s.id, s.figures);
+    }
+}
+
+fn groupOf(owner: []const u8) []const u8 {
+    return if (owner.len == 0) "wraith" else owner;
 }
 
 fn idOf(s: *const Stats) u64 {
@@ -97,6 +170,11 @@ fn order(rates: *const Rates, column: ?Column, a: Stats, b: Stats) std.math.Orde
 }
 
 fn byName(a: *const Stats, b: *const Stats) std.math.Order {
+    const by_owner = std.mem.order(u8, a.ownerName(), b.ownerName());
+    return if (by_owner != .eq) by_owner else std.mem.order(u8, a.name(), b.name());
+}
+
+fn byHeap(a: *const HeapStats, b: *const HeapStats) std.math.Order {
     const by_owner = std.mem.order(u8, a.ownerName(), b.ownerName());
     return if (by_owner != .eq) by_owner else std.mem.order(u8, a.name(), b.name());
 }

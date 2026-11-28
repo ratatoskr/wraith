@@ -1,6 +1,7 @@
 //! Menu items owners add to the Wraith UI. The overlay's bar shows them, a button per owner.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const tuft_sys = @import("tuft_sys");
 const Owner = @import("tuft_event").Owner;
@@ -19,7 +20,7 @@ pub const Entry = struct {
     owner: *Owner,
 };
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 var lock: tuft_sys.sync.RwLock = .{};
 var entries: std.ArrayList(Entry) = .empty;
@@ -41,6 +42,7 @@ pub fn remove(item: *const Item) void {
     for (entries.items, 0..) |e, i| {
         if (e.item == item) {
             _ = entries.orderedRemove(i);
+            if (entries.items.len == 0) entries.clearAndFree(allocator);
             return;
         }
     }
@@ -67,6 +69,7 @@ fn closing(owner: *Owner) void {
     while (i < entries.items.len) {
         if (entries.items[i].owner == owner) _ = entries.orderedRemove(i) else i += 1;
     }
+    if (entries.items.len == 0) entries.clearAndFree(allocator);
 }
 
 test "items listed until removed" {

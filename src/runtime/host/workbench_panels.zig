@@ -2,9 +2,10 @@
 //! are contributions to its slots, in `slots.zig`.
 
 const std = @import("std");
+const core = @import("wraith_core");
 const sync = @import("tuft_sys").sync;
 
-const gpa = std.heap.page_allocator;
+const gpa = core.heap.main;
 
 var class_lock: sync.RwLock = .{};
 /// Under `class_lock`. Empty for none.

@@ -173,7 +173,7 @@ pub fn claim(loaded: *Loaded, part: Part, changed: ?W.Lease.Changed, speed: ?W.G
         const slot = slots.getPtr(part);
         slot.lock.lock();
         defer slot.lock.unlock();
-        _ = slot.leases.put(std.heap.page_allocator, l, .of(loaded)) catch {
+        _ = slot.leases.put(core.heap.main, l, .of(loaded)) catch {
             // `Owned` frees it with the plugin
             l.released = true;
             return error.OutOfMemory;
@@ -193,6 +193,7 @@ fn drop(l: *Lease, by_plugin: bool) void {
         if (l.released) return;
         l.released = true;
         _ = slot.leases.take(@intFromPtr(l));
+        slot.leases.freeIfEmpty(core.heap.main);
         // Its plugin's still there to put back what it did only if it let go itself
         change = repickLocked(l.part, by_plugin);
     }

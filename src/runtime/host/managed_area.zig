@@ -2,6 +2,7 @@
 //! the caller's scratch, which is safe since the caller waits.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const mem = @import("tuft_mem");
@@ -72,13 +73,13 @@ pub const Impl = struct {
             pair.resolver.drop();
             return pair.promise;
         };
-        const job = std.heap.page_allocator.create(RunningWait) catch {
+        const job = gpa.create(RunningWait) catch {
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
         job.* = .{ .owner = t.owner, .resolver = .of(pair.resolver, loaded) };
         const thread = std.Thread.spawn(.{}, RunningWait.run, .{job}) catch {
-            std.heap.page_allocator.destroy(job);
+            gpa.destroy(job);
             pair.resolver.fail(error.Failed);
             return pair.promise;
         };
@@ -148,7 +149,7 @@ pub const Impl = struct {
         if (handle == 0) return error.Failed;
         held_lock.lock();
         defer held_lock.unlock();
-        held.put(std.heap.smp_allocator, handle, &loaded.owner) catch {
+        held.put(gpa, handle, &loaded.owner) catch {
             g.call(Runtime.freeHandle, .{handle}) catch {};
             return error.Failed;
         };
@@ -204,7 +205,7 @@ const RunningWait = struct {
     resolver: threads.Back(wraith.ResolverOf(RunningPromise)),
 
     fn run(job: *RunningWait) void {
-        defer std.heap.page_allocator.destroy(job);
+        defer gpa.destroy(job);
         while (true) {
             if (!job.owner.enter()) return job.resolver.drop();
             const state = global().state.load(.acquire);
@@ -224,7 +225,7 @@ const RunningWait = struct {
     }
 };
 
-const gpa = std.heap.smp_allocator;
+const gpa = core.heap.main;
 
 fn listImages(rt: *const Runtime, a: Allocator) E![]const []const u8 {
     const list = rt.assemblies(gpa) catch return error.Failed;

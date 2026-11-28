@@ -3,6 +3,7 @@
 //! that added it. What's added goes by the slot's id, so it's there again when its plugin reloads.
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const api = @import("wraith_api");
@@ -14,7 +15,7 @@ const Loaded = @import("../PluginLoader.zig").Loaded;
 const sal = api.salamander;
 const W = api.wraith;
 
-const gpa = std.heap.page_allocator;
+const gpa = core.heap.main;
 
 pub const Error = error{ UnknownSlot, InvalidId, AlreadyAdded, WrongTrait, Failed };
 

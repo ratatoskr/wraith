@@ -1,6 +1,7 @@
 //! The `Ui` area, from `ui.sal`, and its `ImDrawList` objects. The `ImGui` area is in `wraith.zig`.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const sync = @import("tuft_sys").sync;
@@ -92,7 +93,7 @@ fn stateOf(loaded: *Loaded) ?*State {
     return &t.ui;
 }
 
-const gpa = std.heap.page_allocator;
+const gpa = core.heap.main;
 
 const FilePromise = sal.Plain(Ui, "pickFile");
 const FolderPromise = sal.Plain(Ui, "pickFolder");

@@ -3,6 +3,7 @@
 const Loaded = @This();
 
 const std = @import("std");
+const core = @import("wraith_core");
 const Atomic = @import("tuft_arch").atomic.Value;
 
 const Owner = @import("tuft_event").Owner;
@@ -148,7 +149,7 @@ pub fn free(self: *Loaded) void {
     host_api.wraith.forget(self);
     if (self.schemas) |s| s.destroy();
     for (self.retired_schemas.items) |s| s.destroy();
-    self.retired_schemas.deinit(std.heap.page_allocator);
+    self.retired_schemas.deinit(core.heap.main);
     self.schemas = null;
 }
 

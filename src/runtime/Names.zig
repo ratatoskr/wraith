@@ -184,7 +184,7 @@ const Record = struct {
     when_ns: u64 = 0,
 };
 
-allocator: std.mem.Allocator = std.heap.page_allocator,
+allocator: std.mem.Allocator = core.heap.main,
 lock: tuft_sys.sync.RwLock = .{},
 records: std.ArrayList(*Record) = .empty,
 next_id: u64 = 1,

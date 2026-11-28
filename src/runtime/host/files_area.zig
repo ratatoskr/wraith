@@ -1,6 +1,7 @@
 //! The `Vfs` and `Images` areas, from `vfs.sal` and `images.sal`.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 
@@ -18,7 +19,7 @@ pub const VfsWatch = W.Vfs.Watch;
 pub const Images = W.Images;
 pub const Image = W.Image;
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 // Vfs
 

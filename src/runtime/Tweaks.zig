@@ -292,6 +292,15 @@ pub fn version(self: *const Tweaks) u32 {
     return self.generation.load(.acquire);
 }
 
+/// How many tweaks, not groups, are on. Copies nothing, so it's fine every frame.
+pub fn countOn(self: *Tweaks) usize {
+    self.lock.lock();
+    defer self.lock.unlock();
+    var n: usize = 0;
+    for (self.list.items) |t| n += @intFromBool(!t.is_group and t.isOn());
+    return n;
+}
+
 /// Allocated in `arena`.
 pub fn snapshot(self: *Tweaks, arena: std.mem.Allocator) ![]Info {
     self.lock.lock();

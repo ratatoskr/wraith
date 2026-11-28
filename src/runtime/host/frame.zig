@@ -26,8 +26,8 @@ pub const Task = W.Threads.Task;
 /// From `threads.sal`, kept till the plugin's gone.
 pub const Stopping = W.Threads.Stopping;
 
-var bus: Bus = .init(std.heap.page_allocator);
-var tick_bus: Bus = .init(std.heap.page_allocator);
+var bus: Bus = .init(core.heap.main);
+var tick_bus: Bus = .init(core.heap.main);
 
 var frames: Atomic(bool) = .init(false);
 

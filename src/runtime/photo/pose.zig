@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const math = @import("tuft_math");
+const transform = @import("transform.zig");
 
 const Vec3 = math.Vec3;
 const Quat = math.Quat;
@@ -36,29 +37,32 @@ pub const Name = struct {
 pub const Edit = struct {
     actor: u64,
     bone: Name,
-    /// Degrees around x, then y, then z
-    rotation: Vec3 = .zero,
+    rotation: Quat = .identity,
     position: Vec3 = .zero,
     scale: Vec3 = .one,
 
+    pub fn local(e: *const Edit) transform.Local {
+        return .{ .rotation = e.rotation, .position = e.position, .scale = e.scale };
+    }
+
+    pub fn setLocal(e: *Edit, l: transform.Local) void {
+        e.rotation = l.rotation;
+        e.position = l.position;
+        e.scale = l.scale;
+    }
+
     pub fn matrix(e: *const Edit) Mat4 {
-        return .transform(e.position, euler(e.rotation), e.scale);
+        return e.local().matrix();
     }
 
     /// Takes on `m`'s position, turn and scale, which has to be scaled, then turned, then moved.
     pub fn setMatrix(e: *Edit, m: Mat4) void {
-        var rows: [3]Vec3 = undefined;
-        for (&rows, 0..) |*r, i| r.* = m.row(i).xyz();
-        e.scale = .init(rows[0].length(), rows[1].length(), rows[2].length());
-        for (&rows, [3]f32{ e.scale.x, e.scale.y, e.scale.z }) |*r, len| {
-            if (len > math.epsilon) r.* = r.scale(1 / len);
-        }
-        e.rotation = eulerOf(rows);
-        e.position = m.getTranslation();
+        e.setLocal(.of(m));
     }
 
     pub fn isNothing(e: *const Edit) bool {
-        return std.meta.eql(e.rotation, Vec3.zero) and std.meta.eql(e.position, Vec3.zero) and std.meta.eql(e.scale, Vec3.one);
+        const r = e.rotation;
+        return r.x == 0 and r.y == 0 and r.z == 0 and std.meta.eql(e.position, Vec3.zero) and std.meta.eql(e.scale, Vec3.one);
     }
 };
 
@@ -83,24 +87,8 @@ pub fn shapeKey(name: []const u8) []const u8 {
     return if (dot + 1 < name.len) name[dot + 1 ..] else name;
 }
 
-pub fn euler(degrees: Vec3) Quat {
-    const x = Quat.fromAxisAngle(Vec3.unit_x, math.degToRad(degrees.x));
-    const y = Quat.fromAxisAngle(Vec3.unit_y, math.degToRad(degrees.y));
-    const z = Quat.fromAxisAngle(Vec3.unit_z, math.degToRad(degrees.z));
-    return x.mul(y).mul(z);
-}
-
-/// The degrees `euler` takes for a turn, given as where it takes x, y and z.
-fn eulerOf(r: [3]Vec3) Vec3 {
-    // Euler x then y then z is Rz Ry Rx for column vectors; rows here are where the axes go
-    const sy = std.math.clamp(-r[0].z, -1, 1);
-    const y = std.math.asin(sy);
-    if (@abs(sy) < 1 - 1e-6) {
-        return .init(math.radToDeg(std.math.atan2(r[1].z, r[2].z)), math.radToDeg(y), math.radToDeg(std.math.atan2(r[0].y, r[0].x)));
-    }
-    // Straight up or down, so x and z turn round the same axis. Put it all in x
-    return .init(math.radToDeg(std.math.atan2(-r[2].y, r[1].y)), math.radToDeg(y), 0);
-}
+pub const euler = transform.euler;
+pub const eulerOf = transform.eulerOf;
 
 /// A bone's edit, found in this frame's skeleton.
 pub const Placed = struct {
@@ -281,6 +269,8 @@ pub const Store = struct {
     scratch_parents: std.ArrayList(i32) = .empty,
     /// Counts render frames
     frame: u64 = 0,
+    /// Bumped whenever the edits change, for undo
+    changes: u64 = 0,
     view: Mat4 = .identity,
     projection: Mat4 = .identity,
     view_proj: ?Mat4 = null,
@@ -417,6 +407,8 @@ pub const Store = struct {
 
     /// Made if it isn't there. Null when out of memory. Good till the next one's made.
     pub fn shapeEdit(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) ?*ShapeEdit {
+        // Asked for to be changed
+        s.changes +%= 1;
         if (s.findShapeEdit(actor, mesh, shape_name)) |e| return e;
         const e = s.shape_edits.addOne(s.gpa) catch return null;
         e.* = .{ .actor = actor, .mesh = .init(mesh), .shape = .init(shape_name) };
@@ -426,10 +418,12 @@ pub const Store = struct {
     pub fn resetShape(s: *Store, actor: u64, mesh: []const u8, shape_name: []const u8) void {
         const e = s.findShapeEdit(actor, mesh, shape_name) orelse return;
         _ = s.shape_edits.swapRemove(e - s.shape_edits.items.ptr);
+        s.changes +%= 1;
     }
 
     /// Every mesh's own edit of a shape by its key, so one for every mesh isn't hidden by them.
     pub fn resetShapeOnMeshes(s: *Store, actor: u64, key: []const u8) void {
+        s.changes +%= 1;
         var i: usize = 0;
         while (i < s.shape_edits.items.len) {
             const e = &s.shape_edits.items[i];
@@ -440,6 +434,7 @@ pub const Store = struct {
     }
 
     pub fn resetShapes(s: *Store, actor: u64) void {
+        s.changes +%= 1;
         var i: usize = 0;
         while (i < s.shape_edits.items.len) {
             if (s.shape_edits.items[i].actor == actor) _ = s.shape_edits.swapRemove(i) else i += 1;
@@ -485,6 +480,8 @@ pub const Store = struct {
 
     /// The bone's edit, made if it hasn't one. Null when out of memory. Good till the next one's made.
     pub fn edit(s: *Store, actor: u64, bone: []const u8) ?*Edit {
+        // Asked for to be changed
+        s.changes +%= 1;
         if (s.findEdit(actor, bone)) |e| return e;
         const e = s.edits.addOne(s.gpa) catch return null;
         e.* = .{ .actor = actor, .bone = .init(bone) };
@@ -494,9 +491,11 @@ pub const Store = struct {
     pub fn resetBone(s: *Store, actor: u64, bone: []const u8) void {
         const e = s.findEdit(actor, bone) orelse return;
         _ = s.edits.swapRemove(e - s.edits.items.ptr);
+        s.changes +%= 1;
     }
 
     pub fn resetActor(s: *Store, actor: u64) void {
+        s.changes +%= 1;
         var i: usize = 0;
         while (i < s.edits.items.len) {
             if (s.edits.items[i].actor == actor) _ = s.edits.swapRemove(i) else i += 1;
@@ -526,6 +525,28 @@ pub const Store = struct {
             s.resetActor(a.id);
             a.clear();
         }
+    }
+
+    /// Every bone and shape edit, for undo. Edits are plain data, so they're kept as they are.
+    pub fn saveEdits(s: *const Store, a: std.mem.Allocator) ![]u8 {
+        const head = [2]u32{ @intCast(s.edits.items.len), @intCast(s.shape_edits.items.len) };
+        const parts = [_][]const u8{ std.mem.asBytes(&head), std.mem.sliceAsBytes(s.edits.items), std.mem.sliceAsBytes(s.shape_edits.items) };
+        return std.mem.concat(a, u8, &parts);
+    }
+
+    /// Back to what `saveEdits` gave.
+    pub fn loadEdits(s: *Store, bytes: []const u8) !void {
+        var head: [2]u32 = undefined;
+        @memcpy(std.mem.asBytes(&head), bytes[0..@sizeOf([2]u32)]);
+        try s.edits.resize(s.gpa, head[0]);
+        try s.shape_edits.resize(s.gpa, head[1]);
+        var from: usize = @sizeOf([2]u32);
+        const edits = std.mem.sliceAsBytes(s.edits.items);
+        @memcpy(edits, bytes[from..][0..edits.len]);
+        from += edits.len;
+        const shapes = std.mem.sliceAsBytes(s.shape_edits.items);
+        @memcpy(shapes, bytes[from..][0..shapes.len]);
+        s.changes +%= 1;
     }
 };
 
@@ -578,19 +599,30 @@ test "an edit's matrix comes back as the same edit" {
         .{ .zero, .init(5, 0, 0), .init(1, 1, 1) },
     };
     for (cases) |c| {
-        const e: Edit = .{ .actor = 1, .bone = .init("b"), .rotation = c[0], .position = c[1], .scale = c[2] };
+        const e: Edit = .{ .actor = 1, .bone = .init("b"), .rotation = euler(c[0]), .position = c[1], .scale = c[2] };
         var back: Edit = .{ .actor = 1, .bone = .init("b") };
         back.setMatrix(e.matrix());
-        try testing.expect(back.rotation.approxEql(e.rotation, 1e-3));
+        try testing.expect(sameTurn(back.rotation, e.rotation));
         try testing.expect(back.position.approxEql(e.position, 1e-4));
         try testing.expect(back.scale.approxEql(e.scale, 1e-4));
     }
-    // Straight up still gives the same turn, if not the same numbers
-    const up: Edit = .{ .actor = 1, .bone = .init("b"), .rotation = .init(20, 90, 30) };
+    // Straight up, where degrees lose one, the turn's kept whole
+    const up: Edit = .{ .actor = 1, .bone = .init("b"), .rotation = euler(.init(20, 90, 30)) };
     var back: Edit = .{ .actor = 1, .bone = .init("b") };
     back.setMatrix(up.matrix());
-    try testing.expect(back.matrix().approxEql(up.matrix(), 1e-4));
+    try testing.expect(sameTurn(back.rotation, up.rotation));
 }
+
+test "no turn, move or scale is nothing" {
+    var e: Edit = .{ .actor = 1, .bone = .init("b") };
+    try testing.expect(e.isNothing());
+    e.rotation = euler(.zero);
+    try testing.expect(e.isNothing());
+    e.rotation = euler(.init(0, 0, 1));
+    try testing.expect(!e.isNothing());
+}
+
+const sameTurn = transform.sameTurn;
 
 test "edits stick by name every frame, and freezing holds the pose from before them" {
     var store: Store = .init(testing.allocator);
@@ -749,6 +781,27 @@ test "big skeletons, crowds and many edits all fit" {
     @memset(frame, at(0, 0, 0));
     store.pose(5, "extra", &bones, frame, .identity);
     try testing.expect(frame[count - 1].getTranslation().z > 0.5);
+}
+
+test "edits saved and loaded come back as they were, and each change is counted" {
+    var store: Store = .init(testing.allocator);
+    defer store.deinit();
+    const before = store.changes;
+    store.edit(7, "head").?.position = .init(0, 2, 0);
+    store.shapeEdit(7, "Face", "smile").?.weight = 0.5;
+    try testing.expect(store.changes > before);
+    const saved = try store.saveEdits(testing.allocator);
+    defer testing.allocator.free(saved);
+
+    store.resetActor(7);
+    store.edit(8, "hand").?.scale = .init(2, 2, 2);
+    const changed = store.changes;
+    try store.loadEdits(saved);
+    try testing.expect(store.changes != changed);
+    try testing.expectEqual(1, store.edits.items.len);
+    try testing.expect(store.findEdit(7, "head").?.position.approxEql(.init(0, 2, 0), 1e-6));
+    try testing.expectEqual(null, store.findEdit(8, "hand"));
+    try testing.expectEqual(0.5, store.findShapeEdit(7, "Face", "smile").?.weight);
 }
 
 test "a shape's key is what's after its last dot" {

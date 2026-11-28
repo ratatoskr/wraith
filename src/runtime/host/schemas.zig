@@ -19,7 +19,7 @@ const managed_calls = @import("managed_calls.zig");
 const SalSchema = salamander_schema.Schema;
 const sal = api.salamander;
 const log = core.log.scoped(.wraith_runtime);
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 pub const Area = api.wraith.Schema;
 pub const File = salamander_schema.File;

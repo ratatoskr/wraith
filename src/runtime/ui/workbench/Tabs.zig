@@ -7,6 +7,7 @@
 const Tabs = @This();
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const ui = @import("wraith_ui");
 const tuft_imgui = @import("tuft_imgui");
@@ -15,7 +16,7 @@ const W = @import("wraith_api").wraith;
 const c = @import("../imgui.zig").c;
 const slots = @import("../../host/slots.zig");
 
-const gpa = std.heap.smp_allocator;
+const gpa = core.heap.main;
 
 pub const Tab = struct {
     window: ui.Window,

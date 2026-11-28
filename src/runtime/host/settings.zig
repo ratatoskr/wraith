@@ -10,7 +10,7 @@ const Loaded = @import("../PluginLoader.zig").Loaded;
 const Registry = @import("../settings/Registry.zig");
 
 const log = core.log.scoped(.wraith_plugin);
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 /// Null before the runtime's up.
 var registry: ?*Registry = null;

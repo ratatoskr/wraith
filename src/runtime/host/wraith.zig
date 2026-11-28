@@ -79,7 +79,7 @@ pub const PluginKind = W.Plugin.Kind;
 pub const Guest = W.Plugin.Guest;
 pub const Service = W.Plugin.Service;
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 const log = core.log.scoped(.wraith_runtime);
 
 /// For work that waits on the system, like the clipboard. Null before the runtime's up.

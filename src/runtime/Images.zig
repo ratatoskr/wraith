@@ -3,6 +3,7 @@
 const Images = @This();
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const tuft_sys = @import("tuft_sys");
 const Owner = @import("tuft_event").Owner;
@@ -12,7 +13,7 @@ const c = @import("tuft_imgui").c;
 pub var global: Images = .{};
 
 /// Pixels too, since textures can outlive their owner by a frame or so.
-allocator: std.mem.Allocator = std.heap.page_allocator,
+allocator: std.mem.Allocator = core.heap.main,
 lock: tuft_sys.sync.RwLock = .{},
 entries: std.AutoHashMapUnmanaged(u32, Entry) = .empty,
 next: u32 = 0,

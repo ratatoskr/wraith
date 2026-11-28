@@ -397,6 +397,8 @@ fn addOwnTab(self: *Workbench, comptime o: Own) !void {
     const def = comptime own_tabs.get(o);
     const Draw = struct {
         fn draw(wb: *Workbench, _: slots.Target) void {
+            const timed = core.timing.scope("workbench " ++ @tagName(o));
+            defer timed.end();
             if (def.panel.len > 0) @field(wb.panels, def.panel).draw() else wb.groups.scripts.draw();
         }
     };
@@ -593,7 +595,7 @@ pub fn destroy(self: *Workbench) void {
     self.panels.search.deinit();
     self.panels.accesses.deinit();
     self.panels.addresses.deinit();
-    inline for (.{ "names", "schemas", "classes", "hooks", "claims", "file_io", "log", "timings", "console", "sessions", "stopped", "registers", "breakpoints", "tweaks" }) |name| @field(self.panels, name).deinit();
+    inline for (.{ "names", "schemas", "classes", "hooks", "claims", "file_io", "log", "timings", "memory", "console", "sessions", "stopped", "registers", "breakpoints", "tweaks" }) |name| @field(self.panels, name).deinit();
     for (self.documents.items) |d| Documents.freeDocument(self, d);
     self.project_menu.deinit();
     self.sig_maker.deinit();
@@ -707,11 +709,15 @@ fn activated(ctx: *anyopaque) void {
 
 fn tickThunk(ctx: *anyopaque) void {
     const self: *Workbench = @ptrCast(@alignCast(ctx));
+    const timed = core.timing.scope("workbench tick");
+    defer timed.end();
     self.tick();
 }
 
 fn drawThunk(ctx: *anyopaque) void {
     const self: *Workbench = @ptrCast(@alignCast(ctx));
+    const timed = core.timing.scope("workbench");
+    defer timed.end();
     self.draw();
 }
 

@@ -2,6 +2,7 @@
 //! turned on or off, or a field changes.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const api = @import("wraith_api");
 const input = @import("wraith_platform").input;
@@ -13,7 +14,7 @@ const OnGone = @import("Owned.zig").OnGone;
 const host = @import("root.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 const sal = api.salamander;
 const W = api.wraith;
 /// From `tweaks.sal`, kept till the tweak's gone.
@@ -235,7 +236,9 @@ pub fn removeFor(owner: *Owner, id: []const u8) void {
         lock.lock();
         defer lock.unlock();
         for (entries.items, 0..) |e, i| if (e.owner == owner and std.mem.eql(u8, e.id, id)) {
-            break :blk entries.orderedRemove(i);
+            const gone = entries.orderedRemove(i);
+            if (entries.items.len == 0) entries.clearAndFree(allocator);
+            break :blk gone;
         };
         return;
     };
@@ -268,6 +271,7 @@ fn closing(owner: *Owner) void {
             };
             _ = entries.orderedRemove(i);
         }
+        if (entries.items.len == 0) entries.clearAndFree(allocator);
     }
     if (gone.items.len > 0) _ = generation.fetchAdd(1, .release);
     for (gone.items) |e| finish(e);

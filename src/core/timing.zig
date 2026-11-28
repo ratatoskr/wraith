@@ -1,4 +1,5 @@
-//! Scoped timings on the OS's high-res monotonic clock.
+//! Scoped timings on the OS's high-res monotonic clock. A zone's scope is its thread's current one
+//! till it ends, so `heap` can count allocations against it.
 
 const std = @import("std");
 const Atomic = @import("tuft_arch").atomic.Value;
@@ -15,7 +16,7 @@ pub fn now() u64 {
 /// C layout, read across the plugin boundary. Bump `version` when the fields change.
 pub const Zone = extern struct {
     pub const Snapshot = Stats;
-    pub const version: u32 = 1;
+    pub const version: u32 = 2;
 
     name_ptr: [*]const u8,
     name_len: usize,
@@ -25,6 +26,9 @@ pub const Zone = extern struct {
     total_ns: u64 = 0,
     max_ns: u64 = 0,
     last_ns: u64 = 0,
+    /// Kept by `heap`: allocations on tracked heaps while it was its thread's innermost, and their bytes
+    allocs: u64 = 0,
+    alloc_bytes: u64 = 0,
     next: ?*Zone = null,
 
     pub fn init(text: []const u8) Zone {
@@ -35,7 +39,15 @@ pub const Zone = extern struct {
         return self.name_ptr[0..self.name_len];
     }
 
+    /// Timed, and its thread's current zone till it ends.
     pub fn begin(self: *Zone) Scope {
+        const parent = current;
+        current = self;
+        return .{ .zone = self, .start = now(), .parent = parent };
+    }
+
+    /// Timed only, for what mustn't take allocations as its own, like a heap's calls.
+    pub fn measure(self: *Zone) Measure {
         return .{ .zone = self, .start = now() };
     }
 
@@ -56,7 +68,7 @@ pub const Zone = extern struct {
     }
 
     pub fn reset(self: *Zone) void {
-        inline for (.{ "calls", "total_ns", "max_ns", "last_ns" }) |field| atomic.store(u64, &@field(self, field), 0, .monotonic);
+        inline for (.{ "calls", "total_ns", "max_ns", "last_ns", "allocs", "alloc_bytes" }) |field| atomic.store(u64, &@field(self, field), 0, .monotonic);
     }
 };
 
@@ -70,11 +82,30 @@ pub const Figures = struct {
 pub const Scope = struct {
     zone: *Zone,
     start: u64,
+    parent: ?*Zone,
 
     pub fn end(self: Scope) void {
         self.zone.record(now() -| self.start);
+        current = self.parent;
     }
 };
+
+pub const Measure = struct {
+    zone: *Zone,
+    start: u64,
+
+    pub fn end(self: Measure) void {
+        self.zone.record(now() -| self.start);
+    }
+};
+
+/// This thread's innermost zone, while one's scope is open.
+threadlocal var current: ?*Zone = null;
+
+/// What this thread's allocations count against, if anything.
+pub fn innermost() ?*Zone {
+    return current;
+}
 
 pub const Stats = struct {
     id: usize,
@@ -82,6 +113,8 @@ pub const Stats = struct {
     total_ns: u64,
     max_ns: u64,
     last_ns: u64,
+    allocs: u64,
+    alloc_bytes: u64,
     name_text: Message(48) = .{},
     /// Only compare it, don't follow it, it might be gone.
     owner: ?*const Owner = null,
@@ -97,7 +130,7 @@ pub const Stats = struct {
 
     pub fn of(zone: *const Zone, owner: ?*const Owner) Stats {
         const f = zone.figures();
-        var s: Stats = .{ .id = @intFromPtr(zone), .calls = f.calls, .total_ns = f.total_ns, .max_ns = f.max_ns, .last_ns = f.last_ns };
+        var s: Stats = .{ .id = @intFromPtr(zone), .calls = f.calls, .total_ns = f.total_ns, .max_ns = f.max_ns, .last_ns = f.last_ns, .allocs = atomic.load(u64, &zone.allocs, .monotonic), .alloc_bytes = atomic.load(u64, &zone.alloc_bytes, .monotonic) };
         s.name_text.set(zone.name());
         // Owners unlist their nodes when released, so this owner is still alive
         s.owner = owner;
@@ -198,6 +231,24 @@ const tests = struct {
             if (std.mem.eql(u8, s.name(), "timing test")) found = s;
         }
         try std.testing.expectEqual(2, found.?.calls);
+    }
+    test "a scope is its thread's innermost till it ends, and measuring leaves it alone" {
+        var outer: Zone = .init("outer");
+        var inner: Zone = .init("inner");
+        var call: Zone = .init("heap call");
+        try std.testing.expectEqual(null, innermost());
+        const o = outer.begin();
+        try std.testing.expectEqual(&outer, innermost().?);
+        {
+            const i = inner.begin();
+            defer i.end();
+            const m = call.measure();
+            try std.testing.expectEqual(&inner, innermost().?);
+            m.end();
+        }
+        try std.testing.expectEqual(&outer, innermost().?);
+        o.end();
+        try std.testing.expectEqual(null, innermost());
     }
 };
 

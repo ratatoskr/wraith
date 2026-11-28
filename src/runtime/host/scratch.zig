@@ -1,6 +1,7 @@
 //! Per-thread storage for what the API gives back, good till that thread's next call that gives some.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 /// Kept between calls up to this, so a thread that once read something big gives it back.
 const keep_limit = 256 << 10;
@@ -11,7 +12,7 @@ threadlocal var arena: ?std.heap.ArenaAllocator = null;
 pub fn begin() std.mem.Allocator {
     if (arena) |*a| {
         _ = a.reset(.{ .retain_with_limit = keep_limit });
-    } else arena = .init(std.heap.page_allocator);
+    } else arena = .init(core.heap.main);
     return arena.?.allocator();
 }
 

@@ -436,6 +436,38 @@ fn turnOff(self: *Camera) void {
     self.toast(.info, "Off");
 }
 
+/// Where it is and its turn from the world's own axes, as `rig.matrixOf` gives. Where the free camera's
+/// heading while it's on, else the game's own. Null till a game's plugin hands one over. Render thread.
+pub fn transform(self: *Camera) ?math.Mat4 {
+    self.shared.acquire();
+    defer self.shared.release();
+    if (!self.shared.seen) return null;
+    const basis = self.shared.basis;
+    const pose = if (self.on) self.goal else rig.Pose.fromCamera(basis, self.shared.game);
+    return rig.matrixOf(pose, basis);
+}
+
+/// Puts it there, as `transform` gives, turning the free camera on to. Orbiting keeps its distance,
+/// moving what it orbits along. Straight there, with no easing to fight. Render thread.
+pub fn setTransform(self: *Camera, m: math.Mat4) void {
+    if (!self.on) self.turnOn();
+    if (!self.on) return;
+    self.shared.acquire();
+    defer self.shared.release();
+    const basis = self.shared.basis;
+    var pose = rig.poseOf(m, basis, self.goal);
+    // The short way round from where it was, so easing never spins it
+    pose.yaw = self.goal.yaw + std.math.wrap(pose.yaw - self.goal.yaw, std.math.pi);
+    self.goal = pose;
+    self.velocity = @splat(0);
+    if (self.orbiting) {
+        self.pivot = pose.ahead(basis, self.distance);
+        self.pivot_goal = self.pivot;
+        self.distance_goal = self.distance;
+    }
+    self.shared.pose = pose;
+}
+
 /// Round `around`, or a point ahead of it, from where it is now.
 pub fn setOrbiting(self: *Camera, on: bool, around: ?V3) void {
     self.orbiting = on;

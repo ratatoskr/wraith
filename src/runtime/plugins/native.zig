@@ -14,7 +14,7 @@ const Loaded = @import("Loaded.zig");
 
 const sal = api.salamander;
 const log = core.log.scoped(.wraith_runtime);
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 pub const name = "native";
 

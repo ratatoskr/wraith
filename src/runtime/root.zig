@@ -43,6 +43,7 @@ fn init(info: *const RuntimeInfo) callconv(.c) u32 {
     gpa = .init();
     tracked.init(gpa.allocator(), "heap");
     core.heap.registry.add(&tracked.usage);
+    core.heap.setMain(&tracked);
     runtime = Runtime.create(tracked.allocator(), info) catch |err| {
         log.err("Runtime failed to start: {t}", .{err});
         // So it isn't silent for players
@@ -67,6 +68,8 @@ fn shutdown() callconv(.c) void {
 }
 
 fn releaseAllocator() void {
+    // Leak reports give addresses; less this, they're offsets into the runtime's PDB
+    if (@import("tuft_sys").module.containingBase(@intFromPtr(&init))) |base| log.info("Runtime loaded at 0x{x}", .{base});
     core.heap.registry.remove(&tracked.usage);
     const leaks = gpa.deinit();
     if (leaks != 0) log.warn("The runtime leaked {d} allocation(s), listed above", .{leaks});

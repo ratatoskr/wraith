@@ -121,7 +121,7 @@ pub fn install() !void {
         inline for (Tick64Sites ++ TickSites) |S| if (S.hook) |hk| hk.enable() catch |err| log.warn("Game speed can't change a tick count: {t}", .{err});
     } else log.warn("Game speed can't change GetTickCount", .{});
 
-    winmm_watch = module.WhenLoaded.create(std.heap.page_allocator, "winmm.dll", .{ .ctx = null, .ready = winmmLoaded }) catch |err| blk: {
+    winmm_watch = module.WhenLoaded.create(core.heap.main, "winmm.dll", .{ .ctx = null, .ready = winmmLoaded }) catch |err| blk: {
         log.warn("Game speed can't change timeGetTime: {t}", .{err});
         break :blk null;
     };

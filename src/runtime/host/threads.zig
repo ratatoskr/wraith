@@ -2,6 +2,7 @@
 //! that made them, via the resolver's `carryOn` (see `Back`), on the render thread inside their frame.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const sal = @import("wraith_api").salamander;
 const sync = @import("tuft_sys").sync;
@@ -9,7 +10,7 @@ const sync = @import("tuft_sys").sync;
 const host = @import("root.zig");
 const Loaded = @import("../PluginLoader.zig").Loaded;
 
-const gpa = std.heap.smp_allocator;
+const gpa = core.heap.main;
 
 pub const Thread = enum {
     render,

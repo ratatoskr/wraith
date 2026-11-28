@@ -30,7 +30,7 @@ var started_lock: sys.sync.RwLock = .{};
 /// `watch` is initialized while it's set.
 var started: bool = false;
 var hit_sub: watch.Event.Subscription = undefined;
-var bus: Bus = .init(std.heap.page_allocator);
+var bus: Bus = .init(core.heap.main);
 var inbox: Inbox = .{};
 /// Render thread only, too big for a stack.
 var drained: [Inbox.capacity]watch.Hit = undefined;
@@ -122,7 +122,7 @@ fn start() api.WatchError!void {
     started_lock.lock();
     defer started_lock.unlock();
     if (started) return;
-    watch.init(std.heap.page_allocator) catch return error.WatchesUnavailable;
+    watch.init(core.heap.main) catch return error.WatchesUnavailable;
     hit_sub = watch.subscribeUnscoped(&inbox, onHit) catch {
         watch.deinit();
         return error.OutOfMemory;

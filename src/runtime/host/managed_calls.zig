@@ -22,7 +22,7 @@ const Value = values.Value;
 const W = api.wraith;
 const sal = api.salamander;
 const log = core.log.scoped(.wraith_runtime);
-const gpa = std.heap.smp_allocator;
+const gpa = core.heap.main;
 
 fn global() *ManagedRuntime {
     return &ManagedRuntime.global;
@@ -229,7 +229,7 @@ fn callOn(rt: *const Runtime, b: *Binding, a: std.mem.Allocator, target: usize, 
 }
 
 threadlocal var depth: u32 = 0;
-threadlocal var results: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+threadlocal var results: std.heap.ArenaAllocator = .init(core.heap.named("call results", std.heap.page_allocator));
 
 fn dispatch(ctx: usize, _: u32, args: []const [*]u8, value: [*]u8) u32 {
     const b: *Binding = @ptrFromInt(ctx);

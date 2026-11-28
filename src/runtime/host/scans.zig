@@ -1,6 +1,7 @@
 //! Value scans plugins start, like Cheat Engine's. Searches run on a worker. Freed with the plugin or by `destroy`.
 
 const std = @import("std");
+const core = @import("wraith_core");
 
 const mem = @import("tuft_mem");
 const sync = @import("tuft_sys").sync;
@@ -12,7 +13,7 @@ const Loaded = @import("../PluginLoader.zig").Loaded;
 const Search = mem.Search;
 const parse = mem.values.parse;
 const max_len = mem.values.max_len;
-const allocator = std.heap.page_allocator;
+const allocator = core.heap.main;
 
 /// What the scanned value is.
 pub const Type = enum { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64, string, utf16, bytes };

@@ -24,7 +24,7 @@ pub const Event = union(enum) {
 
 const Bus = core.Event(fn (event: *const Event) void);
 
-var bus: Bus = .init(std.heap.page_allocator);
+var bus: Bus = .init(core.heap.main);
 
 /// Waiting requests per point, so the overlay knows what to copy.
 var wanted: [2]Atomic(u32) = @splat(.init(0));

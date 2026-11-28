@@ -123,7 +123,7 @@ pub const Record = struct {
     }
 };
 
-const gpa = std.heap.page_allocator;
+const gpa = core.heap.main;
 pub const NextPromise = sal.Plain(W.Keybind, "next");
 const NextResolver = threads.Back(wraith.ResolverOf(NextPromise));
 
