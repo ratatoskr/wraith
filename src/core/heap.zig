@@ -414,6 +414,10 @@ const attribution_tests = struct {
         try testing.expectEqual(32, inner.alloc_bytes);
     }
 
+    noinline fn allocateHere() void {
+        attribute(1);
+    }
+
     test "allocations outside every zone are traced by stack while asked" {
         clearTraces();
         defer clearTraces();
@@ -422,8 +426,10 @@ const attribution_tests = struct {
         try testing.expectEqual(0, traces(&out).len);
         tracing.store(true, .monotonic);
         defer tracing.store(false, .monotonic);
-        // The same place twice is one trace
-        for (0..2) |_| attribute(1);
+        // The same place twice is one trace. One call site run twice, since an unrolled loop is two places
+        var times: usize = 2;
+        std.mem.doNotOptimizeAway(&times);
+        for (0..times) |_| allocateHere();
         try testing.expect(traces(&out).len >= 1);
         try testing.expectEqual(2, out[0].count);
         var z: timing.Zone = .init("z");
