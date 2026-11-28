@@ -1,6 +1,6 @@
 .{
     .name = .wraith,
-    .version = "0.0.0",
+    .version = "0.0.39",
     .minimum_zig_version = "0.18.0-dev.1327+c851a1daa",
     .fingerprint = 0xe8511a24f73f9ab1,
     .paths = .{
