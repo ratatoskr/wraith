@@ -10,7 +10,6 @@ const math = @import("tuft_math");
 const ui = @import("wraith_ui");
 
 const slots = @import("../host/slots.zig");
-const Keybinds = @import("tuft_input").Keybinds;
 const icons = @import("../ui/icons.zig");
 const View = @import("View.zig");
 pub const History = @import("History.zig");
@@ -221,8 +220,6 @@ world_axes: bool = false,
 pivot: Pivot = .each,
 /// Undo and redo over every part's state
 history: History,
-/// Which keys are down, even ones a binding hides from ImGui, like the free camera's Shift and Ctrl. Null in tests
-keybinds: ?*const Keybinds = null,
 /// The Rotation boxes' degrees and the turn they gave, kept while it's still the turn so they don't jump
 shown_degrees: Vec3 = .zero,
 shown_turn: math.Quat = .identity,
@@ -302,18 +299,8 @@ pub fn toggle(self: *Scene, t: Target) void {
 
 /// As a click asks: Ctrl toggles, Shift adds, else just `t`.
 pub fn pick(self: *Scene, t: Target) void {
-    const m = self.mods();
+    const m = ui.mods();
     if (m.ctrl) self.toggle(t) else if (m.shift) self.addPick(t) else self.selectTarget(t);
-}
-
-/// Whether Ctrl and Shift are down. From the keybinds, since a binding that takes one, like the free
-/// camera's, hides it from ImGui.
-pub fn mods(self: *const Scene) struct { ctrl: bool, shift: bool } {
-    const k = self.keybinds orelse {
-        const m = ui.mods();
-        return .{ .ctrl = m.ctrl, .shift = m.shift };
-    };
-    return .{ .ctrl = k.isDown(.left_ctrl) or k.isDown(.right_ctrl), .shift = k.isDown(.left_shift) or k.isDown(.right_shift) };
 }
 
 pub fn deselect(self: *Scene) void {

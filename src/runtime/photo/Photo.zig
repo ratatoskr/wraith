@@ -65,7 +65,6 @@ pub fn create(allocator: std.mem.Allocator, registry: *Registry, overlay: *Overl
     inline for (.{ .{ "history", drawHistoryTool }, .{ "camera", drawCameraTools }, .{ "speed", drawSpeedTool }, .{ "overlay", drawHandlesTool }, .{ "screenshot", drawScreenshotTool } }, 1..) |t, i| {
         try self.scene.add(.{ .slot = .photo_toolbar, .id = t[0], .order = i * 100 }, .{ .native = .of(self, t[1]) });
     }
-    self.scene.keybinds = keybinds;
     try self.camera.init(registry, overlay, keybinds);
     errdefer self.camera.deinit();
     try self.cameras.init(&self.scene, &self.camera);

@@ -395,6 +395,16 @@ fn updateCapture(self: *Overlay) void {
     self.blocker.capture(channels);
 }
 
+/// Ctrl, Shift, Alt and Super as they really are. A binding that takes one, like the free camera's
+/// Shift and Ctrl, swallows it before it gets here, which would leave Ctrl-click to type and picking
+/// several things thinking it's up.
+fn syncModifiers(io: *c.ImGuiIO, keybinds: *const Keybinds) void {
+    c.ImGuiIO_AddKeyEvent(io, c.ImGuiMod_Ctrl, keybinds.isDown(.left_ctrl) or keybinds.isDown(.right_ctrl));
+    c.ImGuiIO_AddKeyEvent(io, c.ImGuiMod_Shift, keybinds.isDown(.left_shift) or keybinds.isDown(.right_shift));
+    c.ImGuiIO_AddKeyEvent(io, c.ImGuiMod_Alt, keybinds.isDown(.left_alt) or keybinds.isDown(.right_alt));
+    c.ImGuiIO_AddKeyEvent(io, c.ImGuiMod_Super, keybinds.isDown(.left_super) or keybinds.isDown(.right_super));
+}
+
 fn wanted(self: *const Overlay, device: Device) bool {
     return self.enabled.getPtrConst(device).load(.acquire) and self.wants.getPtrConst(device).load(.acquire);
 }
@@ -446,6 +456,7 @@ fn onFrame(self: *Overlay, frame: *const Graphics.Frame) void {
         if (!mouse_ours and !queued.viewport and event.device() == .mouse) continue;
         imgui_input.feed(io, event);
     }
+    syncModifiers(io, self.keybinds);
     if (focus_changed) c.ImGuiIO_AddFocusEvent(io, self.host.platform.?.appFocused());
     if (!mouse_ours) releaseMouse(io);
 

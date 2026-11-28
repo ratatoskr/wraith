@@ -710,7 +710,7 @@ fn boneList(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
 
 /// Shift picks every bone shown from the active one to `i`; otherwise as the scene picks.
 fn clickBone(self: *Posing, a: *const poses.Actor, i: u32, from: ?u32, rows: []const u32) void {
-    if (self.scene.mods().shift) if (from) |f| {
+    if (ui.mods().shift) if (from) |f| {
         const x = std.mem.indexOfScalar(u32, rows, f) orelse return self.scene.pick(boneTarget(a, i));
         const y = std.mem.indexOfScalar(u32, rows, i) orelse return;
         // Toward `i`, so it ends up active
