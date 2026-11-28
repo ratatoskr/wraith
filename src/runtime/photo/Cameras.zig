@@ -282,6 +282,5 @@ fn drawFree(self: *Cameras, on_screen: bool) void {
             ui.tooltip("Back to the field of view the game had.", .{});
         }
     }
-    if (ui.collapsingHeader("Keys", false)) cam.drawKeyList();
     ui.textDisabled("Its speed, smoothing and keys are in Settings, under Photo mode.", .{});
 }

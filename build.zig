@@ -934,6 +934,7 @@ const Modules = struct {
             .{ .name = "tuft_inject", .module = tuft.module("tuft_inject") },
             .{ .name = "tuft_arch", .module = tuft.module("tuft_arch") },
             .{ .name = "tuft_sys", .module = tuft.module("tuft_sys") },
+            .{ .name = "tuft_mem", .module = tuft.module("tuft_mem") },
             .{ .name = "wraith_api", .module = api },
             .{ .name = "salamander_schema", .module = salamander_dep.module("salamander_schema") },
             .{ .name = "salamander_types", .module = salamander_dep.module("salamander_types") },

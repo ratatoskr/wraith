@@ -17,6 +17,7 @@ const import_cmd = @import("import.zig");
 const new = @import("new.zig");
 const pack = @import("pack.zig");
 const publish = @import("publish.zig");
+const sig = @import("sig.zig");
 
 const log = core.log.scoped(.wraith_cli);
 
@@ -62,6 +63,7 @@ const commands = [_]Command{
     .{ .name = "watch", .usage = play.watch_usage, .run = wrap(play.watch), .banner = true },
     .{ .name = "inject", .usage = play.inject_usage, .run = wrap(play.inject), .banner = true },
     .{ .name = "proxy", .usage = play.proxy_usage, .run = wrap(play.proxy) },
+    .{ .name = "sig", .usage = sig.usage, .run = wrap(sig.run) },
     .{ .name = "version", .usage = version_usage, .run = wrap(version) },
     .{ .name = "serve", .usage = serve_usage, .run = wrap(serveCommand) },
 };

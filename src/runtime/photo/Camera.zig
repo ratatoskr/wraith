@@ -763,13 +763,6 @@ fn drawKeys(self: *Camera, mouse_look: MouseLook, pad: bool) void {
     row("Stop", "{s}", .{self.keyNames(&buf, self.presses.getPtrConst(.toggle).setting)});
 }
 
-/// The game's cameras and the Follow selection toggle. Render thread.
-/// The keys, for Photo mode's camera panel.
-pub fn drawKeyList(self: *Camera) void {
-    const options = self.readOptions();
-    self.drawKeys(options.mouse_look, options.gamepad);
-}
-
 /// Rolls back to level, like its key.
 pub fn level(self: *Camera) void {
     if (self.on) self.goal.roll = 0;
