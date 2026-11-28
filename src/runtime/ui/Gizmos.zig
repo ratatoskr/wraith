@@ -144,6 +144,13 @@ pub fn draw(view: ?struct { view: Mat4, projection: Mat4 }, draggable: bool) voi
         g.hovered.store(false, .release);
         return;
     };
+    if (!g.dragging.load(.acquire)) g.matrix = g.placed.?;
+    // ImGuizmo draws one behind the camera too, mirrored into view
+    if (!inFront(g.matrix, v.view, v.projection)) {
+        g.dragging.store(false, .release);
+        g.hovered.store(false, .release);
+        return;
+    }
     const gizmo = ui.gizmo;
     gizmo.beginFrame();
     // Its own, so a drag never carries over to another
@@ -155,7 +162,6 @@ pub fn draw(view: ?struct { view: Mat4, projection: Mat4 }, draggable: bool) voi
     gizmo.setOrthographic(false);
     gizmo.enable(draggable);
     defer gizmo.enable(true);
-    if (!g.dragging.load(.acquire)) g.matrix = g.placed.?;
     const operation: gizmo.Operation = switch (g.tool) {
         .move => .translate,
         .rotate => .rotate,
@@ -168,8 +174,22 @@ pub fn draw(view: ?struct { view: Mat4, projection: Mat4 }, draggable: bool) voi
     if (using) g.moved = g.matrix;
 }
 
+/// Whether `world`'s origin is in front of the camera, as Wraith's own drawing over the world checks.
+fn inFront(world: Mat4, view: Mat4, projection: Mat4) bool {
+    const p = world.getTranslation();
+    const clip = view.mul(projection).transformVec4(.{ .x = p.x, .y = p.y, .z = p.z, .w = 1 });
+    return clip.w >= 0.01;
+}
+
 const tests = struct {
     const testing = std.testing;
+
+    test "a gizmo behind the camera isn't drawn" {
+        const view = Mat4.lookAt(.{}, .{ .z = 1 }, .{ .y = 1 }, .left);
+        const projection = Mat4.perspective(1, 1.5, 0.1, 100, .left);
+        try testing.expect(inFront(Mat4.translation(.{ .z = 5 }), view, projection));
+        try testing.expect(!inFront(Mat4.translation(.{ .z = -5 }), view, projection));
+    }
 
     test "the one shown last is in front, and hiding it goes back to the one before" {
         const a = try create();
