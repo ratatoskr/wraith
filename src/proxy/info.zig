@@ -1,4 +1,4 @@
-//! Shared by the proxy DLLs and `wraith install`.
+//! Shared by the proxy DLLs and `wraith proxy add`.
 
 const std = @import("std");
 

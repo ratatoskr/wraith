@@ -406,7 +406,7 @@ pub fn install(ctx: Context, game_exe: []const u8, as: proxy_info.Proxy) !inject
     try std.zon.stringify.serialize(proxy_info.Init{ .wraith_dir = ctx.dir }, .{}, &init.writer);
     try init.writer.writeByte('\n');
     try cwd.writeFile(io, .{ .sub_path = init_path, .data = init.written() });
-    log.info("The game loads wraith from {s} whenever it starts; `wraith uninstall` to stop it", .{ctx.dir});
+    log.info("The game loads wraith from {s} whenever it starts; `wraith proxy remove` to stop it", .{ctx.dir});
     return arch;
 }
 

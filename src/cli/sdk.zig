@@ -41,7 +41,7 @@ pub const usage =
     \\                                       dev plugin, a folder by its name next to this one,
     \\                                       installed, or downloaded from the hub into the cache
     \\                                       (not with --offline)
-    \\  sdk <language> info                 this wraith, as JSON, for a plugin's build or editor:
+    \\  sdk info                            this wraith, as JSON, for a plugin's build or editor:
     \\                                       its version, folder (dir), mods_dir (where
     \\                                       installed mods go), and the apiVersion range it loads
     \\                                       (api_version, min_api_version)
@@ -54,6 +54,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
 
     const first = args.next() orelse "";
     if (std.mem.eql(u8, first, "deps")) return depsCommand(ctx, arena, args);
+    if (std.mem.eql(u8, first, "info")) return info(ctx, arena);
     if (std.mem.eql(u8, first, "cmake")) {
         const file = args.next() orelse return usageError();
         _ = try output.writeIfChanged(ctx, arena, std.fs.path.dirname(file) orelse ".", std.fs.path.basename(file), @embedFile("wraith.cmake"));
@@ -62,6 +63,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
     // TypeScript's are JavaScript's
     const language: Sdk = if (std.mem.eql(u8, first, "ts")) .js else std.meta.stringToEnum(Sdk, first) orelse return usageError();
     const sub = args.next() orelse "";
+    // Older plugin-tools ask `sdk js info`
     if (std.mem.eql(u8, sub, "info")) return info(ctx, arena);
     if (std.mem.eql(u8, sub, "build") and language == .rust) return rust.build(ctx, arena, args, rustTypes) catch |err| switch (err) {
         error.Usage => usageError(),

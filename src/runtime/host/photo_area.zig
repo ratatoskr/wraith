@@ -61,7 +61,15 @@ fn claimFor(loaded: *Loaded, comptime part: leases.Part, changed: ?W.Lease.Chang
         return error.Failed;
     };
     const l = leases.claim(loaded, part, changed, null) catch return error.Failed;
+    if (part == .camera) takePendingWorld(loaded);
     return .init(l, t.lease);
+}
+
+/// A world set before claiming goes on its lease now it has one, as if it had come after.
+fn takePendingWorld(loaded: *Loaded) void {
+    const w = loaded.pending_world orelse return;
+    loaded.pending_world = null;
+    _ = leases.withLease(loaded, .camera, w, keepWorld);
 }
 
 pub const CameraImpl = struct {
@@ -70,7 +78,8 @@ pub const CameraImpl = struct {
     }
 
     pub fn setWorld(loaded: *Loaded, w: W.FreeCamera.World) void {
-        _ = leases.withLease(loaded, .camera, w, keepWorld);
+        // Without a lease yet, it's kept for when it claims one
+        if (!leases.withLease(loaded, .camera, w, keepWorld)) loaded.pending_world = w;
     }
 
     pub fn camera(loaded: *Loaded, id: u64, state: *W.FreeCamera.State) void {
@@ -153,4 +162,29 @@ fn posingOwnerGone(owner: *Owner) void {
     lock.lockShared();
     defer lock.unlockShared();
     if (photo) |p| p.posing.forget(@intFromPtr(owner));
+}
+
+test "a camera world set before claiming is kept for the lease" {
+    const testing = std.testing;
+    var game: Loaded = undefined;
+    game.initForTest(testing.allocator, "kai");
+    game.manifest.value.game = .{ .ids = &.{"kai"} };
+    defer {
+        game.deinitForTest();
+        wraith.forget(&game);
+    }
+    const before: W.FreeCamera.World = .{ .up = .pos_y, .look = .pos_z, .left_handed = false, .metre = 1 };
+    CameraImpl.setWorld(&game, before);
+    try testing.expectEqual(before, game.pending_world.?);
+
+    const lease = try leases.claim(&game, .camera, null, null);
+    takePendingWorld(&game);
+    try testing.expectEqual(before, lease.world.?);
+    try testing.expectEqual(null, game.pending_world);
+
+    // Once it has one, it goes straight on it
+    const after: W.FreeCamera.World = .{ .up = .pos_z, .look = .pos_x, .left_handed = true, .metre = 100 };
+    CameraImpl.setWorld(&game, after);
+    try testing.expectEqual(after, lease.world.?);
+    try testing.expectEqual(null, game.pending_world);
 }

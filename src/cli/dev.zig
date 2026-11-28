@@ -16,10 +16,10 @@ pub const usage =
     \\                                       wraith.json (zig-out\plugins\kai, dist)
     \\  dev off <folder>                     stop loading it for now, but keep it listed
     \\  dev on <folder>                      load it again
-    \\  dev rm <folder>                      stop loading it from there
+    \\  dev remove <folder>                  stop loading it from there
 ;
 
-const Sub = enum { list, add, off, on, rm };
+const Sub = enum { list, add, off, on, remove };
 
 pub fn run(ctx: ops.Context, args: anytype) !u8 {
     var arena_state: std.heap.ArenaAllocator = .init(ctx.allocator);
@@ -50,7 +50,7 @@ pub fn run(ctx: ops.Context, args: anytype) !u8 {
 
     switch (sub) {
         .list => unreachable,
-        .rm => {
+        .remove => {
             if (!(core.dev_plugins.remove(arena, io, path, folder) catch return 1)) {
                 log.err("{s} isn't a dev plugin (see wraith dev list)", .{folder});
                 return 1;

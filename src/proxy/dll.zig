@@ -136,7 +136,7 @@ fn readInit(allocator: std.mem.Allocator, path: []const u8, buf: []u8) !info.Ini
         .diagnostics = &diagnostics,
         .ignore_unknown_fields = true,
     }) catch |err| {
-        log("{s} isn't valid (run `wraith install` again): {t}", .{ path, err });
+        log("{s} isn't valid (run `wraith proxy add` again): {t}", .{ path, err });
         return err;
     };
 }
@@ -147,7 +147,7 @@ fn readSmallFile(path: []const u8, buf: []u8) ![]u8 {
     wide[n] = 0;
     const file = win.CreateFileW(&wide, win.GENERIC_READ, win.FILE_SHARE_READ, null, win.OPEN_EXISTING, win.FILE_ATTRIBUTE_NORMAL, null);
     if (file == win.INVALID_HANDLE_VALUE) {
-        log("can't open {s} (run `wraith install` again)", .{path});
+        log("can't open {s} (run `wraith proxy add` again)", .{path});
         return error.NoPathFile;
     }
     defer win.CloseHandle(file);

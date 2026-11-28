@@ -38,7 +38,7 @@ namespace FreeCamera {
 trait FreeCamera {
     // A lease on the game's camera, see `Lease`. Only the holder's `setWorld` and `camera` count.
     Lease!LeaseError claim(keep ?Lease.Changed changed);
-    // Once, before the first `camera`. Kept till it gets the lease.
+    // Once, before the first `camera`, before or after claiming. Kept till it gets the lease.
     void setWorld(World world);
     // Every frame from where the game sets its camera; Wraith overrides it while the free camera's on.
     // `id` is its id in `cameras`, or 0. A new id carries on from that camera. Lease holder only.

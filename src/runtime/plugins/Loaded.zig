@@ -34,6 +34,8 @@ echo: ?Echo = null,
 session: bool = false,
 /// Its DLL has .NET's NativeAOT runtime in it, see `pinned`.
 native_aot: bool = false,
+/// The camera world it set before it claimed the camera, for its lease once it does.
+pending_world: ?api.wraith.FreeCamera.World = null,
 /// Its project, by where its tweaks list: "" for the open one, else a mod's id. Null for plugins.
 project: ?[]const u8 = null,
 /// Tags what's made now so `host.stopTagged` can stop it apart. Nonzero while a session's tweak runs.
