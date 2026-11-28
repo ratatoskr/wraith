@@ -28,6 +28,8 @@ namespace Posing {
         string name;
         // Which mesh it's on, like the face or the body
         string mesh;
+        // Only ever on or off: a checkbox, and its weight's 0 or 1
+        bool toggle;
     }
 }
 

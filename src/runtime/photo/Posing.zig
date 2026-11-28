@@ -607,7 +607,7 @@ fn shapesTab(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
         ui.sameLine();
         if (ui.smallButton("Reset shapes")) store.resetShapes(a.id);
     }
-    ui.textDisabled("Ctrl-click a slider to type, even past 0 or 1. Right-click to reset.", .{});
+    ui.textDisabled("Ctrl-click a slider to type, even past 0 or 1. Right-click to reset. Some games' shapes are only on or off.", .{});
 
     const c = ui.child("shapes", .{ 0, 0 }, .{ .border = true }) orelse return;
     defer c.end();
@@ -639,7 +639,14 @@ fn shapesTab(self: *Posing, store: *poses.Store, a: *const poses.Actor) void {
         const row = ui.id(@as(i32, @intCast(i)));
         defer row.end();
         var weight = a.weights[i];
-        if (ui.sliderWith(label, &weight, 0, 1, .{ .format = "%.2f" })) {
+        const asked = if (a.shape_toggles[i]) blk: {
+            // On or off only, like FFXIV's
+            var on = weight >= 0.5;
+            const clicked = ui.checkbox(label, &on);
+            weight = if (on) 1 else 0;
+            break :blk clicked;
+        } else ui.sliderWith(label, &weight, 0, 1, .{ .format = "%.2f" });
+        if (asked) {
             // Linked, it has to win over each mesh's own
             if (self.link_shapes) store.resetShapeOnMeshes(a.id, key);
             if (store.shapeEdit(a.id, edit_mesh, edit_name)) |e| e.weight = weight else ui.textDisabled("Too many changed shapes", .{});

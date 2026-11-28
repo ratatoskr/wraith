@@ -154,6 +154,8 @@ pub const Actor = struct {
     /// Each as long as the most shapes it's had, likewise
     shape_names: []Name = &.{},
     shape_meshes: []Name = &.{},
+    /// Only ever on or off, so a checkbox, and 0 or 1
+    shape_toggles: []bool = &.{},
     /// As posed
     weights: []f32 = &.{},
     /// Like `base`, for the weights
@@ -197,20 +199,28 @@ pub const Actor = struct {
             gpa.free(names);
             return a.shape_names.len;
         };
+        const toggles = gpa.alloc(bool, n) catch {
+            gpa.free(names);
+            gpa.free(meshes);
+            return a.shape_names.len;
+        };
         const weights = gpa.alloc(f32, n) catch {
             gpa.free(names);
             gpa.free(meshes);
+            gpa.free(toggles);
             return a.shape_names.len;
         };
         const base = gpa.alloc(f32, n) catch {
             gpa.free(names);
             gpa.free(meshes);
+            gpa.free(toggles);
             gpa.free(weights);
             return a.shape_names.len;
         };
         a.freeShapes(gpa);
         a.shape_names = names;
         a.shape_meshes = meshes;
+        a.shape_toggles = toggles;
         a.weights = weights;
         a.shape_base = base;
         a.shape_base_count = 0;
@@ -227,6 +237,7 @@ pub const Actor = struct {
     fn freeShapes(a: *Actor, gpa: std.mem.Allocator) void {
         gpa.free(a.shape_names);
         gpa.free(a.shape_meshes);
+        gpa.free(a.shape_toggles);
         gpa.free(a.weights);
         gpa.free(a.shape_base);
     }
@@ -240,6 +251,7 @@ pub const Actor = struct {
             .base = a.base,
             .shape_names = a.shape_names,
             .shape_meshes = a.shape_meshes,
+            .shape_toggles = a.shape_toggles,
             .weights = a.weights,
             .shape_base = a.shape_base,
         };
@@ -359,6 +371,7 @@ pub const Store = struct {
             for (shapes[0..count], 0..) |sh, i| {
                 a.shape_names[i] = .init(textOf(sh.name));
                 a.shape_meshes[i] = .init(textOf(sh.mesh));
+                a.shape_toggles[i] = toggleOf(sh);
             }
             if (a.frozen) {
                 if (a.shape_base_count == count) @memcpy(w, a.shape_base[0..count]) else {
@@ -371,9 +384,16 @@ pub const Store = struct {
             // Cut short like the names the window has, so long ones still match
             const mesh: Name = .init(textOf(sh.mesh));
             const name: Name = .init(textOf(sh.name));
-            if (s.shapeEditFor(id, mesh.get(), name.get())) |e| weight.* = e.weight;
+            if (s.shapeEditFor(id, mesh.get(), name.get())) |e| {
+                // An on or off one is either, whatever was asked
+                weight.* = if (toggleOf(sh)) (if (e.weight >= 0.5) 1 else 0) else e.weight;
+            }
         };
         if (slot) |a| @memcpy(a.weights[0..count], w);
+    }
+
+    fn toggleOf(sh: anytype) bool {
+        return if (@hasField(@TypeOf(sh), "toggle")) sh.toggle else false;
     }
 
     /// What goes on a shape: its mesh's own edit, else one for every mesh.
@@ -662,6 +682,30 @@ test "a shape edit for every mesh goes on each that has it, and a mesh's own win
     weights = .{ 0.2, 0.3, 0.4 };
     store.shape(7, &shapes, &weights);
     try testing.expectEqualSlices(f32, &.{ 0.2, 0.3, 0.4 }, &weights);
+}
+
+test "an on or off shape's edit is either, whatever weight was asked" {
+    var store: Store = .init(testing.allocator);
+    defer store.deinit();
+    const bones = [_]TestBone{.{ .name = "root", .parent = -1 }};
+    var frame = [_]Mat4{at(0, 0, 0)};
+    store.pose(7, "B'tah", &bones, &frame, .identity);
+    const Toggled = struct { name: []const u8, mesh: []const u8, toggle: bool };
+    const shapes = [_]Toggled{
+        .{ .name = "shp_brw_a", .mesh = "face.mdl", .toggle = true },
+        .{ .name = "smile", .mesh = "face.mdl", .toggle = false },
+    };
+    store.shapeEdit(7, "face.mdl", "shp_brw_a").?.weight = 0.3;
+    store.shapeEdit(7, "face.mdl", "smile").?.weight = 0.3;
+    var weights = [_]f32{ 1, 0 };
+    store.shape(7, &shapes, &weights);
+    try testing.expectEqualSlices(f32, &.{ 0, 0.3 }, &weights);
+    try testing.expectEqualSlices(bool, &.{ true, false }, store.byId(7).?.shape_toggles[0..2]);
+
+    store.shapeEdit(7, "face.mdl", "shp_brw_a").?.weight = 0.6;
+    weights = .{ 0, 0 };
+    store.shape(7, &shapes, &weights);
+    try testing.expectEqual(1, weights[0]);
 }
 
 test "freezing holds the weights from before the edits" {
